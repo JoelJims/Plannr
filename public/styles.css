@@ -1,0 +1,689 @@
+/* Plannr - auth screens. HUD / military-terminal treatment.
+   Dark near-black, single amber accent, condensed technical type, viewport
+   frame with corner brackets, scan-line + amber-glow background, angular
+   clipped buttons. Mobile-first, built for a phone on a job site. */
+
+/* ---- Fonts (self-hosted; no runtime Google calls) ---- */
+@font-face { font-family: "Rajdhani"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/fonts/rajdhani-500.woff2") format("woff2"); }
+@font-face { font-family: "Rajdhani"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/fonts/rajdhani-600.woff2") format("woff2"); }
+@font-face { font-family: "Rajdhani"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/fonts/rajdhani-700.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/fonts/chakra-petch-400.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/fonts/chakra-petch-500.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/fonts/chakra-petch-600.woff2") format("woff2"); }
+
+:root {
+  color-scheme: dark;
+
+  --bg: #0a0a0b;              /* viewport background (near-black) */
+  --panel: #111113;          /* card / panel background */
+  --panel-2: #0d0d0f;        /* recessed surfaces (inputs, insets) */
+  --accent: #f59e0b;         /* the ONE vivid color */
+  --accent-soft: rgba(245, 158, 11, 0.14);
+  --accent-line: rgba(245, 158, 11, 0.45);
+
+  --text: #f4f4f5;           /* near-white */
+  --text-dim: #a1a1aa;       /* gray */
+  --text-faint: #8b8b93;     /* fainter gray — raised from #6b6b73 to meet WCAG AA (>=4.5:1) on --bg and --panel-2 */
+  --line: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  --clip: 11px;              /* diagonal corner cut size for angular elements */
+  /* the angular (cut-corner) clip shared by .mark and .btn */
+  --angular: polygon(var(--clip) 0, 100% 0, 100% calc(100% - var(--clip)), calc(100% - var(--clip)) 100%, 0 100%, 0 var(--clip));
+
+  --font-head: "Rajdhani", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--text);
+  background-color: var(--bg);
+  /* blueprint graph-paper grid (thin amber lines) + soft amber corner glow */
+  background-image:
+    radial-gradient(75% 60% at 100% 0%, rgba(245, 158, 11, 0.16), transparent 58%),
+    linear-gradient(rgba(245, 158, 11, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 158, 11, 0.05) 1px, transparent 1px),
+    linear-gradient(rgba(245, 158, 11, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 158, 11, 0.028) 1px, transparent 1px);
+  background-size: 100% 100%, 96px 96px, 96px 96px, 24px 24px, 24px 24px;
+  background-attachment: fixed;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Phase 2A — responsive gutters: tighter on phones (more room, less cramped),
+     comfortable on desktop. Scales with viewport instead of a single fixed inset. */
+  padding: clamp(20px, 3.5vw, 34px) clamp(16px, 3.2vw, 34px) calc(clamp(20px, 3.5vw, 34px) + env(safe-area-inset-bottom));
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---- Signature HUD frame around the whole viewport ---- */
+.hud-frame {
+  position: fixed;
+  inset: 12px;
+  border: 1px solid var(--line);
+  pointer-events: none;
+  z-index: 40;
+}
+.hud-frame .corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.35);
+}
+.hud-frame .tl { top: -1px; left: -1px;  border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+.hud-frame .tr { top: -1px; right: -1px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.hud-frame .bl { bottom: -1px; left: -1px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+.hud-frame .br { bottom: -1px; right: -1px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+/* ---- Auth shell: stacked on mobile, split on desktop ---- */
+.shell {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 960px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  display: grid;
+  grid-template-columns: 1fr;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .shell { animation: rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+}
+
+/* ---- Staggered entrance for the auth panels' children (login / register) ----
+   The .shell rise
+   above stays as the base/fallback; this layers a sequenced reveal on top of it.
+   A distinct keyframe name (reveal-rise) leaves the .shell `rise` untouched.
+   Fully gated on reduced-motion: with motion off, nothing is offset or hidden. */
+@media (prefers-reduced-motion: no-preference) {
+  .reveal { opacity: 0; transform: translateY(14px); animation: reveal-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .reveal.d1 { animation-delay: 0.05s; }
+  .reveal.d2 { animation-delay: 0.14s; }
+  .reveal.d3 { animation-delay: 0.24s; }
+  .reveal.d4 { animation-delay: 0.34s; }
+  .reveal.d5 { animation-delay: 0.44s; }
+  @keyframes reveal-rise { to { opacity: 1; transform: none; } }
+
+  /* Slow, faint amber breathing on the frame corners. Opt-in via the --pulse
+     modifier so only the auth frames pulse; home/date frames stay still. */
+  .hud-frame--pulse .corner { animation: corner-pulse 4s ease-in-out infinite; }
+  @keyframes corner-pulse {
+    0%, 100% { box-shadow: 0 0 7px rgba(245, 158, 11, 0.26); }
+    50%      { box-shadow: 0 0 15px rgba(245, 158, 11, 0.5); }
+  }
+}
+
+/* ---- Chips (uppercase, wide tracking, thin amber border) ---- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 5px 10px 4px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  white-space: nowrap;
+}
+
+/* ---- Brand panel (branding side) ---- */
+.brand-panel {
+  position: relative;
+  overflow: hidden;
+  padding: 26px 24px 24px;
+  border-bottom: 1px solid var(--line-strong);
+  background:
+    radial-gradient(95% 80% at 100% 0%, rgba(245, 158, 11, 0.13), transparent 62%),
+    linear-gradient(rgba(245, 158, 11, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 158, 11, 0.03) 1px, transparent 1px),
+    var(--panel);
+  background-size: 100% 100%, 24px 24px, 24px 24px;
+}
+.brand { display: flex; align-items: center; gap: 13px; }
+
+/* logo mark: house + rupee, blueprint amber stroke, angular chip */
+.mark {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--accent-line);
+  clip-path: var(--angular);
+  box-shadow: inset 0 0 18px rgba(245, 158, 11, 0.10);
+}
+.mark svg { width: 34px; height: 34px; display: block; }
+/* Brand logo image (public/logo.svg): sized to sit like the old drawn mark
+   (~65% of the .mark chip box on every page — the old icon was consistently
+   ~64-65% of its box) and constrained so it never overflows. The chip box +
+   amber frame are unchanged; the logo's transparent background shows the box. */
+.mark img { width: 65%; height: 65%; max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+
+.wordmark {
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.brand .sub {
+  display: block;
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 10.5px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: 5px;
+}
+
+.brand-panel .chip { margin-top: 22px; }
+.tagline {
+  margin: 14px 0 0;
+  font-size: 15.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 34ch;
+}
+.tagline b { color: var(--text); font-weight: 600; }
+
+/* ---- Form panel ---- */
+.form-panel { padding: 26px 24px 26px; }
+
+.form-head { margin-bottom: 20px; }
+.form-head .chip { margin-bottom: 14px; }
+.form-head h1 {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 30px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin: 0 0 5px;
+  line-height: 1;
+}
+.form-head p { margin: 0; color: var(--text-dim); font-size: 14.5px; }
+
+.field { margin-bottom: 15px; }
+label {
+  display: block;
+  font-family: var(--font-head);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 0 7px;
+}
+
+input[type="text"],
+input[type="password"],
+textarea {
+  width: 100%;
+  min-height: 52px;
+  font-family: var(--font-body);
+  font-size: 16px;              /* prevents iOS zoom */
+  padding: 12px 14px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;            /* angular */
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input::placeholder, textarea::placeholder { color: var(--text-faint); }
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245, 158, 11, 0.22);
+}
+/* Multi-line remarks/notes/reason fields: ~3 lines tall, vertically resizable.
+   Inherits the themed look above (font/colour/border/focus); just taller. */
+textarea {
+  min-height: 84px;      /* ~3 lines */
+  line-height: 1.45;
+  resize: vertical;
+  display: block;
+}
+input:-webkit-autofill {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset;
+  caret-color: var(--text);
+}
+
+/* eye-icon password toggle */
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 54px; }
+.toggle {
+  position: absolute;
+  top: 1px; right: 1px; bottom: 1px;
+  width: 50px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.toggle:hover { color: var(--accent); background: rgba(245, 158, 11, 0.06); }
+.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.toggle svg { width: 22px; height: 22px; display: block; }
+.toggle .icon-off { display: none; }
+.toggle[aria-pressed="true"] { color: var(--accent); }
+.toggle[aria-pressed="true"] .icon-on { display: none; }
+.toggle[aria-pressed="true"] .icon-off { display: block; }
+
+/* ---- Angular buttons ---- */
+.btn {
+  width: 100%;
+  min-height: 54px;
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border: none;
+  cursor: pointer;
+  clip-path: var(--angular);
+  transition: background 0.15s ease, transform 0.05s ease, box-shadow 0.15s ease;
+}
+.btn.primary {
+  color: #17120a;
+  background: var(--accent);
+  margin-top: 4px;
+}
+.btn.primary:hover { background: #ffb020; box-shadow: 0 0 22px rgba(245, 158, 11, 0.35); }
+.btn.primary:active { transform: translateY(1px); }
+.btn.primary:disabled { opacity: 0.55; cursor: default; box-shadow: none; transform: none; }
+
+.btn.ghost {
+  color: var(--text);
+  background: #191a1d;
+}
+.btn.ghost:hover { background: #202126; color: var(--accent); }
+.btn.ghost:active { transform: translateY(1px); }
+.btn.ghost:disabled { opacity: 0.55; cursor: default; }
+
+/* ---- Messages (only amber is vivid; success is neutral) ---- */
+.msg {
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 11px 13px;
+  margin-bottom: 16px;
+  display: none;
+  border-left: 3px solid var(--text-faint);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.msg.show { display: block; }
+.msg.error   { border-left-color: var(--accent); background: var(--accent-soft); color: #f8dca6; }
+.msg.success { border-left-color: rgba(255, 255, 255, 0.55); background: rgba(255, 255, 255, 0.05); color: var(--text); }
+
+/* ---- Switch line with chip + link ---- */
+.switch {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14.5px;
+  color: var(--text-dim);
+}
+.switch a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+  padding-bottom: 1px;
+}
+.switch a:hover { border-bottom-color: var(--accent); }
+
+/* ---- Logged-in home ---- */
+.welcome .big {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 32px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin: 14px 0 6px;
+  line-height: 1.05;
+}
+.welcome .big span { color: var(--accent); }
+.welcome .lead { color: var(--text-dim); font-size: 15px; line-height: 1.5; margin: 0 0 22px; max-width: 42ch; }
+
+/* ---- Desktop: two-column split ---- */
+@media (min-width: 800px) {
+  .shell { grid-template-columns: 1.05fr 1fr; }
+  .brand-panel {
+    padding: 44px 40px;
+    border-bottom: none;
+    border-right: 1px solid var(--line-strong);
+    display: flex;
+    flex-direction: column;
+  }
+  .brand-panel .tagline { margin-top: auto; padding-top: 42px; font-size: 19px; color: var(--text); }
+  .form-panel { padding: 48px 44px; align-self: center; width: 100%; }
+  .form-head h1 { font-size: 34px; }
+}
+
+/* ---- Animated brand panel (login only): full-bleed LineWaves + branding ---- */
+.brand-panel.brand-panel--anim {
+  padding: 0;
+  display: block;
+  background: #0a0a0b;            /* fallback beneath the canvas */
+}
+.brand-panel--anim .lw-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+.brand-panel--anim .brand-content {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 26px;
+  padding: 30px 26px 28px;
+}
+.brand-panel--anim .brand-content .brand { align-items: center; gap: 15px; }
+.brand-panel--anim .brand-content .mark { width: 62px; height: 62px; }
+.brand-panel--anim .brand-content .mark svg { width: 40px; height: 40px; }
+.brand-panel--anim .brand-content .wordmark { font-size: 34px; text-shadow: 0 2px 14px rgba(0, 0, 0, 0.5); }
+.brand-panel--anim .brand-content .sub { font-size: 11px; margin-top: 6px; }
+.brand-panel--anim .brand-content .tagline {
+  margin: 0;
+  padding: 0;
+  font-size: 16px;
+  color: var(--text);
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.6);
+  max-width: 32ch;
+}
+@media (min-width: 800px) {
+  .brand-panel--anim .brand-content { padding: 48px 40px; min-height: 0; }
+  .brand-panel--anim .brand-content .mark { width: 74px; height: 74px; }
+  .brand-panel--anim .brand-content .mark svg { width: 48px; height: 48px; }
+  .brand-panel--anim .brand-content .wordmark { font-size: 42px; }
+  .brand-panel--anim .brand-content .tagline { font-size: 19px; }
+}
+
+/* ---- Static blueprint illustration behind the whole card (login only) ----
+   A house-elevation line drawing in faint amber. Sits above the grid texture
+   but behind the card (z-index 0 < .shell z-index 1 < .hud-frame z-index 40),
+   so it only shows in the margin around the card. Static, no animation. */
+.blueprint {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  opacity: 0.07;   /* keeps the amber lines at ~7% so they never compete */
+}
+.blueprint svg {
+  width: min(1500px, 160vw);
+  height: auto;
+  max-height: 96vh;
+}
+
+/* ---- Optional: very slow drift of the existing grid texture (login only) ----
+   Pure CSS background-position animation. Only the four grid layers move; the
+   amber glow (layer 1) stays fixed at 0 0. Disabled under reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .bp-host { animation: bp-drift 60s linear infinite; }
+  @keyframes bp-drift {
+    from { background-position: 0 0, 0 0,    0 0,    0 0,    0 0; }
+    to   { background-position: 0 0, 0 96px, 96px 0, 0 96px, 96px 0; }
+  }
+}
+
+/* ---- Mobile: comfortable ~44px tap height for the page "← Back" links ----
+   Desktop (>620px) keeps the compact underlined text link exactly as-is. On a
+   phone the arrow + amber colour signal the link, so the underline is dropped to
+   avoid a detached line under a taller tap box. Each class exists only on its own
+   page, so this shared rule only styles those back links. */
+@media (max-width: 620px) {
+  /* `a.` prefix (specificity 0,1,1) so these beat each page's own inline
+     `.XX-back { border-bottom }` (0,1,0) regardless of stylesheet order — the
+     underline is cleanly removed on mobile rather than left detached below the
+     taller tap box. */
+  a.ci-back, a.co-back, a.ld-back, a.cd-back, a.cf-back, a.bk-back, a.ov-back {
+    min-height: 44px;
+    align-items: center;
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+}
+
+/* ===========================================================================
+   Shared bulk-editable transaction table (Overview + Money Debited log — ONE
+   implementation via PlannrUI.createEditableCashOutTable).
+   =========================================================================== */
+.tx-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.tx-bar .btn { width: auto; min-height: 42px; padding: 0 18px; font-size: 13px; }
+.tx-bar .tx-status { font-size: 12.5px; color: var(--text-dim); }
+
+.tx-table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
+.tx-table th, .tx-table td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: anywhere; }
+.tx-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+/* Genuine relative column proportions (table-layout: fixed honours these widths). The 10th column
+   (Contract Stated) sits at position 9, before actions; Ledger/Sub-ledger/Remark are
+   the compressible ones, Amount (5) and Contract Stated (9) both keep room for rupee figures.
+   1 Serial · 2 Date · 3 Ledger · 4 Sub-ledger · 5 Amount · 6 By · 7 Remark · 8 Contract Included ·
+   9 Contract Stated · 10 actions.  Sums to 100%. */
+.tx-table th:nth-child(1),  .tx-table td:nth-child(1)  { width: 5%; }
+.tx-table th:nth-child(2),  .tx-table td:nth-child(2)  { width: 10%; }
+.tx-table th:nth-child(3),  .tx-table td:nth-child(3)  { width: 14%; }
+.tx-table th:nth-child(4),  .tx-table td:nth-child(4)  { width: 9%; }
+.tx-table th:nth-child(5),  .tx-table td:nth-child(5)  { width: 12%; text-align: right; }
+.tx-table th:nth-child(6),  .tx-table td:nth-child(6)  { width: 10%; }
+.tx-table th:nth-child(7),  .tx-table td:nth-child(7)  { width: 9%; }
+.tx-table th:nth-child(8),  .tx-table td:nth-child(8)  { width: 12%; }
+.tx-table th:nth-child(9),  .tx-table td:nth-child(9)  { width: 10%; }
+.tx-table th:nth-child(10), .tx-table td:nth-child(10) { width: 9%; }
+/* Contract Stated data (col 9): right-aligned + tabular-nums like Amount, but NOT the amber
+   accent — it is the contract's STATED figure, visually distinct from the amount actually spent.
+   Applied to the td only (not th) so each page's header alignment rule still wins with no fight. */
+.tx-table td.tx-cstated { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Amount anti-truncation — the finding, so nobody re-adds a useless rule (empirical):
+   a min-width on a table CELL is IGNORED under `table-layout: fixed` at EVERY width — injecting
+   `min-width: 148px` on column 5 at a 768px viewport changed its rendered width by 0px. Only a
+   min-width on the TABLE element is honoured (it widened col 5 and forced an x-scroll). There is
+   therefore NO cell-level floor here on purpose; the base widths are pure proportional %.
+   Threshold arithmetic for ₹12,34,567.89 (80.3px text + 10px×2 padding): the Amount cell content
+   box must be ≥ 80.3px. EDIT mode (col 5 = 12% of the table): 0.12·W − 20 ≥ 80.3 → table W ≥ 836px.
+   READ mode (col 5 ≈ 13.3% once the actions column is display:none'd): 0.133·W − 20 ≥ 80.3 → W ≥ ~752px.
+   Below those table widths the read-mode value overflows LEFT (right-aligned + overflow:visible,
+   into Sub-ledger whitespace, NOT into By) and the edit-mode <input> clips internally — neither
+   collides with a neighbour, so no floor was added. If one is ever wanted, put min-width on
+   `.tx-table` (~836px) + `overflow-x:auto` on its wrapper — NOT min-width on a cell. */
+/* Read mode: the "actions" column (the 10th) is empty (both consumers
+   pass deleteInEditMode: true), so the component adds .tx-actions-collapsed and that column is
+   removed with display:none. table-layout:fixed then rebuilds the grid from the 9 remaining cells
+   and the freed width redistributes proportionally — edge-to-edge, no reserved empty column,
+   header borders end flush at column 9 (Contract Stated).
+
+   Why display:none and NOT width:0 (do not "simplify" this back): the table is
+   `border-collapse: collapse` + `table-layout: fixed`. Under that combination a zero-WIDTH column
+   that still has a COLLAPSED border on its shared edge is kept in the column model and gets handed
+   the freed surplus back — so on Overview (whose boxed-header `thead th{border}` rule gives the last
+   two columns a collapsed edge) `width:0` left the actions column at its full share instead of 0,
+   and the other columns never grew. Money Debited, with no header border, happened to collapse fine
+   with width:0 — which is exactly why the two pages diverged. display:none removes the column from
+   the grid entirely (border and all), so fixed-layout rebuilds from the 9 remaining cells and both
+   pages redistribute identically.
+   Edit mode removes the class and column 10 reappears for the Delete button + per-row error text.
+   Desktop only: the ≤760px block below re-blocks every cell (display/width overrides), so mobile
+   is untouched. */
+@media (min-width: 761px) {
+  .tx-table.tx-actions-collapsed th:nth-child(10),
+  .tx-table.tx-actions-collapsed td:nth-child(10) { display: none; }
+}
+.tx-table td.tx-amount { color: var(--accent); font-weight: 600; white-space: nowrap; overflow: visible; font-family: var(--font-head); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+/* Read rows: single-line + ellipsis -> evenly-built, consistent row heights.
+   Actions + Amount are exempt (buttons stay clickable, money never clips). */
+.tx-table tbody tr:not(.tx-editing) td:not(.tx-actions):not(.tx-amount) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tx-table tr.tx-editing td { vertical-align: top; }
+.tx-slno { color: var(--text-faint); }
+.tx-dim { color: var(--text-faint); }
+.tx-empty { color: var(--text-dim); text-align: center; padding: 20px 12px; }
+.tx-actions { white-space: nowrap; text-align: right; overflow: visible; }
+.tx-btn { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent-line); border-radius: 0; padding: 7px 11px; cursor: pointer; }
+.tx-btn:hover { color: #ffb020; }
+.tx-btn.del { color: var(--text-dim); border-color: var(--line-strong); }
+.tx-btn.del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+.tx-in, .tx-sel { width: 100%; min-width: 0; font-family: var(--font-body); font-size: 13px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0; padding: 7px 8px; outline: none; box-sizing: border-box; }
+.tx-in:focus, .tx-sel:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.tx-sel { -webkit-appearance: none; appearance: none; cursor: pointer; }
+.tx-sel option { background: #15161a; color: var(--text); }
+.tx-num { text-align: right; }
+.tx-sub { margin-top: 5px; }
+.tx-table tr.tx-err td { background: rgba(239, 68, 68, 0.10); }
+.tx-rowmsg { color: #f2b8b8; font-size: 11.5px; display: inline-block; white-space: normal; }
+
+@media (max-width: 760px) {
+  .tx-table thead { display: none; }
+  .tx-table tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+  .tx-table tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 8px 0; width: auto !important; white-space: normal; overflow: visible; text-align: left; }
+  .tx-table tbody tr td:last-child { border-bottom: none; }
+  .tx-table tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.07em; color: var(--text-dim); flex: none; }
+  .tx-table td.tx-actions { justify-content: flex-end; }
+  .tx-table td.tx-actions::before { content: ''; }
+  .tx-in, .tx-sel { max-width: 62%; }
+  .tx-btn { min-height: 44px; padding: 10px 16px; }
+}
+
+/* ===========================================================================
+   Shared cyber-HUD confirmation modal (PlannrUI.confirmModal).
+   =========================================================================== */
+.pl-confirm-backdrop { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px 16px; background: rgba(0,0,0,0.66); }
+.pl-confirm-backdrop[hidden] { display: none; }
+.pl-confirm { width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--accent-line); padding: 22px 22px 20px; clip-path: var(--angular); box-shadow: 0 24px 70px -20px rgba(0,0,0,0.8); }
+.pl-confirm-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.pl-confirm-head h2 { font-family: var(--font-head); font-weight: 600; font-size: 18px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); margin: 0; }
+.pl-confirm p { margin: 0 0 18px; color: var(--text); font-size: 14px; line-height: 1.5; }
+.pl-confirm-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+.pl-confirm-actions .btn { width: auto; min-height: 46px; padding: 0 20px; font-size: 14px; }
+
+/* ===========================================================================
+   Phase 2C — center every page-title block (eyebrow chip + title + subtitle) and
+   every section heading, app-wide. The chip is inline-flex, so text-align:center on
+   the block centers it too. Form field labels, table column headers (Phase 1), body
+   text, nav buttons, and the Plannr brand lockup are intentionally left untouched.
+   =========================================================================== */
+.form-head, .date-head, .welcome,
+.cf-head, .ci-head, .co-head, .cp-head, .ld-head,
+.ov-head, .cd-head, .bk-head { text-align: center; }
+
+.ov-section-title, .cd-section-title,
+.ci-list-head, .co-list-head, .cp-list-head, .ld-list-head,
+.bk-section h2,
+.change-pw .cp-title, .delete-acct .da-title, .delete-acct .da-warn { text-align: center; }
+
+/* Home's "Security" eyebrow labels the Change-password section but sits among form
+   fields, so we can't center the whole container — center just the chip itself. */
+.change-pw .chip { display: flex; width: fit-content; margin-inline: auto; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Part A — shared outflow FILTER BAR (Money Debited + Overview). Amber only;
+   classes only (no inline style=, per the startup-hashed CSP). Built by
+   PlannrUI.createLedgerFilterBar. Native <input type=date> for the range.
+   ───────────────────────────────────────────────────────────────────────── */
+.plf { margin: 0 0 16px; }
+.plf-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; }
+.plf-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.plf-field-q { flex: 1 1 220px; }
+.plf-field-amt { flex: 0 0 auto; }
+.plf-lbl { font-family: var(--font-head); font-weight: 600; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+.plf-in, .plf-sel {
+  font-family: var(--font-body); font-size: 14px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0;
+  padding: 9px 11px; min-height: 40px; outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.plf-in:focus, .plf-sel:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(245, 158, 11, 0.20); }
+.plf-in::placeholder { color: var(--text-faint); }
+.plf-sel {
+  -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 11px center; background-size: 12px;
+}
+.plf-sel option { background: #15161a; color: var(--text); }
+.plf-sel:disabled { opacity: 0.45; cursor: default; background-image: none; }
+.plf-num { width: 92px; }
+.plf-date { color-scheme: dark; min-width: 150px; }
+.plf-date::-webkit-calendar-picker-indicator { filter: invert(72%) sepia(60%) saturate(1000%) hue-rotate(360deg) brightness(102%); cursor: pointer; }
+
+.plf-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; min-height: 22px; }
+.plf-count { font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.06em; color: var(--text-dim); }
+.plf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.plf-chip { font-size: 11.5px; color: #f8dca6; background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 999px; padding: 3px 11px; }
+.plf-clear {
+  font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent-line); border-radius: 0;
+  padding: 6px 12px; cursor: pointer; transition: background 0.12s ease, color 0.12s ease;
+}
+.plf-clear:hover { background: var(--accent-soft); color: #ffb020; }
+.plf-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.plf-disabled { opacity: 0.5; }
+@media (max-width: 620px) {
+  .plf-field, .plf-field-q, .plf-field-amt { flex: 1 1 100%; }
+  .plf-num { width: 100%; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Part D — auth-detection surfaces (Home "last login" + Data-page sign-in
+   activity). Amber only; classes only (no inline style=, per the CSP).
+   ───────────────────────────────────────────────────────────────────────── */
+.home-lastlogin { margin: 10px 0 0; font-size: 13px; color: var(--text-faint); }
+.home-fail { color: #ffb020; font-weight: 600; }
+.av-summary { margin: 4px 0 14px; font-size: 13.5px; color: var(--text-dim); }
+.av-sub { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim); margin: 14px 0 8px; }
+.av-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.av-item { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; padding: 8px 11px; background: var(--panel-2); border: 1px solid var(--line); font-size: 13px; }
+.av-item.av-current { border-color: var(--accent-line); background: var(--accent-soft); }
+.av-item.av-warn { border-left: 3px solid var(--accent); }
+.av-when { font-family: var(--font-head); font-size: 12px; letter-spacing: 0.04em; color: var(--text-dim); min-width: 132px; }
+.av-type { color: var(--text); font-weight: 600; }
+.av-ip { color: var(--text-dim); }
+.av-ua { color: var(--text-faint); font-size: 12px; flex-basis: 100%; }
+.av-empty { color: var(--text-faint); font-size: 13px; font-style: italic; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Part C — upcoming contract payments panel (Overview). Amber only; a soft
+   weight/tint overdue cue (no new hue), classes only per the CSP.
+   ───────────────────────────────────────────────────────────────────────── */
+.ov-up-note { margin: 0 0 12px; font-size: 12.5px; color: var(--text-faint); font-style: italic; line-height: 1.45; }
+.ov-up-list { display: flex; flex-direction: column; gap: 6px; }
+.ov-up-item { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 9px 13px; background: var(--panel-2); border: 1px solid var(--line); }
+.ov-up-item.ov-up-overdue { border-color: var(--accent-line); background: var(--accent-soft); }
+.ov-up-date { font-family: var(--font-head); font-weight: 600; font-size: 14px; letter-spacing: 0.02em; color: var(--text); }
+.ov-up-when { font-size: 12.5px; color: var(--text-dim); }
+.ov-up-overdue .ov-up-when { color: #ffb020; font-weight: 600; }

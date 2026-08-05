@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Loan Details · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .ld-stack { position: relative; z-index: 1; width: 100%; max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .ld-card { background: var(--panel); border: 1px solid var(--line-strong); padding: 24px 22px; }
+    @media (min-width: 800px) { .ld-card { padding: 34px 34px 30px; } }
+
+    .ld-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+    .ld-card .brand { display: flex; align-items: center; gap: 12px; }
+    .ld-card .mark { width: 44px; height: 44px; }
+    .ld-card .mark svg { width: 28px; height: 28px; }
+    .ld-card .wordmark { font-size: 20px; }
+    .ld-card .sub { font-size: 10px; margin-top: 4px; }
+
+    .ld-back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); padding-bottom: 2px; }
+    .ld-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .ld-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .ld-head .chip { margin-bottom: 10px; }
+    .ld-head h1 { font-family: var(--font-head); font-weight: 600; font-size: 28px; letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 4px; line-height: 1; }
+    .ld-head p { margin: 0 0 18px; color: var(--text-dim); font-size: 14px; }
+    @media (min-width: 800px) { .ld-head h1 { font-size: 32px; } }
+
+    .ld-form { max-width: 560px; }
+    .ld-form .field { margin-bottom: 14px; }
+    .ld-form .field.slno { max-width: 140px; }
+    #slno { color: var(--text-dim); }
+
+    .amount-wrap { position: relative; }
+    .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .amount-wrap input { padding-left: 28px; }
+
+    .ld-actions-row { display: flex; gap: 12px; margin-top: 4px; }
+    .ld-actions-row .btn { width: auto; flex: 1 1 auto; padding: 0 22px; }
+    #cancelBtn[hidden] { display: none; }
+
+    .ld-sep { border: none; border-top: 1px solid var(--line); margin: 26px 0 18px; }
+    .ld-list-head { font-family: var(--font-head); font-weight: 600; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+
+    .ld-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .ld-table th, .ld-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .ld-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+    .ld-table td.ld-amount { color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-head); letter-spacing: 0.02em; }
+    .ld-slno { color: var(--text-faint); width: 52px; }
+    .ld-dim { color: var(--text-faint); }
+    .ld-empty { color: var(--text-dim); text-align: center; padding: 20px 12px; }
+
+    .ld-actions { white-space: nowrap; }
+    .ld-btn-sm { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent-line); border-radius: 0; padding: 7px 11px; cursor: pointer; margin-left: 6px; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+    .ld-btn-sm:first-child { margin-left: 0; }
+    .ld-btn-sm:hover { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel-2); color: #ffb020; }
+    .ld-btn-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ld-btn-sm.ld-del { color: var(--text-dim); border-color: var(--line-strong); }
+    .ld-btn-sm.ld-del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+
+    @media (max-width: 560px) {
+      .ld-table thead { display: none; }
+      .ld-table tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+      .ld-table tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 9px 0; }
+      .ld-table tbody tr td:last-child { border-bottom: none; }
+      .ld-table tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; color: var(--text-dim); }
+      .ld-table td.ld-actions { justify-content: flex-end; }
+      .ld-table td.ld-actions::before { content: ''; }
+      .ld-empty { border: 1px solid var(--line-strong); }
+      /* L1: comfortable row-action tap targets (desktop unchanged). */
+      .ld-btn-sm { min-height: 44px; padding: 10px 16px; margin-left: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="ld-stack">
+    <main class="ld-card">
+      <div class="ld-top">
+        <div class="brand">
+          <div class="mark">
+            <img src="/logo.svg" alt="" aria-hidden="true">
+          </div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+        <a class="ld-back" href="/cash-flow">&larr; Back</a>
+      </div>
+
+      <div class="ld-head">
+        <span class="chip">Finance</span>
+        <h1>Loan Details</h1>
+        <p>Record loans taken for the build. Amounts are in rupees (₹); interest is a plain rate.</p>
+      </div>
+
+      <div id="ldMsg" class="msg" role="alert"></div>
+
+      <form id="ldForm" class="ld-form" novalidate>
+        <div class="field slno">
+          <label for="slno">Sl.No</label>
+          <input id="slno" type="text" readonly aria-readonly="true">
+        </div>
+
+        <div class="field">
+          <label for="amount">Amount (₹)</label>
+          <div class="amount-wrap">
+            <span class="rupee" aria-hidden="true">₹</span>
+            <input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="bank">Bank name</label>
+          <input id="bank" name="bank" type="text" autocomplete="off" maxlength="100" placeholder="e.g. SBI" required>
+        </div>
+
+        <div class="field">
+          <label for="rate">Interest rate (% p.a.)</label>
+          <input id="rate" name="rate" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 8.5">
+        </div>
+
+        <div class="field">
+          <label for="tenure">Tenure</label>
+          <input id="tenure" name="tenure" type="text" autocomplete="off" maxlength="60" placeholder="e.g. 18 months">
+        </div>
+
+        <div class="ld-actions-row">
+          <button type="submit" class="btn primary" id="saveBtn">Add loan</button>
+          <button type="button" class="btn ghost" id="cancelBtn" hidden>Cancel</button>
+        </div>
+      </form>
+
+      <hr class="ld-sep">
+      <p class="ld-list-head">Loans</p>
+      <table class="ld-table">
+        <thead>
+          <tr>
+            <th class="ld-slno">Sl.No</th>
+            <th>Amount</th>
+            <th>Bank</th>
+            <th>Rate</th>
+            <th>Tenure</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="ldList"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script src="/plannr-ui.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const msg = $('ldMsg'), form = $('ldForm'), amount = $('amount'), bank = $('bank'),
+          rate = $('rate'), tenure = $('tenure'), slno = $('slno'),
+          saveBtn = $('saveBtn'), cancelBtn = $('cancelBtn'), listBody = $('ldList');
+
+    let loans = [];
+    let editingId = null;
+
+    // Shared helpers (byte-identical) from /plannr-ui.js.
+    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, makeMsg, guardAuth } = window.PlannrUI;
+    const { show: showMsg, clear: clearMsg } = makeMsg(msg);
+    guardAuth(); // secondary client-side guard (server-side requireAuth is primary)
+
+    const fmtRate = (r) => (r === null || r === undefined || r === '') ? '<span class="ld-dim">—</span>' : (esc(String(r)) + '%');
+
+    async function loadLoans() {
+      const r = await fetch('/api/loans');
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      loans = (await r.json()).loans;
+      render();
+    }
+
+    function render() {
+      if (!loans.length) {
+        listBody.innerHTML = `<tr><td colspan="6" class="ld-empty">No loans yet.</td></tr>`;
+      } else {
+        listBody.innerHTML = loans.map((l, i) => `
+          <tr>
+            <td data-label="Sl.No" class="ld-slno">${i + 1}</td>
+            <td data-label="Amount" class="ld-amount">${fmtPaise(l.amountPaise)}</td>
+            <td data-label="Bank">${l.bankName ? esc(l.bankName) : '<span class="ld-dim">—</span>'}</td>
+            <td data-label="Rate">${fmtRate(l.interestRate)}</td>
+            <td data-label="Tenure">${l.tenure ? esc(l.tenure) : '<span class="ld-dim">—</span>'}</td>
+            <td data-label="" class="ld-actions">
+              <button type="button" class="ld-btn-sm" data-edit="${l.id}">Edit</button>
+              <button type="button" class="ld-btn-sm ld-del" data-del="${l.id}">Delete</button>
+            </td>
+          </tr>`).join('');
+      }
+      if (editingId === null) slno.value = loans.length + 1;
+    }
+
+    listBody.addEventListener('click', (ev) => {
+      const editId = ev.target.getAttribute('data-edit');
+      const delId = ev.target.getAttribute('data-del');
+      if (editId) startEdit(Number(editId));
+      else if (delId) doDelete(Number(delId));
+    });
+
+    function startEdit(id) {
+      const idx = loans.findIndex((x) => x.id === id);
+      if (idx < 0) return;
+      const l = loans[idx];
+      editingId = id;
+      slno.value = idx + 1;
+      amount.value = paiseToInput(l.amountPaise);
+      bank.value = l.bankName || '';
+      rate.value = (l.interestRate === null || l.interestRate === undefined) ? '' : String(l.interestRate);
+      tenure.value = l.tenure || '';
+      saveBtn.textContent = 'Update loan';
+      cancelBtn.hidden = false;
+      clearMsg();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      amount.focus();
+    }
+
+    function resetForm() {
+      editingId = null;
+      form.reset();
+      saveBtn.textContent = 'Add loan';
+      cancelBtn.hidden = true;
+      slno.value = loans.length + 1;
+    }
+    cancelBtn.addEventListener('click', () => { resetForm(); clearMsg(); });
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      clearMsg();
+      const amt = amount.value.trim().replace(/,/g, '');
+      if (!/^\d+(\.\d{1,2})?$/.test(amt) || Number(amt) <= 0) {
+        showMsg('Enter a valid amount greater than 0 (up to 2 decimals).', 'error');
+        return;
+      }
+      if (!bank.value.trim()) { showMsg('Bank name is required.', 'error'); return; }
+      const rt = rate.value.trim();
+      if (rt !== '' && (!/^\d+(\.\d+)?$/.test(rt) || Number(rt) < 0)) {
+        showMsg('Interest rate must be a number (0 or more).', 'error');
+        return;
+      }
+      const body = { amountRupees: amt, bankName: bank.value, interestRate: rt, tenure: tenure.value };
+      const editing = editingId !== null;
+      // Confirm only when overwriting an EXISTING entry (matches the Overview/Money-Debited
+      // edit-confirm behavior); adding a brand-new loan does not prompt.
+      if (editing && !(await window.PlannrUI.confirmModal({ title: 'Save changes?', message: 'Save your edits to this loan? This overwrites the saved record.', confirmLabel: 'Save changes' }))) return;
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch(editing ? '/api/loans/' + editingId : '/api/loans', {
+          method: editing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          await loadLoans();
+          resetForm();
+          showMsg(editing ? 'Loan updated.' : 'Loan added.', 'success');
+        } else {
+          showMsg(data.error || 'Could not save the loan.', 'error');
+        }
+      } catch {
+        showMsg('Network error. Please try again.', 'error');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    async function doDelete(id) {
+      if (!window.confirm('Delete this loan? It can be recovered later (soft-deleted).')) return;
+      try {
+        const res = await fetch('/api/loans/' + id, { method: 'DELETE' });
+        if (res.ok) {
+          if (editingId === id) resetForm();
+          await loadLoans();
+          showMsg('Loan deleted.', 'success');
+        } else {
+          const d = await res.json().catch(() => ({}));
+          showMsg(d.error || 'Could not delete the loan.', 'error');
+        }
+      } catch {
+        showMsg('Network error. Please try again.', 'error');
+      }
+    }
+
+    (async () => { await loadLoans(); })();
+  </script>
+</body>
+</html>

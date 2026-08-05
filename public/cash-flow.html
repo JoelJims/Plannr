@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Cash Flow · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+
+  <!-- Local module resolution for PixelBlast's three dependency (no CDN). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.js"
+    }
+  }
+  </script>
+
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Plain near-black behind PixelBlast (drop the shared blueprint grid so the
+       pixel field is the sole backdrop, mirroring date.css's approach). */
+    body { background: var(--bg); background-image: none; }
+
+    /* PixelBlast full-viewport background. z-index 0 (behind content), and
+       pointer-events:none so it NEVER blocks the buttons — ripples are driven by
+       a window pointerdown listener inside pixelblast.js. */
+    .pixelblast-container {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* Content layer: above PixelBlast (0), below the HUD frame (40). */
+    .cf-stack {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 1280px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ---- Option button row: stacked on mobile, 3-across on desktop ---- */
+    .cf-nav { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    @media (min-width: 600px) { .cf-nav { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 900px) { .cf-nav { grid-template-columns: repeat(4, 1fr); } }
+
+    /* ---- Nav buttons — same pattern/styles as the home nav buttons ---- */
+    .navbtn {
+      min-height: 50px;
+      padding: 10px 12px;
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      line-height: 1.15;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--accent);
+      background: var(--panel);
+      border: 1px solid var(--accent-line);
+      border-radius: 0;
+      cursor: pointer;
+      clip-path: polygon(var(--clip) 0, 100% 0, 100% calc(100% - var(--clip)), calc(100% - var(--clip)) 100%, 0 100%, 0 var(--clip));
+      transition: background 130ms ease, border-color 130ms ease, color 130ms ease;
+    }
+    .navbtn:hover {
+      background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel);
+      border-color: var(--accent);
+      color: #ffb020;
+    }
+    .navbtn:active { background: var(--panel-2); }
+    .navbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ---- Card ---- */
+    .cf-card {
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      padding: 26px 24px 24px;
+    }
+    .cf-card .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .cf-card .mark { width: 48px; height: 48px; }
+    .cf-card .mark svg { width: 31px; height: 31px; }
+    .cf-card .wordmark { font-size: 22px; }
+    .cf-card .sub { font-size: 10px; margin-top: 5px; }
+    .cf-head .chip { margin-bottom: 12px; }
+    .cf-head h1 {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 30px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      margin: 0 0 5px;
+      line-height: 1;
+    }
+    .cf-head p { margin: 0 0 20px; color: var(--text-dim); font-size: 14.5px; max-width: 46ch; }
+
+    /* ---- Back-to-home link (themed, amber underline like the switch links) ---- */
+    .cf-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid var(--accent-line);
+      padding-bottom: 2px;
+    }
+    .cf-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .cf-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    @media (min-width: 800px) {
+      .cf-card { padding: 40px 40px 34px; }
+      .cf-head h1 { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- PixelBlast WebGL background mounts its canvas into this container. -->
+  <div class="pixelblast-container" aria-hidden="true"></div>
+
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="cf-stack">
+    <nav class="cf-nav" aria-label="Cash flow options">
+      <button type="button" class="navbtn" data-href="/cash-inflow">Cash inflow</button>
+      <button type="button" class="navbtn" data-href="/cash-outflow">Cash outflow</button>
+      <button type="button" class="navbtn" data-href="/loan-details">Loan details</button>
+      <button type="button" class="navbtn" data-href="/contractor-payments">Contractor payments</button>
+    </nav>
+
+    <main class="cf-card">
+      <div class="brand">
+        <div class="mark">
+          <img src="/logo.svg" alt="" aria-hidden="true">
+        </div>
+        <div>
+          <div class="wordmark">Plannr</div>
+          <span class="sub">Construction Ledger</span>
+        </div>
+      </div>
+
+      <div class="cf-head">
+        <span class="chip">Ledger</span>
+        <h1>Cash Flow</h1>
+        <p>Choose what to record — inflow, outflow, loans, or contractor payments. Pick a section to get started, or head back home.</p>
+      </div>
+
+      <a class="cf-back" href="/">&larr; Back to home</a>
+    </main>
+  </div>
+
+  <script>
+    // Secondary client-side guard (server-side requireAuth is the primary one).
+    fetch('/api/me').then((r) => { if (!r.ok) location.href = '/login.html'; });
+
+    // Option buttons: each navigates to its data-href.
+    document.querySelectorAll('.cf-nav .navbtn').forEach((btn) => {
+      btn.addEventListener('click', () => { location.href = btn.dataset.href; });
+    });
+  </script>
+
+  <script type="module">
+    import { initPixelBlast } from '/pixelblast.js';
+    const el = document.querySelector('.pixelblast-container');
+    if (el) {
+      const destroy = initPixelBlast(el);
+      if (destroy) window.addEventListener('pagehide', destroy, { once: true });
+    }
+  </script>
+</body>
+</html>

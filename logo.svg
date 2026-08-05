@@ -1,0 +1,9 @@
+<svg width="128" height="128" viewBox="0 0 128 128" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Plannr</title>
+<desc>Plannr logo: a folded-plan letter P in amber.</desc>
+<path d="M34 20 h56 l30 30 v35 l-30 22 h-30 v41 h-26 z" fill="#f59e0b"/>
+<path d="M90 20 l30 30 h-30 z" fill="#b45309"/>
+<rect x="44" y="42" width="40" height="30" rx="4" fill="none"/>
+<path d="M60 42 h24 v30 h-40 v-30 h16 M44 42 v30" fill="#0a0a0b"/>
+<rect x="44" y="42" width="40" height="30" rx="4" fill="#0a0a0b"/>
+</svg>

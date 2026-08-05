@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Cash Inflow · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Content layer above the page background, below the HUD frame. */
+    .ci-stack {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 1280px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .ci-card {
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      padding: 24px 22px;
+    }
+    @media (min-width: 800px) { .ci-card { padding: 34px 34px 30px; } }
+
+    .ci-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+    .ci-card .brand { display: flex; align-items: center; gap: 12px; }
+    .ci-card .mark { width: 44px; height: 44px; }
+    .ci-card .mark svg { width: 28px; height: 28px; }
+    .ci-card .wordmark { font-size: 20px; }
+    .ci-card .sub { font-size: 10px; margin-top: 4px; }
+
+    .ci-back {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--font-head); font-weight: 600; font-size: 12px;
+      letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent);
+      text-decoration: none; border-bottom: 1px solid var(--accent-line); padding-bottom: 2px;
+    }
+    .ci-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .ci-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .ci-head .chip { margin-bottom: 10px; }
+    .ci-head h1 {
+      font-family: var(--font-head); font-weight: 600; font-size: 28px;
+      letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 4px; line-height: 1;
+    }
+    .ci-head p { margin: 0 0 18px; color: var(--text-dim); font-size: 14px; }
+    @media (min-width: 800px) { .ci-head h1 { font-size: 32px; } }
+
+    /* ---- Add / edit form (stacked, capped width) ---- */
+    .ci-form { max-width: 560px; }
+    .ci-form .field { margin-bottom: 14px; }
+    .ci-form .field.slno { max-width: 140px; }
+    #slno { color: var(--text-dim); }
+
+    /* ₹-prefixed amount input */
+    .amount-wrap { position: relative; }
+    .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .amount-wrap input { padding-left: 28px; }
+
+    /* select styled to match the angular amber inputs */
+    .ci-form select {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      color: var(--text); background-color: var(--panel-2); border: 1px solid var(--line-strong);
+      border-radius: 0; padding: 12px 36px 12px 13px; outline: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center; background-size: 13px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .ci-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .ci-form select option { background: #15161a; color: var(--text); }
+    /* Phase 4C — inflow date picker (day/month/year), same layout as the debit form. */
+    .ci-date-grid { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 10px; }
+    .ci-date-field label.ci-sub { display: block; font-family: var(--font-head); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 6px; }
+
+    .ci-actions-row { display: flex; gap: 12px; margin-top: 4px; }
+    .ci-actions-row .btn { width: auto; flex: 1 1 auto; padding: 0 22px; }
+    #cancelBtn[hidden] { display: none; }
+
+    /* ---- Divider + list ---- */
+    .ci-sep { border: none; border-top: 1px solid var(--line); margin: 26px 0 18px; }
+    .ci-list-head { font-family: var(--font-head); font-weight: 600; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+
+    .ci-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .ci-table th, .ci-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .ci-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+    .ci-table td.ci-amount { color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-head); letter-spacing: 0.02em; }
+    .ci-slno { color: var(--text-faint); width: 52px; }
+    .ci-dim { color: var(--text-faint); }
+    .ci-empty { color: var(--text-dim); text-align: center; padding: 20px 12px; }
+
+    .ci-actions { white-space: nowrap; }
+    .ci-btn-sm {
+      font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--accent); background: var(--panel-2);
+      border: 1px solid var(--accent-line); border-radius: 0; padding: 7px 11px; cursor: pointer;
+      margin-left: 6px; transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+    .ci-btn-sm:first-child { margin-left: 0; }
+    .ci-btn-sm:hover { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel-2); color: #ffb020; }
+    .ci-btn-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ci-btn-sm.ci-del { color: var(--text-dim); border-color: var(--line-strong); }
+    .ci-btn-sm.ci-del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+
+    /* ---- Mobile: stack the table rows into cards (no horizontal overflow) ---- */
+    @media (max-width: 560px) {
+      .ci-table thead { display: none; }
+      .ci-table tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+      .ci-table tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 9px 0; }
+      .ci-table tbody tr td:last-child { border-bottom: none; }
+      .ci-table tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; color: var(--text-dim); }
+      .ci-table td.ci-actions { justify-content: flex-end; }
+      .ci-table td.ci-actions::before { content: ''; }
+      .ci-empty { border: 1px solid var(--line-strong); }
+      /* L1: comfortable row-action tap targets (desktop unchanged). */
+      .ci-btn-sm { min-height: 44px; padding: 10px 16px; margin-left: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="ci-stack">
+    <main class="ci-card">
+      <div class="ci-top">
+        <div class="brand">
+          <div class="mark">
+            <img src="/logo.svg" alt="" aria-hidden="true">
+          </div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+        <a class="ci-back" href="/cash-flow">&larr; Back</a>
+      </div>
+
+      <div class="ci-head">
+        <span class="chip">Money Credited</span>
+        <h1>Cash Inflow</h1>
+        <p>Record money credited to the build. Amounts are in rupees (₹).</p>
+      </div>
+
+      <div id="ciMsg" class="msg" role="alert"></div>
+
+      <form id="ciForm" class="ci-form" novalidate>
+        <div class="field slno">
+          <label for="slno">Sl.No</label>
+          <input id="slno" type="text" readonly aria-readonly="true">
+        </div>
+
+        <div class="field">
+          <label for="amount">Amount (₹)</label>
+          <div class="amount-wrap">
+            <span class="rupee" aria-hidden="true">₹</span>
+            <input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off"
+                   placeholder="0.00" required>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="ciDateDay">Date</label>
+          <div class="ci-date-grid">
+            <div class="ci-date-field"><label for="ciDateDay" class="ci-sub">Day</label><select id="ciDateDay" aria-label="Day"></select></div>
+            <div class="ci-date-field"><label for="ciDateMonth" class="ci-sub">Month</label><select id="ciDateMonth" aria-label="Month"></select></div>
+            <div class="ci-date-field"><label for="ciDateYear" class="ci-sub">Year</label><select id="ciDateYear" aria-label="Year"></select></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="bySelect">By</label>
+          <select id="bySelect" name="bySelect"></select>
+        </div>
+
+        <div class="field" id="customWrap" hidden>
+          <label for="byCustom">Custom name</label>
+          <input id="byCustom" name="byCustom" type="text" autocomplete="off" maxlength="60"
+                 placeholder="Type a name">
+        </div>
+
+        <div class="field">
+          <label for="reason">Reason</label>
+          <textarea id="reason" name="reason" rows="3" autocomplete="off" maxlength="300"
+                    placeholder="What was this for? (optional)"></textarea>
+        </div>
+
+        <div class="ci-actions-row">
+          <button type="submit" class="btn primary" id="saveBtn">Add entry</button>
+          <button type="button" class="btn ghost" id="cancelBtn" hidden>Cancel</button>
+        </div>
+      </form>
+
+      <hr class="ci-sep">
+      <p class="ci-list-head">Previous entries</p>
+      <table class="ci-table">
+        <thead>
+          <tr>
+            <th class="ci-slno">Sl.No</th>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>By</th>
+            <th>Reason</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="ciList"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script src="/plannr-ui.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const msg = $('ciMsg'), form = $('ciForm'), amount = $('amount'), bySelect = $('bySelect'),
+          customWrap = $('customWrap'), byCustom = $('byCustom'), reason = $('reason'),
+          slno = $('slno'), saveBtn = $('saveBtn'), cancelBtn = $('cancelBtn'), listBody = $('ciList');
+
+    let entries = [];
+    let editingId = null;
+
+    // Shared helpers (byte-identical) from /plannr-ui.js. The page is gated AND
+    // the "By" dropdown is built from the logged-in user in loadMe() below
+    // (server-side requireAuth is the primary guard).
+    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, createDatePicker } = window.PlannrUI;
+    const { show: showMsg, clear: clearMsg } = makeMsg(msg);
+    // Phase 4C — inflows are now dateable (defaults to today, same picker as the debit form).
+    const datePicker = createDatePicker({ day: $('ciDateDay'), month: $('ciDateMonth'), year: $('ciDateYear') });
+
+    // Gate the page and build the "By" dropdown. Phase 2: list EVERY real user (from the
+    // roster) — By records who PAID, not who entered — plus Relative and Add custom…. Falls
+    // back to the session user only if the roster fetch fails (degraded, never blank). The
+    // auth-gated /api/users returns id + displayName only (no username/hash leak).
+    async function loadMe() {
+      const r = await fetch('/api/me');
+      if (!r.ok) { location.href = '/login.html'; return; }
+      const { user } = await r.json();
+      let roster = null;
+      try { const ru = await fetch('/api/users'); if (ru.ok) roster = (await ru.json()).users; } catch { /* fall back to session user */ }
+      const list = (Array.isArray(roster) && roster.length) ? roster : [user];
+      bySelect.innerHTML =
+        list.map((u) => `<option value="user:${u.id}">${esc(u.displayName)}</option>`).join('') +
+        `<option value="relative">Relative</option>` +
+        `<option value="custom">Add custom…</option>`;
+    }
+
+    bySelect.addEventListener('change', () => {
+      customWrap.hidden = bySelect.value !== 'custom';
+    });
+
+    async function loadEntries() {
+      const r = await fetch('/api/cash-in');
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      entries = (await r.json()).entries;
+      render();
+    }
+
+    function render() {
+      if (!entries.length) {
+        listBody.innerHTML = `<tr><td colspan="6" class="ci-empty">No entries yet.</td></tr>`;
+      } else {
+        listBody.innerHTML = entries.map((e, i) => `
+          <tr>
+            <td data-label="Sl.No" class="ci-slno">${i + 1}</td>
+            <td data-label="Date">${e.txDate ? esc(fmtDate(e.txDate)) : '<span class="ci-dim">—</span>'}</td>
+            <td data-label="Amount" class="ci-amount">${fmtPaise(e.amountPaise)}</td>
+            <td data-label="By">${esc(e.by)}</td>
+            <td data-label="Reason">${e.reason ? esc(e.reason) : '<span class="ci-dim">—</span>'}</td>
+            <td data-label="" class="ci-actions">
+              <button type="button" class="ci-btn-sm" data-edit="${e.id}">Edit</button>
+              <button type="button" class="ci-btn-sm ci-del" data-del="${e.id}">Delete</button>
+            </td>
+          </tr>`).join('');
+      }
+      if (editingId === null) slno.value = entries.length + 1;
+    }
+
+    listBody.addEventListener('click', (ev) => {
+      const editId = ev.target.getAttribute('data-edit');
+      const delId = ev.target.getAttribute('data-del');
+      if (editId) startEdit(Number(editId));
+      else if (delId) doDelete(Number(delId));
+    });
+
+    function startEdit(id) {
+      const idx = entries.findIndex((x) => x.id === id);
+      if (idx < 0) return;
+      const e = entries[idx];
+      editingId = id;
+      slno.value = idx + 1;
+      amount.value = paiseToInput(e.amountPaise);
+      datePicker.setISO(e.txDate); // null/legacy -> today
+      if (e.byType === 'user') {
+        const val = 'user:' + e.byUserId;
+        // Phase 2 guard: ensure an option for this attribution exists (imported row / absent
+        // user) so the select always equals the stored value — never blank, never a rewrite.
+        if (!bySelect.querySelector(`option[value="${val}"]`)) {
+          bySelect.insertAdjacentHTML('afterbegin', `<option value="${esc(val)}">${esc(e.by || 'Unknown')}</option>`);
+        }
+        bySelect.value = val; customWrap.hidden = true;
+      }
+      else if (e.byType === 'relative') { bySelect.value = 'relative'; customWrap.hidden = true; }
+      else { bySelect.value = 'custom'; customWrap.hidden = false; byCustom.value = e.byLabel || ''; }
+      reason.value = e.reason || '';
+      saveBtn.textContent = 'Update entry';
+      cancelBtn.hidden = false;
+      clearMsg();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      amount.focus();
+    }
+
+    function resetForm() {
+      editingId = null;
+      form.reset();
+      datePicker.reset(); // back to today (form.reset() cleared the day/month/year selects)
+      bySelect.selectedIndex = 0;
+      customWrap.hidden = true;
+      saveBtn.textContent = 'Add entry';
+      cancelBtn.hidden = true;
+      slno.value = entries.length + 1;
+    }
+    cancelBtn.addEventListener('click', () => { resetForm(); clearMsg(); });
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      clearMsg();
+      const amt = amount.value.trim().replace(/,/g, '');
+      if (!/^\d+(\.\d{1,2})?$/.test(amt) || Number(amt) <= 0) {
+        showMsg('Enter a valid amount greater than 0 (up to 2 decimals).', 'error');
+        return;
+      }
+      const sel = bySelect.value;
+      const body = { amountRupees: amt, txDate: datePicker.getISO(), reason: reason.value };
+      if (sel.startsWith('user:')) { body.byType = 'user'; body.byUserId = Number(sel.slice(5)); }
+      else if (sel === 'relative') { body.byType = 'relative'; }
+      else if (sel === 'custom') {
+        body.byType = 'custom'; body.byLabel = byCustom.value.trim();
+        if (!body.byLabel) { showMsg('Enter a name for the custom source.', 'error'); return; }
+      } else { showMsg('Select who the money is from.', 'error'); return; }
+
+      const editing = editingId !== null;
+      // Confirm only when overwriting an EXISTING entry; adding a new inflow does not prompt.
+      if (editing && !(await window.PlannrUI.confirmModal({ title: 'Save changes?', message: 'Save your edits to this inflow entry? This overwrites the saved record.', confirmLabel: 'Save changes' }))) return;
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch(editing ? '/api/cash-in/' + editingId : '/api/cash-in', {
+          method: editing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          await loadEntries();
+          resetForm();
+          showMsg(editing ? 'Entry updated.' : 'Entry added.', 'success');
+        } else {
+          showMsg(data.error || 'Could not save the entry.', 'error');
+        }
+      } catch {
+        showMsg('Network error. Please try again.', 'error');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    async function doDelete(id) {
+      if (!window.confirm('Delete this entry? It can be recovered later (soft-deleted).')) return;
+      try {
+        const res = await fetch('/api/cash-in/' + id, { method: 'DELETE' });
+        if (res.ok) {
+          if (editingId === id) resetForm();
+          await loadEntries();
+          showMsg('Entry deleted.', 'success');
+        } else {
+          const d = await res.json().catch(() => ({}));
+          showMsg(d.error || 'Could not delete the entry.', 'error');
+        }
+      } catch {
+        showMsg('Network error. Please try again.', 'error');
+      }
+    }
+
+    (async () => { await loadMe(); await loadEntries(); })();
+  </script>
+</body>
+</html>

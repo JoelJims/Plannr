@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Cash Outflow · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .co-stack { position: relative; z-index: 1; width: 100%; max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .co-card { background: var(--panel); border: 1px solid var(--line-strong); padding: 24px 22px; }
+    @media (min-width: 800px) { .co-card { padding: 34px 34px 30px; } }
+
+    .co-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+    .co-card .brand { display: flex; align-items: center; gap: 12px; }
+    .co-card .mark { width: 44px; height: 44px; }
+    .co-card .mark svg { width: 28px; height: 28px; }
+    .co-card .wordmark { font-size: 20px; }
+    .co-card .sub { font-size: 10px; margin-top: 4px; }
+
+    .co-back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); padding-bottom: 2px; }
+    .co-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .co-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .co-top-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .co-pdf { display: inline-flex; align-items: center; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #1a1a1a; background: var(--accent); border: 1px solid var(--accent); padding: 9px 14px; text-decoration: none; cursor: pointer; }
+    .co-pdf:hover { filter: brightness(1.06); }
+    .co-pdf:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* Part 4: manage saved custom ledger names — removable chips under the custom-name input. */
+    .lc-manage { margin-top: 10px; }
+    .lc-manage-hint { display: block; font-size: 11px; letter-spacing: 0.04em; color: var(--text-faint); margin-bottom: 6px; }
+    .lc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .lc-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim); background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 999px; padding: 3px 5px 3px 11px; }
+    .lc-chip button { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; padding: 0; font-size: 14px; line-height: 1; color: var(--text-faint); background: transparent; border: none; border-radius: 999px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+    .lc-chip button:hover { color: #1a1a1a; background: var(--accent); }
+    .lc-chip button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+    .co-head .chip { margin-bottom: 10px; }
+    .co-head h1 { font-family: var(--font-head); font-weight: 600; font-size: 28px; letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 4px; line-height: 1; }
+    .co-head p { margin: 0 0 18px; color: var(--text-dim); font-size: 14px; }
+    @media (min-width: 800px) { .co-head h1 { font-size: 32px; } }
+
+    .co-form { max-width: 620px; }
+    .co-form .field { margin-bottom: 14px; }
+    .co-form .field.slno { max-width: 140px; }
+    #slno { color: var(--text-dim); }
+
+    .amount-wrap { position: relative; }
+    .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .amount-wrap input { padding-left: 28px; }
+
+    .co-form select {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      color: var(--text); background-color: var(--panel-2); border: 1px solid var(--line-strong);
+      border-radius: 0; padding: 12px 36px 12px 13px; outline: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center; background-size: 13px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .co-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .co-form select:disabled { opacity: 0.5; cursor: default; background-image: none; }
+    .co-form select option { background: #15161a; color: var(--text); }
+
+    /* Date picker: three day/month/year selects, same layout as the /select-date screen. */
+    .co-date-grid { display: grid; grid-template-columns: 0.85fr 1.25fr 1fr; gap: 12px; }
+    .co-date-field label.co-sub { display: block; font-family: var(--font-head); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 6px; }
+    @media (max-width: 400px) { .co-date-grid { grid-template-columns: 1fr; gap: 10px; } }
+
+    .co-note { margin: 6px 0 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
+
+    /* Units-covered number input — themed to match the shared text inputs. */
+    input[type="number"] {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      padding: 12px 14px; color: var(--text); background: var(--panel-2);
+      border: 1px solid var(--line-strong); border-radius: 0; outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    input[type="number"]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+
+    /* Non-blocking amber over-coverage warning (informational; never blocks save). */
+    .co-warn {
+      display: none; margin: 0 0 14px; padding: 11px 14px; font-size: 13px; line-height: 1.4;
+      color: #f8dca6; background: var(--accent-soft); border: 1px solid var(--accent-line);
+      border-left: 3px solid var(--accent);
+    }
+    .co-warn.show { display: block; }
+
+    .co-actions-row { display: flex; gap: 12px; margin-top: 4px; }
+    .co-actions-row .btn { width: auto; flex: 1 1 auto; padding: 0 22px; }
+    #cancelBtn[hidden] { display: none; }
+
+    .co-sep { border: none; border-top: 1px solid var(--line); margin: 26px 0 18px; }
+    .co-list-head { font-family: var(--font-head); font-weight: 600; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+
+    /* Item 2 — parity with Overview: centre the shared table's HEADER row only. Data cells
+       keep their own alignment (Amount data stays right-aligned + tabular-nums via
+       styles.css); the nth-child(5) rule out-specifies styles.css's Amount-header right-align. */
+    .tx-table thead th { text-align: center; }
+    .tx-table thead th:nth-child(5) { text-align: center; }
+
+    .co-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .co-table th, .co-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .co-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+    .co-table td.co-amount { color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-head); letter-spacing: 0.02em; }
+    .co-slno { color: var(--text-faint); width: 52px; }
+    .co-dim { color: var(--text-faint); }
+    /* Phase 4A — carried-over ledger cue (amber only, classes/CSSOM; no inline style= per CSP). */
+    .co-carry { display: inline-block; margin-left: 8px; font-family: var(--font-head); font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #ffb020; border: 1px solid var(--accent-line); background: var(--accent-soft); padding: 2px 7px; vertical-align: middle; }
+    .co-carry[hidden] { display: none; }
+    select#ledgerSelect.carried, select#subSelect.carried { border-color: #ffb020; box-shadow: 0 0 0 1px #ffb020; }
+    .co-empty { color: var(--text-dim); text-align: center; padding: 20px 12px; }
+
+    .co-actions { white-space: nowrap; }
+    .co-btn-sm { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent-line); border-radius: 0; padding: 7px 11px; cursor: pointer; margin-left: 6px; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+    .co-btn-sm:first-child { margin-left: 0; }
+    .co-btn-sm:hover { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel-2); color: #ffb020; }
+    .co-btn-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .co-btn-sm.co-del { color: var(--text-dim); border-color: var(--line-strong); }
+    .co-btn-sm.co-del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+
+    @media (max-width: 620px) {
+      .co-table thead { display: none; }
+      .co-table tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+      .co-table tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 9px 0; }
+      .co-table tbody tr td:last-child { border-bottom: none; }
+      .co-table tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; color: var(--text-dim); flex: none; }
+      .co-table td[data-label="Ledger"] { text-align: right; }
+      .co-table td.co-actions { justify-content: flex-end; }
+      .co-table td.co-actions::before { content: ''; }
+      .co-empty { border: 1px solid var(--line-strong); }
+      /* L1: comfortable row-action tap targets (desktop unchanged). */
+      .co-btn-sm { min-height: 44px; padding: 10px 16px; margin-left: 10px; }
+      /* Roomier vertical spacing so the (now longer) form — incl. Phase/Sub-part —
+         isn't cramped on a phone. Desktop keeps the tighter 14px. */
+      .co-form .field { margin-bottom: 18px; }
+    }
+    /* Phase 8C — was an inline style= attribute; moved here so a hash-based CSP needs no unsafe-hashes. */
+    .co-hint { display: block; margin-top: 6px; color: var(--text-dim); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="co-stack">
+    <main class="co-card">
+      <div class="co-top">
+        <div class="brand">
+          <div class="mark">
+            <img src="/logo.svg" alt="" aria-hidden="true">
+          </div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+        <div class="co-top-actions">
+          <a class="co-back" href="/cash-flow">&larr; Back</a>
+        </div>
+      </div>
+
+      <div class="co-head">
+        <span class="chip">Money Debited</span>
+        <h1>Cash Outflow</h1>
+        <p>Record money spent on the build. Amounts are in rupees (₹).</p>
+      </div>
+
+      <div id="coMsg" class="msg" role="alert"></div>
+
+      <form id="coForm" class="co-form" novalidate>
+        <div class="field slno">
+          <label for="slno">Sl.No</label>
+          <input id="slno" type="text" readonly aria-readonly="true">
+        </div>
+
+        <!-- 1. Date (required) — same day/month/year picker as the /select-date screen. -->
+        <div class="field">
+          <label for="dateDay">Date</label>
+          <div class="co-date-grid">
+            <div class="co-date-field">
+              <label for="dateDay" class="co-sub">Day</label>
+              <select id="dateDay" name="dateDay" aria-label="Day"></select>
+            </div>
+            <div class="co-date-field">
+              <label for="dateMonth" class="co-sub">Month</label>
+              <select id="dateMonth" name="dateMonth" aria-label="Month"></select>
+            </div>
+            <div class="co-date-field">
+              <label for="dateYear" class="co-sub">Year</label>
+              <select id="dateYear" name="dateYear" aria-label="Year"></select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Ledger (required) -->
+        <div class="field">
+          <label for="ledgerSelect">Ledger <span class="co-carry" id="ledgerCarry" hidden>↻ carried over — change if needed</span></label>
+          <select id="ledgerSelect" name="ledgerSelect"></select>
+        </div>
+
+        <div class="field" id="ledgerCustomWrap" hidden>
+          <label for="ledgerCustom">Custom ledger name</label>
+          <!-- Part E: saved per-user custom names offered as a datalist; typing a new one saves it for next time. -->
+          <input id="ledgerCustom" name="ledgerCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a ledger name" list="ledgerCustomList">
+          <datalist id="ledgerCustomList"></datalist>
+          <!-- Part 4: manage the saved names — removable chips, so a typo like "Cemnt" isn't stuck forever. -->
+          <div id="ledgerCustomManage" class="lc-manage" hidden>
+            <span class="lc-manage-hint">Saved names — click × to remove from this list</span>
+            <div id="ledgerCustomChips" class="lc-chips"></div>
+          </div>
+        </div>
+
+        <!-- 3. Sub-ledger (optional) -->
+        <div class="field">
+          <label for="subSelect">Sub-ledger <span class="co-dim">(optional)</span></label>
+          <select id="subSelect" name="subSelect"></select>
+        </div>
+
+        <div class="field" id="subCustomWrap" hidden>
+          <label for="subCustom">Custom sub-ledger name</label>
+          <input id="subCustom" name="subCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a sub-ledger name">
+        </div>
+
+        <!-- 4. Amount (required) -->
+        <div class="field">
+          <label for="amount">Amount (₹)</label>
+          <div class="amount-wrap">
+            <span class="rupee" aria-hidden="true">₹</span>
+            <input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required>
+          </div>
+        </div>
+
+        <!-- 5. Expense By (required) — logged-in user or Custom only (no Contractor). -->
+        <div class="field">
+          <label for="bySelect">Expense By</label>
+          <select id="bySelect" name="bySelect"></select>
+        </div>
+
+        <div class="field" id="customWrap" hidden>
+          <label for="byCustom">Custom name</label>
+          <input id="byCustom" name="byCustom" type="text" autocomplete="off" maxlength="60" placeholder="Type a name">
+        </div>
+
+        <!-- 6. Remark (optional) — stored in the existing 'reason' column. -->
+        <div class="field">
+          <label for="reason">Remark</label>
+          <textarea id="reason" name="reason" rows="3" autocomplete="off" maxlength="300" placeholder="What was this for? (optional)"></textarea>
+        </div>
+
+        <!-- 7. In-contract tag (Yes / No). Label reworded (Part F) — the stored values stay 'included'/'extra'. -->
+        <div class="field">
+          <label for="scopeSelect">Was this item in the contract?</label>
+          <select id="scopeSelect" name="scopeSelect">
+            <option value="">— select —</option>
+            <option value="included">Yes</option>
+            <option value="extra">No</option>
+          </select>
+        </div>
+
+        <!-- 7b. Service picker (Part C) — offered only when the item is in the contract. Selecting a priced
+             service fills the stated amount below. Shortcut only; typing the amount directly still works. -->
+        <div class="field" id="serviceWrap" hidden>
+          <label for="serviceSelect">Contract service <span class="co-dim">(optional shortcut)</span></label>
+          <select id="serviceSelect" name="serviceSelect"></select>
+          <small class="co-hint">Pick a priced service to fill the stated amount below, or leave as “none” and type it.</small>
+        </div>
+
+        <!-- 8. Contract stated amount (₹) — Phase 5F (Option C): the amount the CONTRACT stated for
+             this item, i.e. the reimbursement offset against the contractor's dues. Shown only when
+             the item is in the contract. This is deliberately NOT the amount actually spent (field 4). -->
+        <div class="field" id="contractStatedWrap" hidden>
+          <label for="contractStated">Contract stated amount for this item (₹)</label>
+          <div class="amount-wrap">
+            <span class="rupee" aria-hidden="true">₹</span>
+            <input id="contractStated" name="contractStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+          </div>
+          <small class="co-hint">What the contract stated for this item (reduces the contractor's dues) — not the amount actually spent above.</small>
+        </div>
+
+        <div class="co-actions-row">
+          <button type="submit" class="btn primary" id="saveBtn">Add entry</button>
+          <button type="button" class="btn ghost" id="cancelBtn" hidden>Cancel</button>
+        </div>
+      </form>
+
+      <hr class="co-sep">
+      <p class="co-list-head">Previous entries</p>
+      <!-- Part A — shared search/filter bar (rendered by PlannrUI.createLedgerFilterBar). Filters are
+           pushed to SQL via /api/cash-out?… — the table only ever holds the filtered rows. -->
+      <div id="coFilter"></div>
+      <div id="coEditMsg" class="msg" role="alert"></div>
+      <div class="tx-bar">
+        <button type="button" class="btn primary" id="coEditBtn">Edit</button>
+        <button type="button" class="btn primary" id="coSaveAllBtn" hidden>Save All</button>
+        <button type="button" class="btn ghost" id="coCancelBtn" hidden>Cancel</button>
+        <span class="tx-status" id="coEditStatus"></span>
+      </div>
+      <table class="tx-table">
+        <thead>
+          <tr>
+            <th>S.No</th><th>Date</th><th>Ledger</th><th>Sub-ledger</th>
+            <th>Amount</th><th>By</th><th>Remark</th><th>In Contract?</th><th>Contract Stated</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="coList"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script src="/ledgers.js"></script>
+  <script src="/plannr-ui.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const msg = $('coMsg'), form = $('coForm'), amount = $('amount'), bySelect = $('bySelect'),
+          dateDay = $('dateDay'), dateMonth = $('dateMonth'), dateYear = $('dateYear'),
+          customWrap = $('customWrap'), byCustom = $('byCustom'), ledgerSelect = $('ledgerSelect'),
+          ledgerCustomWrap = $('ledgerCustomWrap'), ledgerCustom = $('ledgerCustom'),
+          subSelect = $('subSelect'), subCustomWrap = $('subCustomWrap'), subCustom = $('subCustom'),
+          reason = $('reason'), scopeSelect = $('scopeSelect'),
+          contractStated = $('contractStated'), contractStatedWrap = $('contractStatedWrap'),
+          slno = $('slno'), saveBtn = $('saveBtn'),
+          cancelBtn = $('cancelBtn'), listBody = $('coList');
+
+    let entries = [];
+    let dirty = false;
+
+    // Shared helpers from /plannr-ui.js.
+    const { makeMsg } = window.PlannrUI;
+    const { show: showMsg, clear: clearMsg } = makeMsg(msg);
+    const listMsg = makeMsg($('coEditMsg'));
+
+    // ADD form (create-only). Dependent ledger→sub dropdowns, "Custom…" inputs, the
+    // Contract Included (Yes/No) tag, and request-body building are shared (createCashOutForm).
+    const editor = window.PlannrUI.createCashOutForm({
+      amount, bySelect, customWrap, byCustom, ledgerSelect, ledgerCustomWrap, ledgerCustom,
+      subSelect, subCustomWrap, subCustom,
+      dateDay, dateMonth, dateYear,
+      reason, scopeSelect, contractStated, contractStatedWrap,
+      serviceSelect: $('serviceSelect'), serviceWrap: $('serviceWrap'), ledgerCustomList: $('ledgerCustomList'),
+    });
+
+    // The SAME bulk-editable table used on the Overview page — ONE implementation.
+    // Editing existing rows happens here; the form above only ADDS new entries.
+    const txTable = window.PlannrUI.createEditableCashOutTable({
+      tbody: listBody,
+      emptyText: 'No entries yet.',
+      deleteInEditMode: true, // Item 2: hide per-row Delete until Edit is active (same as Overview)
+      onDirty: (d) => { dirty = d; $('coEditStatus').textContent = d ? 'Unsaved changes' : ''; },
+    });
+
+    // Part A — the shared filter bar. On change it re-fetches the SQL-filtered list (never client-side
+    // over the DOM). Disabled during edit mode so a filter change can't yank rows out from under an edit.
+    const filterBar = window.PlannrUI.createLedgerFilterBar({
+      container: $('coFilter'),
+      showDates: true, // Money Debited had no date range before; the unified bar gives it one
+      onChange: () => { if (!txTable.isEditing()) loadEntries(); },
+    });
+    function filterQuery() {
+      const f = filterBar.getFilters();
+      const p = new URLSearchParams();
+      for (const k of ['q', 'ledger', 'subledger', 'min', 'max', 'start', 'end']) if (f[k]) p.set(k, f[k]);
+      const s = p.toString();
+      return '/api/cash-out' + (s ? '?' + s : '');
+    }
+
+    // Gate the page + set the logged-in user on both the add form and the table. Phase 2:
+    // also fetch the full user roster so both "By" pickers list every real payer (By = who
+    // paid, not who entered). If the roster fetch fails, both fall back to the session user
+    // only (degraded, never blank).
+    async function loadMe() {
+      const r = await fetch('/api/me');
+      if (!r.ok) { location.href = '/login.html'; return; }
+      const u = (await r.json()).user;
+      let roster = null;
+      try { const ru = await fetch('/api/users'); if (ru.ok) roster = (await ru.json()).users; } catch { /* fall back to session user */ }
+      editor.setUser(u, roster);
+      txTable.setUser(u);
+      txTable.setRoster(roster || [u]);
+    }
+
+    async function loadEntries() {
+      const r = await fetch(filterQuery());
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; else { const d = await r.json().catch(() => ({})); listMsg.show(d.error || 'Could not load entries.', 'error'); } return; }
+      const data = await r.json();
+      entries = data.entries;
+      txTable.setEntries(entries);     // read mode — only the SQL-filtered rows
+      const total = data.total != null ? data.total : entries.length;
+      slno.value = total + 1;          // next Sl.No = TOTAL live rows + 1 (never the filtered count)
+      filterBar.setCount(entries.length, total);
+    }
+
+    // Services phase (Part C) — the in-contract service picker offers this contract's PRICED services,
+    // MINUS any already claimed by a live debit (one service → one offset), computed from the loaded
+    // entries. Refreshed after every add so a just-claimed service drops out of the list.
+    async function loadServices() {
+      try {
+        const r = await fetch('/api/contracts');
+        const contracts = r.ok ? ((await r.json()).contracts || []) : [];
+        const claimed = new Set((entries || []).map((e) => e.contractServiceId).filter((x) => x != null));
+        editor.setServices(contracts.flatMap((c) => c.services || []).filter((s) => s.pricePaise != null && !claimed.has(s.id)));
+      } catch { editor.setServices([]); }
+    }
+    // Part E — the caller's saved custom ledger names for the datalist. Part 4 adds a removal path:
+    // each name is also shown as a removable chip, so a mistyped one ("Cemnt") can be pruned.
+    const customChips = document.getElementById('ledgerCustomChips');
+    const customManage = document.getElementById('ledgerCustomManage');
+    function renderCustomChips(names) {
+      if (!customChips) return;
+      customChips.replaceChildren(...names.map((n) => {
+        const chip = document.createElement('span'); chip.className = 'lc-chip';
+        chip.append(document.createTextNode(n));
+        const x = document.createElement('button');
+        x.type = 'button'; x.textContent = '×';
+        x.title = 'Remove “' + n + '”'; x.setAttribute('aria-label', 'Remove ' + n + ' from saved names');
+        x.addEventListener('click', () => removeCustom(n));
+        chip.append(x); return chip;
+      }));
+      if (customManage) customManage.hidden = names.length === 0;
+    }
+    function applyCustoms(names) { editor.setCustoms(names); renderCustomChips(names); }
+    async function loadCustoms() {
+      try { const r = await fetch('/api/ledger-customs'); applyCustoms(r.ok ? ((await r.json()).customs || []) : []); }
+      catch { applyCustoms([]); }
+    }
+    async function removeCustom(name) {
+      if (!window.confirm('Remove “' + name + '” from your saved custom ledger names?\nPast entries that used it are unaffected.')) return;
+      try {
+        const r = await fetch('/api/ledger-customs?name=' + encodeURIComponent(name), { method: 'DELETE' });
+        if (r.ok) applyCustoms((await r.json()).customs || []);
+      } catch { /* leave the list as-is on a network error */ }
+    }
+
+    // ---- Delete (Item 2: an EDIT-MODE row action now — the button only renders while
+    // editing). Mirrors Overview's edit-mode delete: reload then stay in edit if rows
+    // remain. (No single-editor lock on this page, so it's the simpler variant.) ----
+    listBody.addEventListener('click', (ev) => {
+      const del = ev.target.getAttribute && ev.target.getAttribute('data-del');
+      if (del) doDelete(Number(del));
+    });
+    async function doDelete(id) {
+      const warn = dirty
+        ? 'Delete this entry? Your other unsaved changes will be reset. The entry is soft-deleted and recoverable.'
+        : 'Delete this entry? It can be recovered later (soft-deleted).';
+      if (!window.confirm(warn)) return;
+      try {
+        const res = await fetch('/api/cash-out/' + id, { method: 'DELETE' });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); listMsg.show(d.error || 'Could not delete the entry.', 'error'); return; }
+        listMsg.show('Entry deleted.', 'success');
+      } catch { listMsg.show('Network error. Please try again.', 'error'); return; }
+      await loadEntries();               // setEntries -> read render; exits component edit
+      if (!txTable.enterEdit()) { toggleEditUI(false); dirty = false; $('coEditStatus').textContent = ''; } // no rows left -> leave edit mode
+    }
+
+    // ---- Bulk edit toolbar (Save All confirms — these are EXISTING rows) ----
+    function toggleEditUI(on) { $('coEditBtn').hidden = on; $('coSaveAllBtn').hidden = !on; $('coCancelBtn').hidden = !on; filterBar.setEnabled(!on); }
+    $('coEditBtn').addEventListener('click', () => {
+      listMsg.clear();
+      if (!txTable.enterEdit()) { listMsg.show('No entries to edit yet.', 'error'); return; }
+      toggleEditUI(true);
+    });
+    $('coCancelBtn').addEventListener('click', () => {
+      txTable.cancelEdit(); toggleEditUI(false); dirty = false; $('coEditStatus').textContent = ''; listMsg.clear();
+    });
+    $('coSaveAllBtn').addEventListener('click', async () => {
+      listMsg.clear();
+      const c = txTable.collect();
+      if (!c.changed) { listMsg.show('No changes to save.', 'success'); return; }
+      // Save All confirm — shared builder includes the loud attribution warning (Phase 2.1:
+      // Money Debited previously built its own message and silently omitted it).
+      const ok = await window.PlannrUI.confirmModal({
+        title: 'Save changes?',
+        message: window.PlannrUI.saveAllMessage(c),
+        confirmLabel: 'Save changes',
+      });
+      if (!ok) return;
+      $('coSaveAllBtn').disabled = true;
+      // Phase 6B: one batched request (was one PUT per row). Money Debited sends NO X-Overview-Edit
+      // header, so the server's editGate passes through (its edits bypass the Overview lock).
+      const { saved, held } = await window.PlannrUI.saveAllBatch(c, { table: txTable });
+      $('coSaveAllBtn').disabled = false;
+      if (held === 0) {
+        toggleEditUI(false); dirty = false; $('coEditStatus').textContent = '';
+        await loadEntries();
+        listMsg.show(`Saved ${saved} change${saved === 1 ? '' : 's'}.`, 'success');
+      } else {
+        listMsg.show(`Saved ${saved}, held back ${held}. Fix the flagged row${held === 1 ? '' : 's'} and Save All again.`, 'error');
+      }
+    });
+
+    // ---- ADD form submit (create-only; NO confirmation on creating new entries) ----
+    // Phase 4A — carried-over-ledger cue. The person needs to SEE the ledger is still set (a carried
+    // value, not a reset form). classList/hidden only — CSP-safe (no inline style=).
+    const ledgerCarry = $('ledgerCarry');
+    function showCarry() {
+      const on = !!ledgerSelect.value;
+      ledgerCarry.hidden = !on;
+      ledgerSelect.classList.toggle('carried', on);
+      subSelect.classList.toggle('carried', on && !!subSelect.value);
+    }
+    function hideCarry() { ledgerCarry.hidden = true; ledgerSelect.classList.remove('carried'); subSelect.classList.remove('carried'); }
+    ledgerSelect.addEventListener('change', hideCarry); // changing the ledger means it's no longer "carried"
+    function resetForm(opts) { editor.reset(opts); slno.value = entries.length + 1; }
+    cancelBtn.addEventListener('click', () => { resetForm(); hideCarry(); clearMsg(); });
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      clearMsg();
+      const built = editor.readBody();
+      if (built.error) { showMsg(built.error, 'error'); return; }
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/cash-out', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(built.body) });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) { await loadEntries(); await loadServices(); await loadCustoms(); resetForm({ keepLedger: true }); showCarry(); showMsg('Entry added. Ledger kept for the next entry.', 'success'); }
+        else { showMsg(data.error || 'Could not save the entry.', 'error'); } // failed save: no reset, no carry — defaults stay clean
+      } catch { showMsg('Network error. Please try again.', 'error'); }
+      finally { saveBtn.disabled = false; }
+    });
+
+    // Warn before leaving with unsaved edits in the table.
+    window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+    (async () => { await loadMe(); await loadEntries(); await loadServices(); await loadCustoms(); })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Plain near-black home background — no blueprint grid, no effect layer.
+       (align-items keeps the enlarged group reachable if it exceeds the viewport.) */
+    body { background: var(--bg); background-image: none; align-items: safe center; }
+
+    /* ---- Home layout: nav row + enlarged card, centred as a group ----
+       Scoped to home only (login/register/date reuse the shared .shell as-is). */
+    .home-stack {
+      position: relative;
+      z-index: 1;               /* content layer, below the HUD frame (z-index 40) */
+      width: 100%;
+      max-width: 1280px;        /* grown ~1/3 from the shared 960px; nav aligns to this */
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .shell--home { max-width: none; } /* fill the stack width so nav + card align */
+    @media (min-width: 800px) {
+      .shell--home .brand-panel { padding: 58px 40px; } /* vertical padding raised ~1/3 (44 -> 58) */
+      .shell--home .form-panel  { padding: 64px 44px; } /*                          (48 -> 64) */
+    }
+
+    /* ---- Nav button row ---- */
+    .home-nav {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr); /* 2x2 on small screens */
+      gap: 10px;
+    }
+    @media (min-width: 800px) {
+      .home-nav { grid-template-columns: repeat(4, 1fr); } /* 4 across on desktop */
+    }
+    .navbtn {
+      min-height: 50px;
+      padding: 10px 12px;
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      line-height: 1.15;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--accent);
+      background: var(--panel);
+      border: 1px solid var(--accent-line);
+      border-radius: 0;
+      cursor: pointer;
+      clip-path: polygon(var(--clip) 0, 100% 0, 100% calc(100% - var(--clip)), calc(100% - var(--clip)) 100%, 0 100%, 0 var(--clip));
+      transition: background 130ms ease, border-color 130ms ease, color 130ms ease;
+    }
+    .navbtn:hover {
+      background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel);
+      border-color: var(--accent);
+      color: #ffb020;           /* brighter amber (existing hover tone) */
+    }
+    .navbtn:active { background: var(--panel-2); }
+    .navbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ---- Log-out confirmation dialog (above the HUD frame) ---- */
+    .logout-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 100;                    /* above .hud-frame (40) */
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.62);  /* dim backdrop */
+    }
+    .logout-backdrop[hidden] { display: none; }
+    .logout-dialog {
+      width: 100%;
+      max-width: 420px;
+      background: var(--panel);
+      border: 1px solid var(--accent-line);
+      padding: 24px 22px 20px;
+      clip-path: polygon(var(--clip) 0, 100% 0, 100% calc(100% - var(--clip)), calc(100% - var(--clip)) 100%, 0 100%, 0 var(--clip));
+      box-shadow: 0 24px 70px -20px rgba(0, 0, 0, 0.8);
+    }
+    .logout-msg {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 19px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin: 0 0 20px;
+      line-height: 1.25;
+    }
+    .logout-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .logout-actions .navbtn { min-height: 46px; }
+    #logoutCancel { color: var(--text-dim); border-color: var(--line-strong); }
+    #logoutCancel:hover {
+      background: linear-gradient(rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.05)), var(--panel);
+      border-color: var(--accent-line);
+      color: var(--text);
+    }
+    #logoutConfirm { color: #17120a; background: var(--accent); border-color: var(--accent); }
+    #logoutConfirm:hover { background: #ffb020; color: #17120a; }
+
+    /* ---- WhatsApp Daily Report section (right panel, where Change password used
+       to sit). Reuses the shared .dr-* controls; only the heading/desc need styling. */
+    .wa-panel {
+      margin-top: 22px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+    .wa-panel .wa-title {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 18px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin: 12px 0 8px;
+      line-height: 1.2;
+    }
+    .wa-panel .wa-desc { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; }
+
+    /* Brand column (the contained Prism box was removed): on desktop the shared
+       style anchors the tagline to the bottom to fill space the box used to take —
+       with the box gone, group the header content at the top so there's no empty
+       gap. Scoped to home only; other pages using .brand-panel are untouched. */
+    @media (min-width: 800px) {
+      .shell--home .brand-panel .tagline { margin-top: 16px; padding-top: 0; }
+    }
+
+    /* ---- Daily Report (relocated here from the Data page) ---- */
+    .daily-report { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+    .daily-report .chip { display: flex; width: fit-content; margin-inline: auto; }
+    .daily-report .dr-heading { font-family: var(--font-head); font-weight: 600; font-size: 18px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text); margin: 12px 0 8px; line-height: 1.2; text-align: center; }
+    .daily-report .dr-desc { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; text-align: center; }
+    .dr-emails { width: 100%; box-sizing: border-box; font-family: var(--font-body); font-size: 15px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0; padding: 11px 12px; outline: none; resize: vertical; min-height: 62px; }
+    .dr-emails:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .dr-add { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+    .dr-timepick { flex-wrap: wrap; gap: 8px; }
+    .dr-sel { font-family: var(--font-body); font-size: 15px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0; padding: 10px 8px; outline: none; -webkit-appearance: none; appearance: none; cursor: pointer; flex: 0 0 auto; }
+    .dr-sel:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .dr-sel option { background: #15161a; color: var(--text); }
+    .dr-colon { color: var(--text-dim); font-family: var(--font-head); font-size: 16px; }
+    .dr-add .btn { width: auto; }
+    .dr-count { font-size: 12px; color: var(--text-dim); font-family: var(--font-head); letter-spacing: 0.06em; text-transform: uppercase; margin: 14px 0 8px; }
+    .dr-reveal { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0 8px; }
+    .dr-reveal .dr-count { margin: 0; }
+    .dr-toggle { font-family: var(--font-head); font-weight: 600; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); background: transparent; border: 1px solid var(--accent-line); padding: 5px 10px; cursor: pointer; flex: 0 0 auto; }
+    .dr-toggle:hover { color: #ffb020; background: var(--accent-soft); }
+    .dr-toggle[hidden] { display: none; }
+    .dr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .dr-list[hidden] { display: none; }
+    .dr-list:empty { display: none; }
+    .dr-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 12px; border: 1px solid var(--line-strong); background: var(--panel-2); font-size: 14px; overflow-wrap: anywhere; }
+    .dr-list .rm { background: transparent; border: 1px solid var(--line-strong); color: var(--text-dim); width: 30px; height: 30px; cursor: pointer; font-size: 16px; line-height: 1; flex: 0 0 auto; }
+    .dr-list .rm:hover { color: #ffcabf; border-color: #b0554b; }
+    /* Per-row actions: an Edit button beside the remove (×); the row being edited is ringed. */
+    .dr-list .row-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+    .dr-list .edit { background: transparent; border: 1px solid var(--line-strong); color: var(--text-dim); height: 30px; padding: 0 10px; cursor: pointer; font-family: var(--font-head); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1; flex: 0 0 auto; }
+    .dr-list .edit:hover { color: var(--accent); border-color: var(--accent-line); }
+    .dr-list li.editing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .dr-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+    .dr-actions .btn { width: auto; }
+    .dr-note { font-size: 12px; color: var(--text-faint); line-height: 1.45; margin: 14px 0 0; }
+    /* Phase 10D — channel status summary: the saved/active schedule, legible without expanding. */
+    .dr-summary { border: 1px solid var(--accent-line); background: var(--accent-soft); padding: 12px 14px; margin: 12px 0 4px; clip-path: var(--angular); }
+    .dr-sum-title { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); font-family: var(--font-head); font-weight: 600; margin: 0 0 7px; }
+    .dr-sum-line { font-size: 13px; color: var(--text); line-height: 1.5; margin: 2px 0; }
+    .dr-sum-line b { color: var(--text); font-weight: 600; }
+    .dr-sum-next { color: var(--text-dim); }
+    .dr-summary.warn { border: 2px solid #ffb020; background: rgba(245, 158, 11, 0.16); } /* amber-only: heavier border + brighter alert-amber, not a second hue */
+    .dr-sum-warn { font-size: 13px; color: #ffb020; font-weight: 600; line-height: 1.45; margin: 4px 0 0; }
+    /* Phase 2 — last-attempt line: dim when the last attempt succeeded, alert-amber when it failed/skipped. */
+    .dr-sum-attempt { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin: 2px 0; }
+    .dr-sum-attempt.bad { color: #ffb020; font-weight: 600; }
+    /* Phase 4D — per-panel "unsaved changes" cue (amber; classes/hidden only, CSP-safe). */
+    .dr-dirty { align-self: center; font-family: var(--font-head); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #ffb020; }
+    .dr-dirty[hidden] { display: none; }
+    .dr-sum-note { font-size: 11.5px; color: var(--text-faint); line-height: 1.4; margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+  </style>
+</head>
+<body>
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="home-stack">
+    <nav class="home-nav" aria-label="Sections">
+      <button type="button" class="navbtn" data-target="flow" data-href="/cash-flow">Cash flow</button>
+      <button type="button" class="navbtn" data-target="overview" data-href="/overview">Overview</button>
+      <button type="button" class="navbtn" data-target="contract" data-href="/contract-details">Contract details</button>
+      <button type="button" class="navbtn" data-target="data" data-href="/data-backup">Data backup</button>
+    </nav>
+
+    <main class="shell shell--home">
+      <aside class="brand-panel">
+        <div class="brand">
+          <div class="mark">
+            <img src="/logo.svg" alt="" aria-hidden="true">
+          </div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+
+        <span class="chip">Session active</span>
+        <p class="tagline">You are signed in. Your <b>build ledger</b> lives here.</p>
+
+        <!-- Daily Report lives in the LEFT (branding) column now — visually separate from
+             the account controls (Welcome / Log out / Change password / Delete) on the
+             right, filling the space the removed Prism box used to occupy. Backend
+             (scheduler, shared PDF generator, .env credentials) is unchanged. -->
+        <div class="daily-report">
+          <span class="chip">Email</span>
+          <p class="dr-heading">Daily Report</p>
+          <p class="dr-desc">Emails a PDF of the full Overview (light theme) to the recipients below, every day at the time(s) you set — in <b>IST</b>. WhatsApp has its own separate schedule on the right. Use <b>Send Test Email Now</b> to send immediately to the saved recipients and confirm it works, instead of waiting for the scheduled time.</p>
+
+          <div class="dr-summary" id="drSummary" aria-live="polite">
+            <p class="dr-sum-title">Currently scheduled — Email</p>
+            <p class="dr-sum-line" id="drSumRecipients">—</p>
+            <p class="dr-sum-line" id="drSumTimes">—</p>
+            <p class="dr-sum-line dr-sum-next" id="drSumNext" hidden>—</p>
+            <p class="dr-sum-line dr-sum-next" id="drSumLast" hidden>—</p>
+            <p class="dr-sum-attempt" id="drSumAttempt" hidden>—</p>
+            <p class="dr-sum-warn" id="drSumWarn" hidden></p>
+            <p class="dr-sum-warn" id="drSumCatchup" hidden></p>
+            <p class="dr-sum-warn" id="drSumStale" hidden></p>
+            <p class="dr-sum-note">Sends only while the Plannr server is running at that minute. If it's off or asleep then, the next startup sends one catch-up for that day (clearly labelled) — but a shut lid still misses it.</p>
+          </div>
+
+          <div id="drMsg" class="msg" role="status" aria-live="polite"></div>
+
+          <div class="field">
+            <label for="drEmail">Recipient email addresses</label>
+            <textarea id="drEmail" class="dr-emails" rows="2" placeholder="you@gmail.com — Gmail addresses only; paste several at once, separated by commas or new lines" autocomplete="off"></textarea>
+            <div class="dr-add"><button type="button" id="drAddBtn" class="btn ghost">Add</button></div>
+          </div>
+
+          <div class="dr-reveal">
+            <p id="drCount" class="dr-count">No recipients added</p>
+            <button type="button" id="drToggleList" class="dr-toggle" aria-controls="drList" aria-expanded="false" hidden>Show list</button>
+          </div>
+          <ul id="drList" class="dr-list" aria-label="Recipients" hidden></ul>
+
+          <div class="field">
+            <label for="drHour">Daily send times (IST) — up to 5</label>
+            <div class="dr-add dr-timepick">
+              <select id="drHour" class="dr-sel" aria-label="Hour"></select>
+              <span class="dr-colon" aria-hidden="true">:</span>
+              <select id="drMin" class="dr-sel" aria-label="Minute"></select>
+              <select id="drMeridiem" class="dr-sel" aria-label="AM or PM">
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
+              <button type="button" id="drAddTimeBtn" class="btn ghost">Add time</button>
+            </div>
+          </div>
+
+          <div class="dr-reveal">
+            <p id="drTimeCount" class="dr-count">No times set yet</p>
+            <button type="button" id="drToggleTimes" class="dr-toggle" aria-controls="drTimeList" aria-expanded="false" hidden>Show list</button>
+          </div>
+          <ul id="drTimeList" class="dr-list" aria-label="Send times" hidden></ul>
+
+          <div class="dr-actions">
+            <button type="button" id="drSaveBtn" class="btn primary">Save</button>
+            <span class="dr-dirty" id="drDirty" hidden>⚠ Unsaved — click Save</span>
+            <button type="button" id="drTestBtn" class="btn ghost">Send Test Email Now</button>
+          </div>
+
+          <p class="dr-note">Heads-up: this only fires while the Plannr server is actually running at the scheduled time. On a laptop that's asleep or switched off at that minute, that day's email won't go out — and there's no catch-up. For guaranteed daily delivery, Plannr needs to run on an always-on host.</p>
+        </div>
+      </aside>
+
+      <section class="form-panel">
+        <div class="welcome">
+          <span class="chip">Signed in</span>
+          <p class="big">Welcome, <span id="name">…</span></p>
+          <p class="lead">Cost tracking is next. For now, you can sign out safely below.</p>
+          <!-- Part D — last login (time + IP) and any failed attempts since then. Populated from /api/me;
+               built via textContent (CSP-safe). The failed-attempts note is the part that does the work. -->
+          <p class="home-lastlogin" id="lastLogin" hidden></p>
+        </div>
+
+        <button type="button" class="btn ghost" id="logout">Log out</button>
+
+        <!-- WhatsApp Daily Report — its OWN recipient list AND its OWN send-time schedule,
+             fully independent of email's (separate Save persists only the WhatsApp side). -->
+        <div class="wa-panel">
+          <span class="chip">WhatsApp</span>
+          <p class="wa-title">Daily Report — WhatsApp</p>
+          <p class="wa-desc">Sends the same daily Overview PDF by WhatsApp to the numbers below, on <b>its own send times</b> (in <b>IST</b>) — completely separate from email's schedule. Set numbers and times here, then click <b>Save</b> in this section. Use <b>Send Test WhatsApp Now</b> to send immediately to the saved numbers.</p>
+
+          <div class="dr-summary" id="drWaSummary" aria-live="polite">
+            <p class="dr-sum-title">Currently scheduled — WhatsApp</p>
+            <p class="dr-sum-line" id="drWaSumRecipients">—</p>
+            <p class="dr-sum-line" id="drWaSumTimes">—</p>
+            <p class="dr-sum-line dr-sum-next" id="drWaSumNext" hidden>—</p>
+            <p class="dr-sum-line dr-sum-next" id="drWaSumLast" hidden>—</p>
+            <p class="dr-sum-attempt" id="drWaSumAttempt" hidden>—</p>
+            <p class="dr-sum-warn" id="drWaSumWarn" hidden></p>
+            <p class="dr-sum-warn" id="drWaSumCatchup" hidden></p>
+            <p class="dr-sum-warn" id="drWaSumStale" hidden></p>
+            <p class="dr-sum-note">Sends only while the Plannr server is running at that minute. If it's off or asleep then, the next startup sends one catch-up for that day (clearly labelled) — but a shut lid still misses it.</p>
+          </div>
+
+          <div id="drWaMsg" class="msg" role="status" aria-live="polite"></div>
+
+          <div class="field">
+            <label for="drWa">Recipient WhatsApp numbers</label>
+            <textarea id="drWa" class="dr-emails" rows="2" placeholder="+919876543210 — include the country code; paste several at once, separated by commas or new lines" autocomplete="off"></textarea>
+            <div class="dr-add"><button type="button" id="drWaAddBtn" class="btn ghost">Add</button></div>
+          </div>
+
+          <div class="dr-reveal">
+            <p id="drWaCount" class="dr-count">No numbers added</p>
+            <button type="button" id="drWaToggleList" class="dr-toggle" aria-controls="drWaList" aria-expanded="false" hidden>Show list</button>
+          </div>
+          <ul id="drWaList" class="dr-list" aria-label="WhatsApp numbers" hidden></ul>
+
+          <div class="field">
+            <label for="drWaHour">WhatsApp send times (IST) — up to 5</label>
+            <div class="dr-add dr-timepick">
+              <select id="drWaHour" class="dr-sel" aria-label="Hour"></select>
+              <span class="dr-colon" aria-hidden="true">:</span>
+              <select id="drWaMin" class="dr-sel" aria-label="Minute"></select>
+              <select id="drWaMeridiem" class="dr-sel" aria-label="AM or PM">
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
+              <button type="button" id="drWaAddTimeBtn" class="btn ghost">Add time</button>
+            </div>
+          </div>
+
+          <div class="dr-reveal">
+            <p id="drWaTimeCount" class="dr-count">No times set yet</p>
+            <button type="button" id="drWaToggleTimes" class="dr-toggle" aria-controls="drWaTimeList" aria-expanded="false" hidden>Show list</button>
+          </div>
+          <ul id="drWaTimeList" class="dr-list" aria-label="WhatsApp send times" hidden></ul>
+
+          <div class="dr-actions">
+            <button type="button" id="drWaSaveBtn" class="btn primary">Save</button>
+            <span class="dr-dirty" id="drWaDirty" hidden>⚠ Unsaved — click Save</span>
+            <button type="button" id="drWaTestBtn" class="btn ghost">Send Test WhatsApp Now</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Log-out confirmation dialog (sits above the HUD frame). -->
+  <div class="logout-backdrop" id="logoutModal" hidden>
+    <div class="logout-dialog" role="dialog" aria-modal="true" aria-labelledby="logoutMsg">
+      <p class="logout-msg" id="logoutMsg">Are you sure you want to log out?</p>
+      <div class="logout-actions">
+        <button type="button" class="navbtn" id="logoutCancel">Cancel</button>
+        <button type="button" class="navbtn" id="logoutConfirm">Log out</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const nameEl = document.getElementById('name');
+    const logoutBtn = document.getElementById('logout');
+
+    // Gate the page: if there's no valid session, go to login.
+    fetch('/api/me').then(async (r) => {
+      if (!r.ok) { location.href = '/login.html'; return; }
+      const data = await r.json();
+      nameEl.textContent = data.user.displayName;
+      renderLastLogin(data);
+    });
+
+    // Part D — "last login" line (previous successful login + IP) and, when non-zero, the failed
+    // attempts since then. classList/textContent only — CSP-safe (no inline style=).
+    function renderLastLogin(data) {
+      const el = document.getElementById('lastLogin');
+      if (!el) return;
+      el.replaceChildren();
+      if (data.lastLogin) {
+        el.append(document.createTextNode('Last login: ' + data.lastLogin.atIST + (data.lastLogin.ip ? ' · ' + data.lastLogin.ip : '')));
+      } else {
+        el.append(document.createTextNode('First login — welcome.'));
+      }
+      const n = data.failedSinceLastLogin || 0;
+      if (n > 0) {
+        const warn = document.createElement('span');
+        warn.className = 'home-fail';
+        warn.textContent = ' ⚠ ' + n + ' failed sign-in attempt' + (n === 1 ? '' : 's') + ' since then.';
+        el.append(warn);
+      }
+      // Part D (follow-up) — username-enumeration signal: attempts on usernames that don't exist.
+      const u = (data.unknownLoginFailures && data.unknownLoginFailures.sinceLastLogin) || 0;
+      if (u > 0) {
+        const warn2 = document.createElement('span');
+        warn2.className = 'home-fail';
+        warn2.textContent = ' ⚠ ' + u + ' attempt' + (u === 1 ? '' : 's') + ' on unknown usernames since then (possible enumeration).';
+        el.append(warn2);
+      }
+      el.hidden = false;
+    }
+
+    // Nav buttons: one with a data-href navigates there (Cash Flow -> /cash-flow);
+    // the rest are still placeholders (deliberate no-op until their pages exist).
+    document.querySelectorAll('.home-nav .navbtn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.href) { location.href = btn.dataset.href; return; }
+        const target = btn.dataset.target; // "overview" | "contract" | "data"
+        // TODO: route to the target page when it exists.
+        void target;
+      });
+    });
+
+    // ---- Log-out confirmation ----
+    const modal = document.getElementById('logoutModal');
+    const cancelBtn = document.getElementById('logoutCancel');
+    const confirmBtn = document.getElementById('logoutConfirm');
+
+    function openModal() {
+      modal.hidden = false;
+      cancelBtn.focus();
+      document.addEventListener('keydown', onKeydown);
+    }
+    function closeModal() {
+      modal.hidden = true;
+      document.removeEventListener('keydown', onKeydown);
+      logoutBtn.focus(); // return focus to the LOG OUT button
+    }
+    function onKeydown(e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+      if (e.key === 'Tab') { // keep focus within the dialog
+        const f = [cancelBtn, confirmBtn];
+        const i = f.indexOf(document.activeElement);
+        if (e.shiftKey && i <= 0) { e.preventDefault(); confirmBtn.focus(); }
+        else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); cancelBtn.focus(); }
+      }
+    }
+
+    logoutBtn.addEventListener('click', openModal);           // LOG OUT now asks first
+    cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); }); // backdrop click cancels
+
+    // Confirm: disable immediately (no double-submit), then run the existing logout.
+    confirmBtn.addEventListener('click', async () => {
+      confirmBtn.disabled = true;
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    // ---- Daily Report (recipient list + send time + immediate test send) ----
+    // Backend is unchanged; this is the relocated + upgraded UI. The recipient box is a
+    // textarea so a multi-line paste keeps its line breaks; Add parses commas/whitespace/
+    // newlines, adds every valid address, skips duplicates, and flags the invalid ones.
+    const drMsg = document.getElementById('drMsg');
+    const drEmail = document.getElementById('drEmail');
+    const drList = document.getElementById('drList');
+    const drCount = document.getElementById('drCount');
+    const drToggle = document.getElementById('drToggleList');
+    const drHour = document.getElementById('drHour');
+    const drMin = document.getElementById('drMin');
+    const drMeridiem = document.getElementById('drMeridiem');
+    const drTimeList = document.getElementById('drTimeList');
+    const drTimeCount = document.getElementById('drTimeCount');
+    const drTimeToggle = document.getElementById('drToggleTimes');
+    const DR_EMAIL_RE = /^[^\s@]+@gmail\.com$/i; // Gmail addresses only (mirrors the server)
+    const DR_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const DR_MAX_TIMES = 5;
+    const pad2 = (n) => String(n).padStart(2, '0');
+    // Custom 12-hour picker <-> 24-hour storage. AM/PM is DISPLAY ONLY — times are always
+    // stored and sent to the server as 24-hour "HH:MM" (unchanged), sidestepping the native
+    // <input type="time">'s locale-dependent AM/PM rendering.
+    const to24h = (h12, min, mer) => pad2((Number(h12) % 12) + (mer === 'PM' ? 12 : 0)) + ':' + pad2(min);
+    const to12h = (hhmm) => { const m = /^(\d{2}):(\d{2})$/.exec(hhmm); if (!m) return hhmm; let h = Number(m[1]); const mer = h < 12 ? 'AM' : 'PM'; h = h % 12 || 12; return h + ':' + m[2] + ' ' + mer; };
+
+    // ---- Phase 10D: channel status summary (reflects the SAVED/active schedule, in IST) ----
+    // Snapshots of what is actually saved (updated on load + on a successful save), so the summary
+    // shows what will really send — not unsaved edits in the working lists.
+    let drSaved = { recipients: [], times: [] };
+    let waSaved = { recipients: [], times: [] };
+    // Current IST wall-clock date (YYYY-MM-DD) + time (HH:MM), via the IANA zone (no hardcoded +5:30).
+    function nowIst() {
+      const now = new Date();
+      const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
+      let hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+      return { date, hm: hm.replace(/^24:/, '00:') };
+    }
+    const addDayIso = (iso) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
+    const fmtIstDate = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(iso + 'T12:00:00Z'));
+    function nextSendIst(times) {
+      if (!times.length) return null;
+      const { date, hm } = nowIst();
+      const sorted = [...times].sort();
+      let day = date; let t = sorted.find((x) => x > hm);
+      if (!t) { t = sorted[0]; day = addDayIso(date); } // all today's times passed -> tomorrow's earliest
+      return fmtIstDate(day) + ', ' + to12h(t) + ' IST';
+    }
+    // prefix: 'dr' (email) or 'drWa' (whatsapp); noun: 'email recipient' / 'WhatsApp number'.
+    // status: { lastSuccess, lastCatchup } ISO dates (or null) — the last successful send per channel.
+    function summarizeChannel(prefix, recipients, times, noun, status) {
+      const box = document.getElementById(prefix + 'Summary');
+      const nR = recipients.length, nT = times.length;
+      document.getElementById(prefix + 'SumRecipients').textContent = nR === 0 ? ('No ' + noun + 's saved') : (nR + ' ' + noun + (nR === 1 ? '' : 's'));
+      document.getElementById(prefix + 'SumTimes').textContent = nT === 0 ? 'No send times saved' : ('Send times: ' + [...times].sort().map(to12h).join(', ') + ' IST');
+      let w = '';
+      if (nR > 0 && nT === 0) w = 'No send times saved — nothing will be sent on this channel.';
+      else if (nT > 0 && nR === 0) w = 'No recipients saved — nothing will be sent on this channel.';
+      const warnEl = document.getElementById(prefix + 'SumWarn');
+      if (w) { warnEl.textContent = '⚠ ' + w; warnEl.hidden = false; }
+      else { warnEl.textContent = ''; warnEl.hidden = true; }
+      const nextEl = document.getElementById(prefix + 'SumNext');
+      if (nR > 0 && nT > 0) { nextEl.textContent = 'Next send: ' + nextSendIst(times); nextEl.hidden = false; }
+      else { nextEl.textContent = ''; nextEl.hidden = true; }
+      // Last successful send + whether the most recent one was a boot catch-up (a scheduled send had
+      // been missed). Amber only, no new hue; textContent/hidden only (no inline styles -> CSP-safe).
+      const last = status && status.lastSuccess;
+      const lastEl = document.getElementById(prefix + 'SumLast');
+      if (last) { lastEl.textContent = 'Last sent: ' + fmtIstDate(last) + ' IST'; lastEl.hidden = false; }
+      else { lastEl.textContent = ''; lastEl.hidden = true; }
+      const cuEl = document.getElementById(prefix + 'SumCatchup');
+      if (last && status.lastCatchup === last) { cuEl.textContent = '⚠ last report was a catch-up — a scheduled send had been missed'; cuEl.hidden = false; }
+      else { cuEl.textContent = ''; cuEl.hidden = true; }
+      // Phase 2 — LAST ATTEMPT (sent / failed / skipped) with its reason, and the STALE flag. Three
+      // states needing different responses: sent = normal; failed = it tried and errored; skipped = it
+      // couldn't try. Amber only; textContent/classList/hidden — CSP-safe (no inline style).
+      const la = status && status.lastAttempt;
+      const attEl = document.getElementById(prefix + 'SumAttempt');
+      const attemptBad = !!(la && la.outcome && la.outcome !== 'sent');
+      if (la && la.outcome) {
+        const label = la.outcome.charAt(0).toUpperCase() + la.outcome.slice(1);
+        attEl.textContent = 'Last attempt: ' + label + (attemptBad && la.reason ? ' — ' + la.reason : '') + (la.atIST ? '  (' + la.atIST + ')' : '');
+        attEl.classList.toggle('bad', attemptBad);
+        attEl.hidden = false;
+      } else { attEl.textContent = ''; attEl.classList.remove('bad'); attEl.hidden = true; }
+      const stale = !!(status && status.stale);
+      const staleEl = document.getElementById(prefix + 'SumStale');
+      if (stale) { staleEl.textContent = '⚠ No successful send in ~48h+ — the server likely wasn’t running at a send time. A catch-up goes out on the next start.'; staleEl.hidden = false; }
+      else { staleEl.textContent = ''; staleEl.hidden = true; }
+      // Box turns amber (heavier border, alert-amber) if ANY: recipients/times mismatch, last attempt
+      // failed/skipped, or the channel is stale. One amber, no second hue.
+      if (w || attemptBad || stale) box.classList.add('warn'); else box.classList.remove('warn');
+    }
+    function renderSummary() {
+      summarizeChannel('dr', drSaved.recipients, drSaved.times, 'email recipient', drSaved.status);
+      summarizeChannel('drWa', waSaved.recipients, waSaved.times, 'WhatsApp number', waSaved.status);
+      recomputeDirty();
+    }
+    // Phase 4D — the two-step edit trap this phase fixes: adding/editing/removing a time or recipient
+    // only mutates the LOCAL list; it is NOT persisted until this panel's own Save (and email + WhatsApp
+    // have SEPARATE Save buttons). So a change to a time (e.g. 08:00 → 16:05) could look done — the list
+    // shows the new time — yet silently not save. Show an amber "Unsaved — click Save" cue per panel
+    // whenever the working lists differ from the last saved snapshot. classList/hidden only (CSP-safe).
+    const eqList = (a, b) => JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
+    function recomputeDirty() {
+      document.getElementById('drDirty').hidden = eqList(drTimes, drSaved.times) && eqList(drRecipients, drSaved.recipients);
+      document.getElementById('drWaDirty').hidden = eqList(waTimes, waSaved.times) && eqList(waRecipients, waSaved.recipients);
+    }
+    for (let h = 1; h <= 12; h++) drHour.appendChild(new Option(String(h), String(h)));
+    for (let m = 0; m < 60; m++) drMin.appendChild(new Option(pad2(m), pad2(m)));
+    drHour.value = '9'; drMin.value = '00'; drMeridiem.value = 'AM'; // sensible default
+    const drEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    let drRecipients = [];
+    let drTimes = [];
+    function showDrMsg(text, type) { drMsg.textContent = text; drMsg.className = 'msg show ' + type; }
+    function renderDrCount() {
+      const n = drRecipients.length;
+      drCount.textContent = n === 0 ? 'No recipients added' : (n + ' recipient' + (n === 1 ? '' : 's') + ' added');
+    }
+    // Collapse/reveal the saved-recipient LIST (display only) — mirrors Overview's date-range
+    // toggle. The count summary always shows; the toggle appears only when there's a list to
+    // reveal, and the list is collapsed by default.
+    function updateDrToggle() {
+      const n = drRecipients.length;
+      drToggle.hidden = n === 0;
+      if (n === 0) drList.hidden = true;      // nothing to reveal -> stay collapsed
+      const open = !drList.hidden;
+      drToggle.textContent = open ? 'Hide list' : 'Show list';
+      drToggle.setAttribute('aria-expanded', String(open));
+    }
+    drToggle.addEventListener('click', () => { drList.hidden = !drList.hidden; updateDrToggle(); });
+    function renderDrRecipients() {
+      drList.innerHTML = drRecipients.map((e, i) =>
+        `<li><span>${drEsc(e)}</span><button type="button" class="rm" data-i="${i}" aria-label="Remove ${drEsc(e)}">&times;</button></li>`).join('');
+      renderDrCount();
+      updateDrToggle();
+      recomputeDirty();
+    }
+    function addRecipients() {
+      const tokens = drEmail.value.split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean);
+      if (!tokens.length) { showDrMsg('Paste or type one or more email addresses first.', 'error'); return; }
+      let added = 0, dup = 0; const invalid = [];
+      for (const t of tokens) {
+        const v = t.toLowerCase();
+        if (!DR_EMAIL_RE.test(v)) { invalid.push(t); continue; }
+        if (drRecipients.includes(v)) { dup++; continue; }
+        drRecipients.push(v); added++;
+      }
+      renderDrRecipients();
+      const parts = [];
+      if (added) parts.push('Added ' + added + '.');
+      if (dup) parts.push(dup + ' already in the list.');
+      if (invalid.length) parts.push(invalid.length + ' skipped (must be @gmail.com): ' + invalid.map(drEsc).join(', '));
+      drEmail.value = invalid.join('\n'); // keep only the rejected ones so they can be fixed
+      showDrMsg(parts.join(' ') || 'Nothing to add.', invalid.length ? 'error' : 'success');
+    }
+    document.getElementById('drAddBtn').addEventListener('click', addRecipients);
+    drList.addEventListener('click', (ev) => {
+      const i = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-i');
+      if (i != null) { drRecipients.splice(Number(i), 1); renderDrRecipients(); }
+    });
+
+    // ---- WhatsApp numbers — mirrors the email recipient list exactly (textarea Add,
+    // de-dupe, live count, collapsed-by-default reveal toggle), with basic phone-format
+    // validation instead of the Gmail check. Numbers are canonicalised to "+digits".
+    const drWa = document.getElementById('drWa');
+    const drWaList = document.getElementById('drWaList');
+    const drWaCount = document.getElementById('drWaCount');
+    const drWaToggle = document.getElementById('drWaToggleList');
+    const drWaMsg = document.getElementById('drWaMsg'); // WhatsApp's own message area (right panel)
+    const drWaHour = document.getElementById('drWaHour');
+    const drWaMin = document.getElementById('drWaMin');
+    const drWaMeridiem = document.getElementById('drWaMeridiem');
+    const drWaTimeList = document.getElementById('drWaTimeList');
+    const drWaTimeCount = document.getElementById('drWaTimeCount');
+    const drWaTimeToggle = document.getElementById('drWaToggleTimes');
+    const DR_PHONE_RE = /^\+?\d{8,15}$/; // optional +, then 8–15 digits (mirrors the server)
+    const normPhone = (raw) => '+' + String(raw).replace(/[\s\-().]/g, '').replace(/^\+/, '');
+    const WA_DEFAULT_CC = '+91'; // editable default prefix so users only type the 10 digits
+    let waRecipients = [];
+    let waTimes = [];
+    // WhatsApp gets its OWN 12h picker, populated like email's (reuses pad2/to24h/to12h above).
+    for (let h = 1; h <= 12; h++) drWaHour.appendChild(new Option(String(h), String(h)));
+    for (let m = 0; m < 60; m++) drWaMin.appendChild(new Option(pad2(m), pad2(m)));
+    drWaHour.value = '9'; drWaMin.value = '00'; drWaMeridiem.value = 'AM';
+    if (!drWa.value) drWa.value = WA_DEFAULT_CC; // pre-fill +91 while the box is empty (editable)
+    function showWaMsg(text, type) { drWaMsg.textContent = text; drWaMsg.className = 'msg show ' + type; }
+    function renderWaCount() {
+      const n = waRecipients.length;
+      drWaCount.textContent = n === 0 ? 'No numbers added' : (n + ' number' + (n === 1 ? '' : 's') + ' added');
+    }
+    function updateWaToggle() {
+      const n = waRecipients.length;
+      drWaToggle.hidden = n === 0;
+      if (n === 0) drWaList.hidden = true;
+      const open = !drWaList.hidden;
+      drWaToggle.textContent = open ? 'Hide list' : 'Show list';
+      drWaToggle.setAttribute('aria-expanded', String(open));
+    }
+    drWaToggle.addEventListener('click', () => { drWaList.hidden = !drWaList.hidden; updateWaToggle(); });
+    function renderWaRecipients() {
+      drWaList.innerHTML = waRecipients.map((e, i) =>
+        `<li><span>${drEsc(e)}</span><button type="button" class="rm" data-i="${i}" aria-label="Remove ${drEsc(e)}">&times;</button></li>`).join('');
+      renderWaCount();
+      updateWaToggle();
+      recomputeDirty();
+    }
+    function addWaRecipients() {
+      // Split on commas/semicolons/newlines only (NOT spaces) so "+91 98765 43210"
+      // stays one number; internal spaces/dashes/parens are stripped per token.
+      const tokens = drWa.value.split(/[,;\n\r]+/).map((t) => t.replace(/[\s\-().]/g, '').trim()).filter(Boolean);
+      if (!tokens.length) { showWaMsg('Paste or type one or more phone numbers first.', 'error'); return; }
+      let added = 0, dup = 0; const invalid = [];
+      for (const t of tokens) {
+        if (!DR_PHONE_RE.test(t)) { invalid.push(t); continue; }
+        const v = normPhone(t);
+        if (waRecipients.includes(v)) { dup++; continue; }
+        waRecipients.push(v); added++;
+      }
+      renderWaRecipients();
+      const parts = [];
+      if (added) parts.push('Added ' + added + '.');
+      if (dup) parts.push(dup + ' already in the list.');
+      if (invalid.length) parts.push(invalid.length + ' skipped (use country code, e.g. +919876543210): ' + invalid.map(drEsc).join(', '));
+      // Keep rejected tokens so they can be fixed; otherwise re-seed the +91 default.
+      drWa.value = invalid.length ? invalid.join('\n') : WA_DEFAULT_CC;
+      showWaMsg(parts.join(' ') || 'Nothing to add.', invalid.length ? 'error' : 'success');
+    }
+    document.getElementById('drWaAddBtn').addEventListener('click', addWaRecipients);
+    drWaList.addEventListener('click', (ev) => {
+      const i = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-i');
+      if (i != null) { waRecipients.splice(Number(i), 1); renderWaRecipients(); }
+    });
+
+    // Shared helpers for BOTH time lists: load a stored "HH:MM" into a 12h picker, and
+    // render one list row with in-place Edit + Remove actions (row ringed while editing).
+    function setPicker(hourSel, minSel, merSel, t) {
+      const m = /^(\d{2}):(\d{2})$/.exec(t); if (!m) return;
+      let h = Number(m[1]); const mer = h < 12 ? 'AM' : 'PM'; h = h % 12 || 12;
+      hourSel.value = String(h); minSel.value = m[2]; merSel.value = mer;
+    }
+    function timeRow(t, i, editingOrig) {
+      const label = to12h(t);
+      return `<li class="${t === editingOrig ? 'editing' : ''}"><span>${drEsc(label)}</span>`
+        + `<span class="row-actions">`
+        + `<button type="button" class="edit" data-edit="${i}" aria-label="Edit ${drEsc(label)}">Edit</button>`
+        + `<button type="button" class="rm" data-i="${i}" aria-label="Remove ${drEsc(label)}">&times;</button>`
+        + `</span></li>`;
+    }
+
+    // WhatsApp send times — its OWN independent list (separate from email's below): add /
+    // edit-in-place / remove / de-dupe / count / 5-cap. Feedback goes to drWaMsg.
+    const drWaAddTimeBtn = document.getElementById('drWaAddTimeBtn');
+    let waEditOrig = null; // the "HH:MM" currently being edited in place, or null
+    // Collapsed-by-default reveal for the WhatsApp time list — mirrors the recipient toggle
+    // exactly, independent of every other list.
+    function updateWaTimeToggle() {
+      const n = waTimes.length;
+      drWaTimeToggle.hidden = n === 0;
+      if (n === 0) drWaTimeList.hidden = true; // nothing to reveal -> stay collapsed
+      const open = !drWaTimeList.hidden;
+      drWaTimeToggle.textContent = open ? 'Hide list' : 'Show list';
+      drWaTimeToggle.setAttribute('aria-expanded', String(open));
+    }
+    drWaTimeToggle.addEventListener('click', () => { drWaTimeList.hidden = !drWaTimeList.hidden; updateWaTimeToggle(); });
+    function renderWaTimes() {
+      const n = waTimes.length;
+      drWaTimeCount.textContent = n === 0 ? 'No times set yet' : (n + ' time' + (n === 1 ? '' : 's') + ' set');
+      drWaTimeList.innerHTML = waTimes.map((t, i) => timeRow(t, i, waEditOrig)).join('');
+      updateWaTimeToggle();
+      recomputeDirty();
+    }
+    function waCancelEdit() { waEditOrig = null; drWaAddTimeBtn.textContent = 'Add time'; }
+    function waEnterEdit(i) {
+      const t = waTimes[i]; if (t == null) return;
+      waEditOrig = t; setPicker(drWaHour, drWaMin, drWaMeridiem, t); drWaAddTimeBtn.textContent = 'Update time';
+      showWaMsg('Editing ' + to12h(t) + ' — adjust the picker and click Update time.', 'success');
+      renderWaTimes();
+    }
+    function addWaTime() {
+      const t = to24h(drWaHour.value, drWaMin.value, drWaMeridiem.value);
+      if (!DR_TIME_RE.test(t)) { showWaMsg('Pick a valid time first.', 'error'); return; }
+      if (waEditOrig !== null) { // edit in place: swap the original value for t (no duplicate/no extra row)
+        const rest = waTimes.filter((x) => x !== waEditOrig);
+        if (rest.includes(t)) { showWaMsg('That time is already in the list.', 'error'); return; }
+        waTimes = [...rest, t].sort(); waCancelEdit(); drWaMsg.className = 'msg'; renderWaTimes(); return;
+      }
+      if (waTimes.includes(t)) { showWaMsg('That time is already in the list.', 'error'); return; }
+      if (waTimes.length >= DR_MAX_TIMES) { showWaMsg('You can schedule at most ' + DR_MAX_TIMES + ' send times per day.', 'error'); return; }
+      waTimes.push(t); waTimes.sort(); drWaMsg.className = 'msg'; renderWaTimes();
+    }
+    drWaAddTimeBtn.addEventListener('click', addWaTime);
+    drWaTimeList.addEventListener('click', (ev) => {
+      const btn = ev.target.closest && ev.target.closest('button'); if (!btn) return;
+      const e = btn.getAttribute('data-edit');
+      if (e != null) { waEnterEdit(Number(e)); return; }
+      const i = btn.getAttribute('data-i');
+      if (i != null) { const removed = waTimes[Number(i)]; waTimes.splice(Number(i), 1); if (waEditOrig === removed) waCancelEdit(); renderWaTimes(); }
+    });
+
+    // Email send times — add / edit-in-place / remove / de-dupe / count / 5-cap. Stores
+    // 24-hour "HH:MM" but displays each as 12-hour with explicit AM/PM. Reuses the helpers above.
+    const drAddTimeBtn = document.getElementById('drAddTimeBtn');
+    let drEditOrig = null; // the "HH:MM" currently being edited in place, or null
+    // Collapsed-by-default reveal for the email time list — mirrors the recipient toggle
+    // exactly, independent of every other list.
+    function updateDrTimeToggle() {
+      const n = drTimes.length;
+      drTimeToggle.hidden = n === 0;
+      if (n === 0) drTimeList.hidden = true; // nothing to reveal -> stay collapsed
+      const open = !drTimeList.hidden;
+      drTimeToggle.textContent = open ? 'Hide list' : 'Show list';
+      drTimeToggle.setAttribute('aria-expanded', String(open));
+    }
+    drTimeToggle.addEventListener('click', () => { drTimeList.hidden = !drTimeList.hidden; updateDrTimeToggle(); });
+    function renderDrTimes() {
+      const n = drTimes.length;
+      drTimeCount.textContent = n === 0 ? 'No times set yet' : (n + ' time' + (n === 1 ? '' : 's') + ' set');
+      drTimeList.innerHTML = drTimes.map((t, i) => timeRow(t, i, drEditOrig)).join('');
+      updateDrTimeToggle();
+      recomputeDirty();
+    }
+    function drCancelEdit() { drEditOrig = null; drAddTimeBtn.textContent = 'Add time'; }
+    function drEnterEdit(i) {
+      const t = drTimes[i]; if (t == null) return;
+      drEditOrig = t; setPicker(drHour, drMin, drMeridiem, t); drAddTimeBtn.textContent = 'Update time';
+      showDrMsg('Editing ' + to12h(t) + ' — adjust the picker and click Update time.', 'success');
+      renderDrTimes();
+    }
+    function addTime() {
+      const t = to24h(drHour.value, drMin.value, drMeridiem.value); // compose 24-hour value from the picker
+      if (!DR_TIME_RE.test(t)) { showDrMsg('Pick a valid time first.', 'error'); return; }
+      if (drEditOrig !== null) { // edit in place: swap the original value for t (no duplicate/no extra row)
+        const rest = drTimes.filter((x) => x !== drEditOrig);
+        if (rest.includes(t)) { showDrMsg('That time is already in the list.', 'error'); return; }
+        drTimes = [...rest, t].sort(); drCancelEdit(); drMsg.className = 'msg'; renderDrTimes(); return;
+      }
+      if (drTimes.includes(t)) { showDrMsg('That time is already in the list.', 'error'); return; }
+      if (drTimes.length >= DR_MAX_TIMES) { showDrMsg('You can schedule at most ' + DR_MAX_TIMES + ' send times per day.', 'error'); return; }
+      drTimes.push(t); drTimes.sort(); drMsg.className = 'msg'; renderDrTimes();
+    }
+    drAddTimeBtn.addEventListener('click', addTime);
+    drTimeList.addEventListener('click', (ev) => {
+      const btn = ev.target.closest && ev.target.closest('button'); if (!btn) return;
+      const e = btn.getAttribute('data-edit');
+      if (e != null) { drEnterEdit(Number(e)); return; }
+      const i = btn.getAttribute('data-i');
+      if (i != null) { const removed = drTimes[Number(i)]; drTimes.splice(Number(i), 1); if (drEditOrig === removed) drCancelEdit(); renderDrTimes(); }
+    });
+    async function loadDailyReport() {
+      try {
+        const r = await fetch('/api/daily-report');
+        if (!r.ok) return;
+        const d = await r.json();
+        drRecipients = Array.isArray(d.recipients) ? d.recipients : [];
+        waRecipients = Array.isArray(d.whatsappRecipients) ? d.whatsappRecipients : [];
+        drTimes = Array.isArray(d.sendTimes) ? d.sendTimes : [];
+        waTimes = Array.isArray(d.whatsappSendTimes) ? d.whatsappSendTimes : [];
+        renderDrRecipients();
+        renderWaRecipients();
+        renderDrTimes();
+        renderWaTimes();
+        const st = d.status || {};
+        drSaved = { recipients: drRecipients.slice(), times: drTimes.slice(), status: st.email || null };   // snapshot the SAVED state
+        waSaved = { recipients: waRecipients.slice(), times: waTimes.slice(), status: st.whatsapp || null };
+        renderSummary();
+      } catch { /* leave defaults */ }
+    }
+    // EMAIL Save — persists ONLY email recipients + email send times (WhatsApp fields are
+    // omitted, so the server leaves the WhatsApp schedule untouched). Refreshes only the
+    // email-side local state so any unsaved WhatsApp edits are preserved.
+    document.getElementById('drSaveBtn').addEventListener('click', async () => {
+      drMsg.className = 'msg';
+      try {
+        const r = await fetch('/api/daily-report', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipients: drRecipients, sendTimes: drTimes }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { showDrMsg(d.error || 'Could not save the Daily Report settings.', 'error'); return; }
+        drRecipients = Array.isArray(d.recipients) ? d.recipients : drRecipients; drTimes = Array.isArray(d.sendTimes) ? d.sendTimes : drTimes; renderDrRecipients(); renderDrTimes();
+        drSaved = { recipients: drRecipients.slice(), times: drTimes.slice(), status: drSaved.status }; renderSummary(); // reflect the newly-saved email schedule
+        showDrMsg(drTimes.length ? ('Saved. Daily email scheduled at ' + drTimes.map(to12h).join(', ') + ' (IST).') : 'Saved. No email send times set yet, so nothing is scheduled.', 'success');
+      } catch { showDrMsg('Network error while saving.', 'error'); }
+    });
+    // WHATSAPP Save — persists ONLY WhatsApp numbers + WhatsApp send times (email fields
+    // omitted, so the server leaves email untouched). Refreshes only the WhatsApp-side state.
+    document.getElementById('drWaSaveBtn').addEventListener('click', async () => {
+      drWaMsg.className = 'msg';
+      try {
+        const r = await fetch('/api/daily-report', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whatsappRecipients: waRecipients, whatsappSendTimes: waTimes }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { showWaMsg(d.error || 'Could not save the WhatsApp settings.', 'error'); return; }
+        waRecipients = Array.isArray(d.whatsappRecipients) ? d.whatsappRecipients : waRecipients; waTimes = Array.isArray(d.whatsappSendTimes) ? d.whatsappSendTimes : waTimes; renderWaRecipients(); renderWaTimes();
+        waSaved = { recipients: waRecipients.slice(), times: waTimes.slice(), status: waSaved.status }; renderSummary(); // reflect the newly-saved WhatsApp schedule
+        showWaMsg(waTimes.length ? ('Saved. Daily WhatsApp scheduled at ' + waTimes.map(to12h).join(', ') + ' (IST).') : 'Saved. No WhatsApp send times set yet, so nothing is scheduled.', 'success');
+      } catch { showWaMsg('Network error while saving.', 'error'); }
+    });
+    document.getElementById('drTestBtn').addEventListener('click', async () => {
+      drMsg.className = 'msg';
+      const btn = document.getElementById('drTestBtn'); const old = btn.textContent; btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const r = await fetch('/api/daily-report/test', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) showDrMsg('Test email sent to ' + d.sent + ' recipient(s). Check the inbox to confirm it arrived.', 'success');
+        else showDrMsg(d.error || 'The test email could not be sent.', 'error');
+      } catch { showDrMsg('Network error while sending the test email.', 'error'); }
+      finally { btn.disabled = false; btn.textContent = old; }
+    });
+    // Send Test WhatsApp Now — mirrors the email test button exactly, hitting the WhatsApp route.
+    document.getElementById('drWaTestBtn').addEventListener('click', async () => {
+      drWaMsg.className = 'msg';
+      const btn = document.getElementById('drWaTestBtn'); const old = btn.textContent; btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const r = await fetch('/api/daily-report/test-whatsapp', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) {
+          const failed = Array.isArray(d.failed) ? d.failed : [];
+          let msg = 'Test WhatsApp sent to ' + d.sent + ' number(s). Check the phone to confirm it arrived and the PDF opens.';
+          if (failed.length) msg += ' ' + failed.length + ' failed: ' + failed.map((f) => f.number + ' (' + f.reason + ')').join(', ');
+          showWaMsg(msg, failed.length ? 'error' : 'success');
+        } else showWaMsg(d.error || 'The test WhatsApp message could not be sent.', 'error');
+      } catch { showWaMsg('Network error while sending the test WhatsApp message.', 'error'); }
+      finally { btn.disabled = false; btn.textContent = old; }
+    });
+    loadDailyReport();
+  </script>
+
+</body>
+</html>

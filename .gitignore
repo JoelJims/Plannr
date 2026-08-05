@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# data & secrets — NEVER commit
+data/
+.env
+
+# WhatsApp session / state — and every sibling (_old, _snapshot, _snapshot_dead, .state.json, _diag)
+.wwebjs_auth*
+.wwebjs_cache/
+
+# logs — current AND rotated (plannr-startup.log, plannr-startup.log.1, backup.log, …)
+*.log
+*.log.*
+
+# local tooling (per-machine editor/tooling settings — not shared)
+.claude/settings.local.json
+
+# misc
+.DS_Store

@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Contractor Payments · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .cp-stack { position: relative; z-index: 1; width: 100%; max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .cp-card { background: var(--panel); border: 1px solid var(--line-strong); padding: 24px 22px; }
+    @media (min-width: 800px) { .cp-card { padding: 34px 34px 30px; } }
+
+    .cp-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+    .cp-card .brand { display: flex; align-items: center; gap: 12px; }
+    .cp-card .mark { width: 44px; height: 44px; }
+    .cp-card .wordmark { font-size: 20px; }
+    .cp-card .sub { font-size: 10px; margin-top: 4px; }
+
+    .cp-back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); padding-bottom: 2px; }
+    .cp-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .cp-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .cp-top-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .cp-pdf { display: inline-flex; align-items: center; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #1a1a1a; background: var(--accent); border: 1px solid var(--accent); padding: 9px 14px; text-decoration: none; cursor: pointer; }
+    .cp-pdf:hover { filter: brightness(1.06); }
+    .cp-pdf:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .cp-head .chip { margin-bottom: 10px; }
+    .cp-head h1 { font-family: var(--font-head); font-weight: 600; font-size: 28px; letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 4px; line-height: 1; }
+    .cp-head p { margin: 0 0 18px; color: var(--text-dim); font-size: 14px; }
+    @media (min-width: 800px) { .cp-head h1 { font-size: 32px; } }
+
+    .cp-form { max-width: 640px; }
+    .cp-form .field { margin-bottom: 14px; }
+    .cp-form .field.slno { max-width: 140px; }
+    #slno { color: var(--text-dim); }
+    .cp-dim { color: var(--text-faint); }
+
+    .amount-wrap { position: relative; }
+    .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .amount-wrap input { padding-left: 28px; }
+
+    .cp-form select {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      color: var(--text); background-color: var(--panel-2); border: 1px solid var(--line-strong);
+      border-radius: 0; padding: 12px 36px 12px 13px; outline: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center; background-size: 13px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .cp-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .cp-form select:disabled { opacity: 0.5; cursor: default; background-image: none; }
+    .cp-form select option { background: #15161a; color: var(--text); }
+
+    /* Custom-date picker grid (same as the /select-date screen). */
+    .cp-date-grid { display: grid; grid-template-columns: 0.85fr 1.25fr 1fr; gap: 12px; }
+    .cp-date-grid[hidden] { display: none; }
+    .cp-sub-label { display: block; font-family: var(--font-head); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 6px; }
+
+    /* Per-contract "Remaining to be paid" figure. */
+    .cp-remaining {
+      display: none; margin: -4px 0 16px; padding: 12px 14px; font-size: 14px; line-height: 1.4;
+      color: var(--text); background: var(--accent-soft); border: 1px solid var(--accent-line); border-left: 3px solid var(--accent);
+    }
+    .cp-remaining.show { display: block; }
+    .cp-remaining b { font-family: var(--font-head); color: var(--accent); letter-spacing: 0.02em; }
+    .cp-remaining span { color: var(--text-dim); font-size: 12.5px; }
+
+    input[type="text"].cp-num { }
+
+    .cp-actions-row { display: flex; gap: 12px; margin-top: 4px; }
+    .cp-actions-row .btn { width: auto; flex: 1 1 auto; padding: 0 22px; }
+    #cancelBtn[hidden] { display: none; }
+
+    .cp-sep { border: none; border-top: 1px solid var(--line); margin: 26px 0 18px; }
+    .cp-list-head { font-family: var(--font-head); font-weight: 600; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+
+    .cp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .cp-table th, .cp-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .cp-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+    .cp-table td.cp-amount { color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-head); letter-spacing: 0.02em; }
+    .cp-slno { color: var(--text-faint); width: 52px; }
+    .cp-empty { color: var(--text-dim); text-align: center; padding: 20px 12px; }
+
+    .cp-actions { white-space: nowrap; }
+    .cp-btn-sm { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent-line); border-radius: 0; padding: 7px 11px; cursor: pointer; margin-left: 6px; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+    .cp-btn-sm:first-child { margin-left: 0; }
+    .cp-btn-sm:hover { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel-2); color: #ffb020; }
+    .cp-btn-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .cp-btn-sm.cp-del { color: var(--text-dim); border-color: var(--line-strong); }
+    .cp-btn-sm.cp-del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+
+    @media (max-width: 620px) {
+      .cp-table thead { display: none; }
+      .cp-table tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+      .cp-table tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 9px 0; }
+      .cp-table tbody tr td:last-child { border-bottom: none; }
+      .cp-table tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; color: var(--text-dim); flex: none; }
+      .cp-table td.cp-actions { justify-content: flex-end; }
+      .cp-table td.cp-actions::before { content: ''; }
+      .cp-empty { border: 1px solid var(--line-strong); }
+      .cp-btn-sm { min-height: 44px; padding: 10px 16px; margin-left: 10px; }
+      .cp-form .field { margin-bottom: 18px; }
+    }
+    @media (max-width: 400px) { .cp-date-grid { grid-template-columns: 1fr; gap: 10px; } }
+  </style>
+</head>
+<body>
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="cp-stack">
+    <main class="cp-card">
+      <div class="cp-top">
+        <div class="brand">
+          <div class="mark"><img src="/logo.svg" alt="" aria-hidden="true"></div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+        <div class="cp-top-actions">
+          <a class="cp-back" href="/cash-flow">&larr; Back</a>
+        </div>
+      </div>
+
+      <div class="cp-head">
+        <span class="chip">Money Paid</span>
+        <h1>Contractor Payments</h1>
+        <p>Record money paid to a contractor, tied to a specific contract. Amounts are in rupees (₹).</p>
+      </div>
+
+      <div id="cpMsg" class="msg" role="alert"></div>
+
+      <form id="cpForm" class="cp-form" novalidate>
+        <div class="field slno">
+          <label for="slno">Sl.No</label>
+          <input id="slno" type="text" readonly aria-readonly="true">
+        </div>
+
+        <!-- 1. Contract (required) — scopes the date dropdown + remaining figure. -->
+        <div class="field">
+          <label for="cpContract">Contract</label>
+          <select id="cpContract" name="cpContract"></select>
+        </div>
+
+        <!-- Per-contract remaining (SIMPLE: stated − Σ payments). -->
+        <p id="remaining" class="cp-remaining" role="status"></p>
+
+        <!-- 2. Date of payment (required) — the contract's scheduled dates + Custom. -->
+        <div class="field">
+          <label for="payDateSelect">Date of payment</label>
+          <select id="payDateSelect" name="payDateSelect"></select>
+        </div>
+        <div class="field" id="payCustomWrap" hidden>
+          <label for="dpDay">Custom date</label>
+          <div class="cp-date-grid">
+            <div><label for="dpDay" class="cp-sub-label">Day</label><select id="dpDay" aria-label="Day"></select></div>
+            <div><label for="dpMonth" class="cp-sub-label">Month</label><select id="dpMonth" aria-label="Month"></select></div>
+            <div><label for="dpYear" class="cp-sub-label">Year</label><select id="dpYear" aria-label="Year"></select></div>
+          </div>
+        </div>
+
+        <!-- 3. Amount paid (required) -->
+        <div class="field">
+          <label for="amount">Amount paid (₹)</label>
+          <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
+            <input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required></div>
+        </div>
+
+        <!-- 4. For which ledgers (optional tag) -->
+        <div class="field">
+          <label for="cpLedgerSelect">For which ledgers <span class="cp-dim">(optional)</span></label>
+          <select id="cpLedgerSelect" name="cpLedgerSelect"></select>
+        </div>
+        <div class="field" id="cpLedgerCustomWrap" hidden>
+          <label for="cpLedgerCustom">Custom ledger name</label>
+          <input id="cpLedgerCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a ledger name">
+        </div>
+        <div class="field">
+          <label for="cpSubSelect">Sub-ledger <span class="cp-dim">(optional)</span></label>
+          <select id="cpSubSelect" name="cpSubSelect"></select>
+        </div>
+        <div class="field" id="cpSubCustomWrap" hidden>
+          <label for="cpSubCustom">Custom sub-ledger name</label>
+          <input id="cpSubCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a sub-ledger name">
+        </div>
+
+        <!-- 5. Remarks (optional) -->
+        <div class="field">
+          <label for="remarks">Remarks <span class="cp-dim">(optional)</span></label>
+          <textarea id="remarks" name="remarks" rows="3" autocomplete="off" maxlength="300" placeholder="Any notes about this payment"></textarea>
+        </div>
+
+        <div class="cp-actions-row">
+          <button type="submit" class="btn primary" id="saveBtn">Add payment</button>
+          <button type="button" class="btn ghost" id="cancelBtn" hidden>Cancel</button>
+        </div>
+      </form>
+
+      <hr class="cp-sep">
+      <p class="cp-list-head">Payments</p>
+      <table class="cp-table">
+        <thead>
+          <tr>
+            <th class="cp-slno">Sl.No</th>
+            <th>Contract</th>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Ledger</th>
+            <th>Remarks</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="cpList"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script src="/ledgers.js"></script>
+  <script src="/plannr-ui.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, guardAuth, createLedgerPicker, createDatePicker } = window.PlannrUI;
+
+    const msg = makeMsg($('cpMsg'));
+    guardAuth();
+
+    const CUSTOM = '__custom__';
+    const cpForm = $('cpForm'), cpContract = $('cpContract'), payDateSelect = $('payDateSelect'), payCustomWrap = $('payCustomWrap'),
+          cpLedgerSelect = $('cpLedgerSelect'), amount = $('amount'), remarks = $('remarks'), slno = $('slno'),
+          saveBtn = $('saveBtn'), cancelBtn = $('cancelBtn'), listBody = $('cpList'), remainingEl = $('remaining');
+
+    const cpLedger = createLedgerPicker({
+      ledgerSelect: cpLedgerSelect, ledgerCustomWrap: $('cpLedgerCustomWrap'), ledgerCustom: $('cpLedgerCustom'),
+      subSelect: $('cpSubSelect'), subCustomWrap: $('cpSubCustomWrap'), subCustom: $('cpSubCustom'),
+    });
+    const customDate = createDatePicker({ day: $('dpDay'), month: $('dpMonth'), year: $('dpYear') });
+
+    let contracts = [];
+    let payments = [];
+    let editingId = null;
+
+    function parsePaise(v) {
+      const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+      if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+      const [ip, dp = ''] = s.split('.');
+      const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
+      return Number.isSafeInteger(p) && p > 0 ? p : null;
+    }
+
+    function buildContractOptions() {
+      // Phase 5G — single-contract invariant: there is exactly one contract (or none). Auto-select
+      // the one (no "— select —" placeholder to choose); when there is none, show a clear disabled
+      // state. A payment still can't be created with no contract — contract_id is NOT NULL and the
+      // server rejects an empty/absent contract with "Select a valid contract".
+      if (!contracts.length) { cpContract.innerHTML = '<option value="">— no contract yet — add one in Contract Details —</option>'; return; }
+      cpContract.innerHTML = contracts.map((c) => `<option value="${c.id}">${esc(c.contractorName + (c.areaOfWork ? ' — ' + c.areaOfWork : '') + (c.ledger ? ' · ' + c.ledger : ''))}</option>`).join('');
+    }
+
+    // Date-of-payment options = the CHOSEN contract's scheduled dates + Custom.
+    function buildDateOptions(keep) {
+      const c = contracts.find((x) => String(x.id) === cpContract.value);
+      const dates = c ? (c.paymentDates || []) : [];
+      payDateSelect.innerHTML = '<option value="">— select date —</option>' +
+        dates.map((d) => `<option value="${d}">${esc(fmtDate(d))}</option>`).join('') +
+        `<option value="${CUSTOM}">Custom…</option>`;
+      if (keep && (keep === CUSTOM || dates.includes(keep))) payDateSelect.value = keep;
+      syncCustomDate();
+    }
+    function syncCustomDate() { payCustomWrap.hidden = payDateSelect.value !== CUSTOM; }
+
+    // SIMPLE remaining = contract.stated − Σ(live payments for it). Reimbursement /
+    // self-coverage is deliberately NOT factored in here — that is Phase 4's dues math.
+    function updateRemaining() {
+      const c = contracts.find((x) => String(x.id) === cpContract.value);
+      if (!c) { remainingEl.className = 'cp-remaining'; remainingEl.textContent = ''; return; }
+      const paid = payments.filter((p) => p.contractId === c.id).reduce((t, p) => t + (p.amountPaise || 0), 0);
+      const rem = (c.statedAmountPaise || 0) - paid;
+      remainingEl.className = 'cp-remaining show';
+      // Labelled explicitly as a DIFFERENT quantity from Owed (F) on the Overview: this is cash still to
+      // pay the contractor BEFORE reimbursement offsets; Owed applies those offsets. They intentionally differ.
+      // Phase 4C — a negative remaining (paid > stated) renders as "Overpaid by ₹X", not a negative "to pay".
+      remainingEl.innerHTML = `Remaining to pay, before reimbursements: <b>${window.PlannrUI.formatOwed(rem)}</b> <span>(contract value ${fmtPaise(c.statedAmountPaise || 0)} − paid ${fmtPaise(paid)}; reimbursement offsets reduce <b>Owed</b> on the Overview, not this figure)</span>`;
+    }
+
+    cpContract.addEventListener('change', () => { buildDateOptions(); updateRemaining(); });
+    payDateSelect.addEventListener('change', syncCustomDate);
+
+    async function loadContracts() {
+      const r = await fetch('/api/contracts');
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      contracts = (await r.json()).contracts || [];
+      const keepC = cpContract.value;
+      buildContractOptions();
+      if (keepC && contracts.some((c) => String(c.id) === keepC)) cpContract.value = keepC;
+      buildDateOptions();
+      updateRemaining();
+    }
+
+    async function loadPayments() {
+      const r = await fetch('/api/contractor-payments');
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      payments = (await r.json()).payments || [];
+      render();
+      updateRemaining();
+    }
+
+    function render() {
+      if (!payments.length) {
+        listBody.innerHTML = `<tr><td colspan="7" class="cp-empty">No payments yet.</td></tr>`;
+      } else {
+        listBody.innerHTML = payments.map((p, i) => `
+          <tr>
+            <td data-label="Sl.No" class="cp-slno">${i + 1}</td>
+            <td data-label="Contract">${esc(p.contractorName || ('#' + p.contractId))}</td>
+            <td data-label="Date">${esc(fmtDate(p.payDate))}</td>
+            <td data-label="Amount" class="cp-amount">${fmtPaise(p.amountPaise)}</td>
+            <td data-label="Ledger">${p.ledger ? esc(p.ledger) : '<span class="cp-dim">—</span>'}</td>
+            <td data-label="Remarks">${p.remarks ? esc(p.remarks) : '<span class="cp-dim">—</span>'}</td>
+            <td data-label="" class="cp-actions">
+              <button type="button" class="cp-btn-sm" data-edit="${p.id}">Edit</button>
+              <button type="button" class="cp-btn-sm cp-del" data-del="${p.id}">Delete</button>
+            </td>
+          </tr>`).join('');
+      }
+      if (editingId === null) slno.value = payments.length + 1;
+    }
+
+    listBody.addEventListener('click', (ev) => {
+      const e = ev.target.getAttribute('data-edit');
+      const d = ev.target.getAttribute('data-del');
+      if (e) startEdit(Number(e));
+      else if (d) doDelete(Number(d));
+    });
+
+    function startEdit(id) {
+      const idx = payments.findIndex((x) => x.id === id);
+      if (idx < 0) return;
+      const p = payments[idx];
+      editingId = id;
+      slno.value = idx + 1;
+      cpContract.value = String(p.contractId);
+      buildDateOptions();
+      updateRemaining();
+      const c = contracts.find((x) => x.id === p.contractId);
+      const scheduled = c ? (c.paymentDates || []) : [];
+      if (scheduled.includes(p.payDate)) { payDateSelect.value = p.payDate; }
+      else { payDateSelect.value = CUSTOM; customDate.setISO(p.payDate); }
+      syncCustomDate();
+      amount.value = p.amountPaise != null ? paiseToInput(p.amountPaise) : '';
+      if (p.ledgerCode) cpLedger.populate(p); else cpLedger.reset();
+      remarks.value = p.remarks || '';
+      saveBtn.textContent = 'Update payment';
+      cancelBtn.hidden = false;
+      msg.clear();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      cpContract.focus();
+    }
+
+    function resetForm() {
+      editingId = null;
+      cpForm.reset();
+      cpLedger.reset();
+      customDate.reset();
+      buildDateOptions();
+      updateRemaining();
+      saveBtn.textContent = 'Add payment';
+      cancelBtn.hidden = true;
+      slno.value = payments.length + 1;
+    }
+    cancelBtn.addEventListener('click', () => { resetForm(); msg.clear(); });
+
+    cpForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      msg.clear();
+      if (!cpContract.value) { msg.show('Select a contract.', 'error'); return; }
+      let payDate;
+      if (payDateSelect.value === CUSTOM) payDate = customDate.getISO();
+      else if (payDateSelect.value) payDate = payDateSelect.value;
+      else { msg.show('Select a date of payment.', 'error'); return; }
+      const amt = amount.value.trim().replace(/,/g, '');
+      if (parsePaise(amt) === null) { msg.show('Enter a valid amount greater than 0 (up to 2 decimals).', 'error'); return; }
+
+      const body = { contractId: Number(cpContract.value), payDate, amountRupees: amt, remarks: remarks.value };
+      // Ledger is optional: only send/validate it when one is actually chosen.
+      if (cpLedgerSelect.value) {
+        const led = cpLedger.readBody();
+        if (led.error) { msg.show(led.error, 'error'); return; }
+        Object.assign(body, led.body);
+      }
+      const editing = editingId !== null;
+      // Confirm only when overwriting an EXISTING entry; adding a new payment does not prompt.
+      if (editing && !(await window.PlannrUI.confirmModal({ title: 'Save changes?', message: 'Save your edits to this contractor payment? This overwrites the saved record.', confirmLabel: 'Save changes' }))) return;
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch(editing ? '/api/contractor-payments/' + editingId : '/api/contractor-payments', {
+          method: editing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          await loadPayments();
+          resetForm();
+          msg.show(editing ? 'Payment updated.' : 'Payment added.', 'success');
+        } else {
+          msg.show(data.error || 'Could not save the payment.', 'error');
+        }
+      } catch {
+        msg.show('Network error. Please try again.', 'error');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    async function doDelete(id) {
+      if (!window.confirm('Delete this payment? It can be recovered later (soft-deleted).')) return;
+      try {
+        const res = await fetch('/api/contractor-payments/' + id, { method: 'DELETE' });
+        if (res.ok) {
+          if (editingId === id) resetForm();
+          await loadPayments();
+          msg.show('Payment deleted.', 'success');
+        } else {
+          const d = await res.json().catch(() => ({}));
+          msg.show(d.error || 'Could not delete the payment.', 'error');
+        }
+      } catch { msg.show('Network error. Please try again.', 'error'); }
+    }
+
+    (async () => { await loadContracts(); await loadPayments(); resetForm(); })();
+  </script>
+</body>
+</html>

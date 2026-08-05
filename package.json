@@ -1,0 +1,30 @@
+{
+  "name": "plannr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plannr — login/register system (Express + SQLite)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch --require ./dev-env.js server.js",
+    "reset-db": "node reset-db.js --confirm",
+    "seed:demo": "node seed-demo.js",
+    "test": "node run-tests.js",
+    "test:isolation": "node test-isolation/run.js",
+    "test:slow": "node --test --test-concurrency=1 \"test/slow/**/*.test.js\"",
+    "test:ui": "node test-ui/run.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^9.0.3",
+    "playwright": "^1.61.1",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.7"
+  }
+}

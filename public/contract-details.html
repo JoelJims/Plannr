@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Contract Details · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Background matches Data Backup exactly: no page-level body override and no
+       GradientBlinds layer, so this page inherits the shared styles.css body treatment. */
+
+    .cd-stack { position: relative; z-index: 1; width: 100%; max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .cd-card { background: var(--panel); border: 1px solid var(--line-strong); padding: 24px 22px; }
+    @media (min-width: 800px) { .cd-card { padding: 34px 34px 30px; } }
+
+    .cd-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+    .cd-card .brand { display: flex; align-items: center; gap: 12px; }
+    .cd-card .mark { width: 44px; height: 44px; }
+    .cd-card .mark svg { width: 28px; height: 28px; }
+    .cd-card .wordmark { font-size: 20px; }
+    .cd-card .sub { font-size: 10px; margin-top: 4px; }
+
+    .cd-back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); padding-bottom: 2px; }
+    .cd-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .cd-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .cd-top-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .cd-pdf { display: inline-flex; align-items: center; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #1a1a1a; background: var(--accent); border: 1px solid var(--accent); padding: 9px 14px; text-decoration: none; cursor: pointer; }
+    .cd-pdf:hover { filter: brightness(1.06); }
+    .cd-pdf:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .cd-head .chip { margin-bottom: 10px; }
+    .cd-head h1 { font-family: var(--font-head); font-weight: 600; font-size: 28px; letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 4px; line-height: 1; }
+    .cd-head p { margin: 0 0 18px; color: var(--text-dim); font-size: 14px; }
+    @media (min-width: 800px) { .cd-head h1 { font-size: 32px; } }
+
+    .cd-section-title { font-family: var(--font-head); font-weight: 600; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 14px; }
+
+    .cd-form { max-width: 640px; }
+    .cd-form .field { margin-bottom: 14px; }
+    .cd-form .field.slno { max-width: 140px; }
+    #cSlno, #svcSlno { color: var(--text-dim); }
+    .cd-optional { color: var(--text-faint); }
+    .cd-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; margin: 6px 0 0; }
+    .cd-hint b { color: var(--accent); font-weight: 600; }
+
+    /* Services phase (Part A/B) — the line-item services list + the remainder line. */
+    .cd-remainder { font-family: var(--font-head); font-weight: 600; font-size: 15px; color: var(--accent); margin: 4px 0 16px; }
+    .cd-remainder.cd-over { color: #f8dca6; }
+    .cd-svc-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; }
+    .cd-svc-empty { color: var(--text-dim); font-size: 13px; margin: 0 0 16px; }
+    .cd-svc-row, .cd-svc-add { display: grid; grid-template-columns: 1fr 150px auto auto; gap: 8px; align-items: center; }
+    .cd-svc-add { grid-template-columns: 1fr 150px auto; margin-top: 4px; }
+    @media (max-width: 560px) { .cd-svc-row, .cd-svc-add { grid-template-columns: 1fr; } }
+
+    .amount-wrap { position: relative; }
+    .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .amount-wrap input { padding-left: 28px; }
+
+    input[type="number"] {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      padding: 12px 14px; color: var(--text); background: var(--panel-2);
+      border: 1px solid var(--line-strong); border-radius: 0; outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    input[type="number"]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+
+    /* Ledger / sub-ledger / date selects — themed identically to Cash Outflow. */
+    .cd-form select {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      color: var(--text); background-color: var(--panel-2); border: 1px solid var(--line-strong);
+      border-radius: 0; padding: 12px 36px 12px 13px; outline: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center; background-size: 13px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .cd-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .cd-form select:disabled { opacity: 0.5; cursor: default; background-image: none; }
+    .cd-form select option { background: #15161a; color: var(--text); }
+
+    /* Day / Month / Year picker — same layout as the /select-date screen. */
+    .cd-date-grid { display: grid; grid-template-columns: 0.85fr 1.25fr 1fr; gap: 12px; }
+    /* [hidden] must win over the grid display above (UA [hidden] would otherwise lose). */
+    .cd-date-grid[hidden] { display: none; }
+    .cd-sub-label { display: block; font-family: var(--font-head); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 6px; }
+
+    /* End-date toggle. */
+    .cd-check { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; cursor: pointer; user-select: none; }
+    .cd-check input { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
+    .cd-check span { font-size: 14px; color: var(--text); }
+
+    /* Repeatable payment-date rows. */
+    .cd-paydate-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+    .cd-paydate-row .cd-date-grid { flex: 1 1 auto; }
+    .cd-paydate-del { flex: none; }
+    .cd-add-date { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px dashed var(--accent-line); border-radius: 0; padding: 11px 16px; cursor: pointer; margin-top: 2px; }
+    .cd-add-date:hover { background: var(--accent-soft); color: #ffb020; }
+    .cd-add-date:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .cd-paydates-empty { font-size: 13px; color: var(--text-faint); margin: 0 0 10px; }
+
+    .cd-derived { margin: -4px 0 14px; font-size: 13px; color: var(--text-dim); }
+    .cd-derived b { color: var(--accent); font-family: var(--font-head); letter-spacing: 0.02em; }
+
+    .cd-mismatch {
+      display: none; margin: 2px 0 16px; padding: 11px 14px; font-size: 13px; line-height: 1.4;
+      color: #f8dca6; background: var(--accent-soft); border: 1px solid var(--accent-line);
+      border-left: 3px solid var(--accent);
+    }
+    .cd-mismatch.show { display: block; }
+
+    .cd-actions-row { display: flex; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+    .cd-actions-row .btn { width: auto; flex: 1 1 auto; padding: 0 22px; }
+    #contractCancelBtn[hidden], #contractDeleteBtn[hidden], #svcCancelBtn[hidden] { display: none; }
+
+    .cd-sep { border: none; border-top: 1px solid var(--line); margin: 26px 0 18px; }
+
+    /* Contract cards (the list). */
+    .cd-contract { border: 1px solid var(--line-strong); background: var(--panel-2); padding: 16px 16px 14px; margin-bottom: 14px; }
+    .cd-contract.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line); }
+    .cd-contract-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+    .cd-contract-name { font-family: var(--font-head); font-weight: 600; font-size: 17px; letter-spacing: 0.01em; color: var(--text); }
+    .cd-contract-sub { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
+    .cd-contract-amt { font-family: var(--font-head); font-weight: 600; font-size: 16px; color: var(--accent); white-space: nowrap; }
+    .cd-contract-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 18px; margin: 0 0 14px; }
+    .cd-contract-meta > div { min-width: 0; }
+    .cd-contract-meta dt { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; color: var(--text-dim); margin-bottom: 2px; }
+    .cd-contract-meta dd { margin: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+    .cd-contract-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .cd-empty { color: var(--text-dim); text-align: center; padding: 20px 12px; border: 1px solid var(--line-strong); }
+
+    .cd-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .cd-table th, .cd-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .cd-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+    .cd-table td.cd-amount { color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-head); letter-spacing: 0.02em; }
+    .cd-slno { color: var(--text-faint); width: 52px; }
+    .cd-dim { color: var(--text-faint); }
+    .cd-total-row td { border-top: 1px solid var(--line-strong); border-bottom: none; font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.06em; font-size: 12px; color: var(--text-dim); }
+    .cd-total-row td.cd-amount { color: var(--text); font-size: 14px; }
+
+    .cd-actions { white-space: nowrap; }
+    .cd-btn-sm { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel); border: 1px solid var(--accent-line); border-radius: 0; padding: 9px 13px; cursor: pointer; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+    .cd-btn-sm:hover { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel); color: #ffb020; }
+    .cd-btn-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .cd-btn-sm.cd-del { color: var(--text-dim); border-color: var(--line-strong); }
+    .cd-btn-sm.cd-del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+
+
+    @media (max-width: 620px) {
+      .cd-table thead { display: none; }
+      .cd-table tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+      .cd-table tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 9px 0; }
+      .cd-table tbody tr td:last-child { border-bottom: none; }
+      .cd-table tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; color: var(--text-dim); flex: none; }
+      .cd-table td.cd-actions { justify-content: flex-end; }
+      .cd-table td.cd-actions::before { content: ''; }
+      .cd-table tr.cd-total-row td:empty { display: none; }
+      .cd-table tr.cd-total-row td::before { content: ''; }
+      .cd-btn-sm { min-height: 44px; }
+    }
+    /* Stack the payment-date picker + remove button on narrow screens. */
+    @media (max-width: 460px) {
+      .cd-date-grid { grid-template-columns: 1fr; gap: 8px; }
+      .cd-paydate-row { flex-direction: column; align-items: stretch; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="cd-stack">
+    <main class="cd-card">
+      <div class="cd-top">
+        <div class="brand">
+          <div class="mark"><img src="/logo.svg" alt="" aria-hidden="true"></div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+        <div class="cd-top-actions">
+          <a class="cd-back" href="/">&larr; Back</a>
+        </div>
+      </div>
+
+      <div class="cd-head">
+        <span class="chip">Contract</span>
+        <h1>Contract Details</h1>
+        <p>Plannr tracks a single contract. Amounts are in rupees (₹).</p>
+      </div>
+
+      <!-- ===== The one contract: edit in place, or create when none exists ===== -->
+      <p class="cd-section-title" id="cdSectionTitle">Contract</p>
+      <div id="contractMsg" class="msg" role="alert"></div>
+
+      <form id="contractForm" class="cd-form" novalidate>
+        <!-- Sl.No hidden: single-contract page, so a serial number would only imply a list. -->
+        <div class="field slno" hidden>
+          <label for="cSlno">Sl.No</label>
+          <input id="cSlno" type="text" readonly aria-readonly="true">
+        </div>
+
+        <div class="field">
+          <label for="cContractor">Contractor name</label>
+          <input id="cContractor" name="cContractor" type="text" autocomplete="off" maxlength="100" placeholder="Who holds the contract?" required>
+        </div>
+
+        <div class="field">
+          <label for="cCompany">Company <span class="cd-optional">(optional)</span></label>
+          <input id="cCompany" name="cCompany" type="text" autocomplete="off" maxlength="120" placeholder="Firm / company (optional)">
+        </div>
+
+        <div class="field">
+          <label for="cArea">Area of work</label>
+          <input id="cArea" name="cArea" type="text" autocomplete="off" maxlength="200" placeholder="e.g. Structural &amp; RCC, Electrical, Painting" required>
+        </div>
+
+        <div class="field">
+          <label for="cLedgerSelect">Ledger <span class="cd-optional">(category for this contract)</span></label>
+          <select id="cLedgerSelect" name="cLedgerSelect"></select>
+        </div>
+        <div class="field" id="cLedgerCustomWrap" hidden>
+          <label for="cLedgerCustom">Custom ledger name</label>
+          <input id="cLedgerCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a ledger name">
+        </div>
+        <div class="field">
+          <label for="cSubSelect">Sub-ledger <span class="cd-optional">(optional)</span></label>
+          <select id="cSubSelect" name="cSubSelect"></select>
+        </div>
+        <div class="field" id="cSubCustomWrap" hidden>
+          <label for="cSubCustom">Custom sub-ledger name</label>
+          <input id="cSubCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a sub-ledger name">
+        </div>
+
+        <!-- DRIVING field first: price_of_contract_paise. This is the value the dues math (owed) uses. -->
+        <div class="field">
+          <label for="cStated">Total contract value (₹)</label>
+          <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
+            <input id="cStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required></div>
+          <p class="cd-hint">The full value of the contract. The contractor's <b>owed</b> is calculated from this.</p>
+        </div>
+
+        <!-- DORMANT field: amount_paise. Stored (kept like phase/subpart) but feeds NO calculation. -->
+        <div class="field">
+          <label for="cAmount">Reference amount <span class="cd-optional">(optional — not used in any calculation)</span></label>
+          <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
+            <input id="cAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
+        </div>
+
+        <div class="field">
+          <label for="dsDay">Date signed</label>
+          <div class="cd-date-grid">
+            <div><label for="dsDay" class="cd-sub-label">Day</label><select id="dsDay" aria-label="Day (signed)"></select></div>
+            <div><label for="dsMonth" class="cd-sub-label">Month</label><select id="dsMonth" aria-label="Month (signed)"></select></div>
+            <div><label for="dsYear" class="cd-sub-label">Year</label><select id="dsYear" aria-label="Year (signed)"></select></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="cd-check"><input type="checkbox" id="hasEndDate"><span>Set an end date (optional)</span></label>
+          <div id="deWrap" class="cd-date-grid" hidden>
+            <div><label for="deDay" class="cd-sub-label">Day</label><select id="deDay" aria-label="Day (ends)"></select></div>
+            <div><label for="deMonth" class="cd-sub-label">Month</label><select id="deMonth" aria-label="Month (ends)"></select></div>
+            <div><label for="deYear" class="cd-sub-label">Year</label><select id="deYear" aria-label="Year (ends)"></select></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Dates of payments <span class="cd-optional">(scheduled — add as many as needed)</span></label>
+          <p id="payDatesEmpty" class="cd-paydates-empty">No payment dates added.</p>
+          <div id="payDates"></div>
+          <button type="button" class="cd-add-date" id="addPayDateBtn">+ Add payment date</button>
+        </div>
+
+        <div class="cd-actions-row">
+          <button type="submit" class="btn primary" id="contractSaveBtn">Add contract</button>
+          <button type="button" class="btn ghost" id="contractCancelBtn" hidden>Revert</button>
+          <button type="button" class="btn ghost" id="contractDeleteBtn" hidden>Delete contract</button>
+        </div>
+      </form>
+
+      <!-- ===== Services (Part A) + remainder (Part B). Shown only once a contract exists. ===== -->
+      <section id="servicesSection" hidden>
+        <hr class="cd-sep">
+        <p class="cd-section-title">Contract services</p>
+        <p class="cd-hint">A name and an optional price. Services are informational — they do <b>not</b> change the owed calculation (the Total contract value does). A priced service can be picked on the debit form to fill its stated amount.</p>
+        <p id="remainderLine" class="cd-remainder"></p>
+        <div id="servicesMsg" class="msg" role="alert"></div>
+        <div id="servicesList" class="cd-svc-list"></div>
+        <form id="serviceForm" class="cd-svc-add" novalidate>
+          <input id="svcName" type="text" maxlength="120" autocomplete="off" placeholder="Service name" aria-label="Service name" required>
+          <input id="svcPrice" type="text" inputmode="decimal" autocomplete="off" placeholder="Price ₹ (optional)" aria-label="Service price (optional)">
+          <button type="submit" class="btn primary" id="svcAddBtn">Add service</button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="/ledgers.js"></script>
+  <script src="/plannr-ui.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, guardAuth, createLedgerPicker, createDatePicker } = window.PlannrUI;
+
+    const contractMsg = makeMsg($('contractMsg'));
+    guardAuth(); // secondary client-side guard (server-side requireAuth is primary)
+
+    // ---- shared parse helpers (mirror the server) ----
+    function parsePaise(v) {
+      const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+      if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+      const [ip, dp = ''] = s.split('.');
+      const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
+      return Number.isSafeInteger(p) && p > 0 ? p : null;
+    }
+
+    // ===================== Contract form =====================
+    const contractForm = $('contractForm'), cContractor = $('cContractor'), cCompany = $('cCompany'), cArea = $('cArea'),
+          cAmount = $('cAmount'), cStated = $('cStated'), cSlno = $('cSlno'),
+          contractSaveBtn = $('contractSaveBtn'), contractCancelBtn = $('contractCancelBtn'),
+          contractDeleteBtn = $('contractDeleteBtn'), hasEndDate = $('hasEndDate'), deWrap = $('deWrap'),
+          payDates = $('payDates'), payDatesEmpty = $('payDatesEmpty'), addPayDateBtn = $('addPayDateBtn');
+
+    const cLedger = createLedgerPicker({
+      ledgerSelect: $('cLedgerSelect'), ledgerCustomWrap: $('cLedgerCustomWrap'), ledgerCustom: $('cLedgerCustom'),
+      subSelect: $('cSubSelect'), subCustomWrap: $('cSubCustomWrap'), subCustom: $('cSubCustom'),
+    });
+    const dateSignedPicker = createDatePicker({ day: $('dsDay'), month: $('dsMonth'), year: $('dsYear') });
+    const dateEndsPicker = createDatePicker({ day: $('deDay'), month: $('deMonth'), year: $('deYear') });
+
+    let contracts = [];
+    let editingContractId = null;
+    const payRows = []; // { el, picker }
+
+    hasEndDate.addEventListener('change', () => { deWrap.hidden = !hasEndDate.checked; });
+
+    function refreshPayDatesEmpty() { payDatesEmpty.hidden = payRows.length > 0; }
+
+    function addPayDateRow(iso) {
+      const row = document.createElement('div');
+      row.className = 'cd-paydate-row';
+      row.innerHTML =
+        '<div class="cd-date-grid">' +
+          '<div><select aria-label="Payment day"></select></div>' +
+          '<div><select aria-label="Payment month"></select></div>' +
+          '<div><select aria-label="Payment year"></select></div>' +
+        '</div>' +
+        '<button type="button" class="cd-btn-sm cd-del cd-paydate-del">Remove</button>';
+      const selects = row.querySelectorAll('select');
+      const picker = createDatePicker({ day: selects[0], month: selects[1], year: selects[2] });
+      if (iso) picker.setISO(iso);
+      row.querySelector('.cd-paydate-del').addEventListener('click', () => {
+        const i = payRows.findIndex((p) => p.el === row);
+        if (i >= 0) payRows.splice(i, 1);
+        row.remove();
+        refreshPayDatesEmpty();
+      });
+      payDates.appendChild(row);
+      payRows.push({ el: row, picker });
+      refreshPayDatesEmpty();
+    }
+    addPayDateBtn.addEventListener('click', () => addPayDateRow());
+
+    function clearPayDates() { payRows.length = 0; payDates.innerHTML = ''; refreshPayDatesEmpty(); }
+
+    function resetContractForm() {
+      editingContractId = null;
+      contractForm.reset();
+      cLedger.reset();
+      dateSignedPicker.reset();
+      hasEndDate.checked = false; deWrap.hidden = true; dateEndsPicker.reset();
+      clearPayDates();
+      contractSaveBtn.textContent = 'Add contract';
+      contractCancelBtn.hidden = true;   // nothing to revert to when creating
+      contractDeleteBtn.hidden = true;   // nothing to delete yet
+      cSlno.value = 1;
+      renderServices(null);              // no contract yet -> hide the services section
+    }
+    // Revert: discard unsaved edits by reloading the saved contract (edit mode) or clearing (create).
+    contractCancelBtn.addEventListener('click', () => {
+      contractMsg.clear();
+      if (editingContractId !== null) startEditContract(editingContractId);
+      else resetContractForm();
+    });
+    contractDeleteBtn.addEventListener('click', () => { if (editingContractId !== null) deleteContract(editingContractId); });
+
+    function startEditContract(id) {
+      const idx = contracts.findIndex((x) => x.id === id);
+      if (idx < 0) return;
+      const c = contracts[idx];
+      editingContractId = id;
+      cSlno.value = 1;
+      cContractor.value = c.contractorName || '';
+      cCompany.value = c.company || '';
+      cArea.value = c.areaOfWork || '';
+      cLedger.populate(c);
+      cAmount.value = c.amountPaise != null ? paiseToInput(c.amountPaise) : '';
+      cStated.value = c.statedAmountPaise != null ? paiseToInput(c.statedAmountPaise) : '';
+      dateSignedPicker.setISO(c.dateSigned);
+      if (c.dateEnds) { hasEndDate.checked = true; deWrap.hidden = false; dateEndsPicker.setISO(c.dateEnds); }
+      else { hasEndDate.checked = false; deWrap.hidden = true; dateEndsPicker.reset(); }
+      clearPayDates();
+      (c.paymentDates || []).forEach((d) => addPayDateRow(d));
+      contractSaveBtn.textContent = 'Save changes';
+      contractCancelBtn.hidden = false;  // "Revert" to the saved values
+      contractDeleteBtn.hidden = false;  // the one contract can be soft-deleted (recycle bin)
+      renderServices(c);                 // Part A/B — services + remainder (only when a contract exists)
+    }
+
+    contractForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      contractMsg.clear();
+      if (!cContractor.value.trim()) { contractMsg.show('Contractor name is required.', 'error'); return; }
+      if (!cArea.value.trim()) { contractMsg.show('Area of work is required.', 'error'); return; }
+      const led = cLedger.readBody();
+      if (led.error) { contractMsg.show(led.error, 'error'); return; }
+      const statedStr = cStated.value.trim().replace(/,/g, '');
+      const amountStr = cAmount.value.trim().replace(/,/g, '');
+      // Exact-mistake guard: the contract value belongs in "Total contract value" (it drives owed). If
+      // that's empty/zero but the dormant "Reference amount" holds a value, the user filled the wrong
+      // field — it would save cleanly and compute owed as if the contract were ₹0. Catch it specifically.
+      if (parsePaise(statedStr) === null && amountStr !== '' && parsePaise(amountStr) !== null) {
+        contractMsg.show('The contract value must go in “Total contract value (₹)” — you’ve entered it in “Reference amount”, which is not used in any calculation. Move it to Total contract value.', 'error'); return;
+      }
+      if (parsePaise(statedStr) === null) { contractMsg.show('Enter the total contract value (greater than 0, up to 2 decimals).', 'error'); return; }
+      if (amountStr !== '' && parsePaise(amountStr) === null) { contractMsg.show('Reference amount must be greater than 0 (up to 2 decimals), or left blank.', 'error'); return; }
+
+      const body = {
+        ...led.body,
+        contractorName: cContractor.value,
+        company: cCompany.value,
+        areaOfWork: cArea.value,
+        amountRupees: amountStr,
+        statedAmountRupees: statedStr,
+        dateSigned: dateSignedPicker.getISO(),
+        dateEnds: hasEndDate.checked ? dateEndsPicker.getISO() : '',
+        paymentDates: payRows.map((p) => p.picker.getISO()),
+      };
+
+      const editing = editingContractId !== null;
+      contractSaveBtn.disabled = true;
+      try {
+        const res = await fetch(editing ? '/api/contracts/' + editingContractId : '/api/contracts', {
+          method: editing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          await loadContracts(); // now 1 contract exists -> loadContracts re-enters edit-in-place
+          contractMsg.show(editing ? 'Contract updated.' : 'Contract added.', 'success');
+        } else {
+          contractMsg.show(data.error || 'Could not save the contract.', 'error');
+        }
+      } catch {
+        contractMsg.show('Network error. Please try again.', 'error');
+      } finally {
+        contractSaveBtn.disabled = false;
+      }
+    });
+
+    async function loadContracts() {
+      const r = await fetch('/api/contracts');
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      contracts = (await r.json()).contracts || [];
+      // Single-contract invariant (idx_contract_single_live): the array is 0 or 1. Edit the one in
+      // place if it exists; otherwise present the empty create form.
+      if (contracts.length) { editingContractId = null; startEditContract(contracts[0].id); }
+      else resetContractForm();
+    }
+
+    async function deleteContract(id) {
+      if (!window.confirm('Delete this contract? It can be recovered from the Recycle Bin (soft-deleted).')) return;
+      try {
+        const res = await fetch('/api/contracts/' + id, { method: 'DELETE' });
+        if (res.ok) {
+          await loadContracts(); // 0 contracts now -> back to the create form
+          contractMsg.show('Contract deleted — recover it any time from the Recycle Bin.', 'success');
+        } else {
+          const d = await res.json().catch(() => ({}));
+          // e.g. the Phase 4D guard: a contract with live contractor payments can't be deleted.
+          contractMsg.show(d.error || 'Could not delete the contract.', 'error');
+        }
+      } catch { contractMsg.show('Network error. Please try again.', 'error'); }
+    }
+
+    // ===================== Contract services (Part A) + remainder (Part B) =====================
+    const servicesSection = $('servicesSection'), remainderLine = $('remainderLine'),
+          servicesList = $('servicesList'), serviceForm = $('serviceForm'),
+          svcName = $('svcName'), svcPrice = $('svcPrice'), svcAddBtn = $('svcAddBtn');
+    const servicesMsg = makeMsg($('servicesMsg'));
+
+    // Part B — signed remainder wording (never a bare minus, mirroring Phase 4's "Overpaid by").
+    function remainderText(paise) {
+      if (paise > 0) return fmtPaise(paise) + ' price remains in the contract';
+      if (paise < 0) return fmtPaise(-paise) + ' over the contract price (priced services exceed the total)';
+      return 'Priced services exactly match the contract value.';
+    }
+    function renderServices(c) {
+      if (!c) { servicesSection.hidden = true; return; }
+      servicesSection.hidden = false;
+      const rem = c.remainderPaise || 0;
+      remainderLine.textContent = remainderText(rem);
+      remainderLine.classList.toggle('cd-over', rem < 0);
+      const services = c.services || [];
+      if (!services.length) { servicesList.innerHTML = '<p class="cd-svc-empty">No services yet.</p>'; return; }
+      servicesList.innerHTML = services.map((s) =>
+        '<div class="cd-svc-row" data-id="' + s.id + '">' +
+          '<input class="cd-svc-name" type="text" maxlength="120" value="' + esc(s.name) + '" aria-label="Service name">' +
+          '<input class="cd-svc-price" type="text" inputmode="decimal" value="' + (s.pricePaise != null ? esc(paiseToInput(s.pricePaise)) : '') + '" placeholder="(no price)" aria-label="Service price">' +
+          '<button type="button" class="cd-btn-sm" data-act="save" data-id="' + s.id + '">Save</button>' +
+          '<button type="button" class="cd-btn-sm cd-del" data-act="del" data-id="' + s.id + '">Delete</button>' +
+        '</div>'
+      ).join('');
+    }
+
+    serviceForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      servicesMsg.clear();
+      if (editingContractId === null) return;
+      const name = svcName.value.trim();
+      if (!name) { servicesMsg.show('Service name is required.', 'error'); return; }
+      svcAddBtn.disabled = true;
+      try {
+        const res = await fetch('/api/contracts/' + editingContractId + '/services', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, priceRupees: svcPrice.value.trim() }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (res.ok) { svcName.value = ''; svcPrice.value = ''; await loadContracts(); servicesMsg.show('Service added.', 'success'); }
+        else servicesMsg.show(d.error || 'Could not add the service.', 'error');
+      } catch { servicesMsg.show('Network error. Please try again.', 'error'); }
+      finally { svcAddBtn.disabled = false; }
+    });
+
+    // Delegated Save / Delete on the service rows (CSP-safe: no inline handlers).
+    servicesList.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest && ev.target.closest('button[data-act]');
+      if (!btn || editingContractId === null) return;
+      const id = Number(btn.getAttribute('data-id'));
+      const act = btn.getAttribute('data-act');
+      const rowEl = btn.closest('.cd-svc-row');
+      servicesMsg.clear();
+      if (act === 'del') {
+        if (!window.confirm('Delete this service? It will be removed from the list (soft-deleted).')) return;
+        try {
+          const res = await fetch('/api/contracts/' + editingContractId + '/services/' + id, { method: 'DELETE' });
+          if (res.ok) { await loadContracts(); servicesMsg.show('Service deleted.', 'success'); }
+          else { const d = await res.json().catch(() => ({})); servicesMsg.show(d.error || 'Could not delete.', 'error'); }
+        } catch { servicesMsg.show('Network error. Please try again.', 'error'); }
+      } else if (act === 'save') {
+        const name = rowEl.querySelector('.cd-svc-name').value.trim();
+        const price = rowEl.querySelector('.cd-svc-price').value.trim();
+        if (!name) { servicesMsg.show('Service name is required.', 'error'); return; }
+        try {
+          const res = await fetch('/api/contracts/' + editingContractId + '/services/' + id, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, priceRupees: price }),
+          });
+          if (res.ok) { await loadContracts(); servicesMsg.show('Service saved.', 'success'); }
+          else { const d = await res.json().catch(() => ({})); servicesMsg.show(d.error || 'Could not save.', 'error'); }
+        } catch { servicesMsg.show('Network error. Please try again.', 'error'); }
+      }
+    });
+
+    (async () => { await loadContracts(); })();
+  </script>
+
+</body>
+</html>

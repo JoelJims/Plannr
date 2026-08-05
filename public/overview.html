@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Overview · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Background matches Data Backup exactly: no page-level body override and no galaxy
+       layer, so this page inherits the shared styles.css body treatment verbatim. */
+
+    /* AMBER is the app colour. TEAL is the ONE sanctioned second colour on this
+       screen — used only to flag NEGATIVE (overpaid/over-covered) figures. */
+    :root { --ov-neg: #2dd4bf; }
+
+    /* Change 1 — centre the transaction-table HEADER row only. Data cells keep their own
+       alignment (Amount data stays right-aligned + tabular-nums via styles.css). Scoped
+       to this page so the Money Debited log is untouched; the nth-child(5) rule is needed
+       to out-specify styles.css `.tx-table th:nth-child(5){text-align:right}`. */
+    .tx-table thead th { text-align: center; }
+    .tx-table thead th:nth-child(5) { text-align: center; }
+    /* Each labelled header reads as its own bordered box — thin/subtle, from the existing
+       palette (no new colour). border-collapse shares edges, so column widths are unchanged;
+       the absolutely-positioned resize grips sit above the border (z-index) and stay grabbable.
+       Phase 3B: border ALL header cells (not a hard-coded -n+8) so the boxes track the last
+       VISIBLE column in both modes — in read mode the actions column (now column 10, Phase 5F)
+       is collapsed via display:none in the shared .tx-actions-collapsed rule, so the boxes end
+       flush at column 9 (Contract Stated); in edit mode column 10 reappears and gets its box too. */
+    .tx-table thead th { border: 1px solid var(--line-strong); }
+
+    /* Change 2 — tooltips (work on hover AND tap). Headers carry a plain-language concept
+       tip; Ledger/Sub-ledger data cells reveal the full name when the column clips it. */
+    .tx-table th[data-tip] { cursor: help; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
+    .tx-table td.tx-tip { cursor: help; }
+    .pl-tip {
+      position: absolute; z-index: 300; max-width: 260px;
+      background: #15161a; color: var(--text); border: 1px solid var(--accent-line);
+      padding: 7px 10px; font-family: var(--font-body); font-size: 12.5px; line-height: 1.45;
+      box-shadow: 0 12px 34px -10px rgba(0,0,0,0.85); pointer-events: none;
+    }
+    .pl-tip[hidden] { display: none; }
+
+    /* Item 3 — on phones (≤760px) the column-header row is hidden, so the concept tooltip
+       has nowhere to attach. Surface each Ledger/Sub-ledger cell's label as a real,
+       tappable element (in place of the CSS ::before label) that reveals the same concept.
+       Hidden on wider screens, where the header carries it. Additive — the stacked layout
+       is otherwise unchanged. */
+    .tx-clabel { display: none; }
+    @media (max-width: 760px) {
+      .tx-table tbody td.tx-tip::before { content: none; }
+      .tx-table tbody td.tx-tip .tx-clabel {
+        display: inline-flex; align-items: center; flex: none; order: -1;
+        font-family: var(--font-head); text-transform: uppercase; font-size: 10.5px;
+        letter-spacing: 0.07em; color: var(--text-dim); cursor: help;
+        text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px;
+        -webkit-tap-highlight-color: transparent;
+      }
+    }
+
+    /* Phase 2B — drag-to-resize (this session only; inline sizes reset on reload).
+       Column grips ride each header's right edge; row grips ride each row's bottom edge
+       (kept clear of the right-hand Delete button). Both hidden in the stacked mobile
+       layout, where there are no columns to resize. */
+    .tx-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tx-table thead th { position: relative; }
+    .tx-table tbody tr { position: relative; }
+    .col-grip { position: absolute; top: 0; right: -4px; width: 9px; height: 100%; cursor: col-resize; touch-action: none; z-index: 6; }
+    .col-grip::after { content: ''; position: absolute; top: 22%; bottom: 22%; left: 3px; width: 2px; background: var(--accent-line); opacity: 0; transition: opacity 0.12s; }
+    .col-grip:hover::after, body.tx-resizing .col-grip::after { opacity: 1; }
+    .row-grip { position: absolute; left: 0; right: 72px; bottom: 0; height: 7px; cursor: row-resize; touch-action: none; z-index: 4; }
+    .row-grip::after { content: ''; position: absolute; left: 30%; right: 30%; bottom: 1px; height: 2px; background: var(--accent-line); opacity: 0; transition: opacity 0.12s; }
+    .row-grip:hover::after, body.tx-resizing .row-grip::after { opacity: 1; }
+    /* Amount column: no width/min-width override at all — pure proportional 12% (styles.css),
+       identical to Money Debited, in both modes. Phase 4A measured ₹12,34,567.89 at 80.3px
+       rendered (Rajdhani 14px, tabular-nums); the column is never narrower than its edit-mode
+       137px share (content box 117px), so the value fits with ~37px to spare — and .tx-amount is
+       `overflow: visible` anyway, so it can't clip. The old `width: 152px` (Phase 3B) then
+       `min-width: 148px` (Phase 3B-follow-up) were both removed: the first made Amount hog the
+       column-9 surplus; the second bound above its own 12% share and existed only on this page,
+       leaving Money Debited unguarded. Drag-resize still clamps to 148px via JS (AMOUNT_MIN). */
+    body.tx-resizing { user-select: none; -webkit-user-select: none; }
+    @media (max-width: 760px) { .col-grip, .row-grip { display: none; } }
+
+    .ov-stack { position: relative; z-index: 1; width: 100%; max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .ov-card { background: rgba(17,17,19,0.92); border: 1px solid var(--line-strong); padding: 22px 20px; }
+    @media (min-width: 800px) { .ov-card { padding: 30px 32px; } }
+
+    .ov-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+    .ov-card .brand { display: flex; align-items: center; gap: 12px; }
+    .ov-card .mark { width: 44px; height: 44px; }
+    .ov-card .wordmark { font-size: 20px; }
+    .ov-card .sub { font-size: 10px; margin-top: 4px; }
+    .ov-back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); padding-bottom: 2px; }
+    .ov-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .ov-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ov-top-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .ov-pdf { display: inline-flex; align-items: center; font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #1a1a1a; background: var(--accent); border: 1px solid var(--accent); padding: 9px 14px; text-decoration: none; cursor: pointer; }
+    .ov-pdf:hover { filter: brightness(1.06); }
+    .ov-pdf:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ov-pdf { font-family: var(--font-head); }
+    .ov-pdf-sel { font-family: var(--font-body); font-size: 12.5px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0; padding: 8px 10px; cursor: pointer; }
+    .ov-pdf-sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ov-pdf-sel option { background: #15161a; color: var(--text); }
+
+    .ov-head .chip { margin-bottom: 10px; }
+    .ov-head h1 { font-family: var(--font-head); font-weight: 600; font-size: 28px; letter-spacing: 0.02em; text-transform: uppercase; margin: 0 0 4px; line-height: 1; }
+    .ov-head p { margin: 0 0 4px; color: var(--text-dim); font-size: 14px; }
+    /* Phase 10G — reconciliation warning (only when reconciliation.ok is false). Amber-only per the
+       design language: emphasis via the brighter alert-amber (#ffb020, same as .ov-bar-fill.over), a
+       heavier 2px border and a stronger tint + the leading ⚠ — not a second hue. */
+    .ov-recon { border: 2px solid #ffb020; background: rgba(245, 158, 11, 0.16); color: #ffb020; font-weight: 600; font-size: 12.5px; line-height: 1.45; padding: 9px 12px; margin: 0 0 12px; clip-path: var(--angular); }
+    @media (min-width: 800px) { .ov-head h1 { font-size: 32px; } }
+
+    .ov-section { margin-top: 22px; }
+    .ov-section-title { font-family: var(--font-head); font-weight: 600; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+
+    /* ---- Date-range filter ---- */
+    .ov-range { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+    /* [hidden] must beat the flex display above (author display: flex would otherwise win). */
+    .ov-range[hidden], .tx-bar[hidden] { display: none; }
+    .ov-range-field { flex: 1 1 240px; min-width: 0; }
+    .ov-range-field > label { display: block; font-family: var(--font-head); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 6px; }
+    .ov-date-grid { display: grid; grid-template-columns: 0.85fr 1.25fr 1fr; gap: 8px; }
+    .ov-range select {
+      width: 100%; min-height: 46px; font-family: var(--font-body); font-size: 15px;
+      color: var(--text); background-color: var(--panel-2); border: 1px solid var(--line-strong);
+      border-radius: 0; padding: 10px 30px 10px 11px; outline: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 11px center; background-size: 12px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .ov-range select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .ov-range select option { background: #15161a; color: var(--text); }
+    .ov-range-actions { display: flex; gap: 10px; align-items: flex-end; }
+    .ov-range-actions .btn { width: auto; min-height: 46px; padding: 0 18px; font-size: 14px; }
+    .ov-span { margin: 0; font-size: 13px; color: var(--text-dim); align-self: center; }
+    .ov-span b { font-family: var(--font-head); color: var(--accent); letter-spacing: 0.02em; }
+    @media (max-width: 460px) { .ov-date-grid { grid-template-columns: 1fr; gap: 6px; } .ov-range-actions .btn { flex: 1 1 auto; } }
+
+    /* ---- 6 headline numbers (equal prominence) ---- */
+    .ov-figs6 { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line-strong); }
+    @media (min-width: 720px) { .ov-figs6 { grid-template-columns: 1fr 1fr 1fr; } }
+    .ov-fig { background: var(--panel); padding: 15px 15px 14px; min-width: 0; }
+    .ov-fig-label { font-family: var(--font-head); font-size: 11.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+    .ov-fig-val { font-family: var(--font-head); font-weight: 700; font-size: 21px; line-height: 1.08; letter-spacing: 0.01em; margin: 6px 0 0; color: var(--accent); overflow-wrap: anywhere; }
+    @media (min-width: 720px) { .ov-fig-val { font-size: 28px; } }
+    .ov-fig-val.neg { color: var(--ov-neg); }
+    /* Owed to contractors (F) — the cumulative dues balance, shown on-screen with the SAME value as the
+       PDF. Its own amber-accented panel (not a spending fig) since it's cumulative, not range-scoped. */
+    .ov-owed { background: var(--panel); border: 1px solid var(--accent-line); border-left: 3px solid var(--accent); padding: 14px 15px; margin: 12px 0 0; }
+    .ov-owed-note { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; margin: 6px 0 0; }
+    .ov-fig-note { font-size: 11.5px; color: var(--text-faint); margin-top: 5px; min-height: 1px; }
+    .ov-fig-note.warn { color: #a7f3e6; }
+
+    /* ---- Per-contract owed ---- */
+    .ov-empty { color: var(--text-dim); font-size: 13.5px; padding: 14px 0; }
+
+    /* ---- Budget control + total bar ---- */
+    .amount-wrap { position: relative; max-width: 260px; }
+    .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
+    .amount-wrap input { padding-left: 28px; }
+    .ov-budget-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+    .ov-budget-row .btn { width: auto; min-height: 46px; padding: 0 18px; font-size: 14px; }
+    .ov-bar { position: relative; height: 26px; background: var(--panel-2); border: 1px solid var(--line-strong); overflow: hidden; margin-top: 14px; }
+    .ov-bar-fill { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, #b45309, var(--accent)); }
+    .ov-bar-fill.over { background: linear-gradient(90deg, #b45309, #ffb020); }
+    .ov-bar-marker { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 2px dashed #f4f4f5; }
+    .ov-bar-labels { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--text-dim); margin-top: 7px; }
+    .ov-bar-labels .over { color: #ffb020; }
+
+    /* ---- Pie (per main ledger, all spending) ---- */
+    .ov-charts { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    @media (min-width: 620px) { .ov-charts { grid-template-columns: 220px 1fr; align-items: center; } }
+    .ov-pie-wrap { display: flex; justify-content: center; }
+    .ov-pie { width: 200px; height: 200px; max-width: 100%; }
+    .ov-pie-empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 40px 0; }
+    .ov-legend { width: 100%; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+    .ov-legend-row { display: flex; align-items: center; gap: 8px; }
+    .ov-swatch { width: 12px; height: 12px; flex: none; border: 1px solid rgba(255,255,255,0.25); }
+    .ov-legend-row .lg-label { color: var(--text); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ov-legend-row .lg-val { color: var(--text-dim); font-family: var(--font-head); white-space: nowrap; }
+    /* Expandable ledger rows (click to reveal the sub-ledger breakdown) + a Total row. */
+    .ov-legend-row.expandable { cursor: pointer; }
+    .ov-legend-row.expandable:hover .lg-label { color: var(--accent); }
+    .ov-legend-row .lg-caret { color: var(--text-dim); font-size: 9px; flex: none; transition: transform 0.12s ease; }
+    .ov-legend-row.open .lg-caret { transform: rotate(90deg); }
+    .ov-legend-subs { display: flex; flex-direction: column; gap: 4px; padding: 5px 0 7px 22px; }
+    .ov-legend-subs[hidden] { display: none; }
+    .ov-legend-subrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+    .ov-legend-subrow .lg-sublabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ov-legend-subrow .lg-subval { font-family: var(--font-head); white-space: nowrap; }
+    .ov-legend-total { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line-strong); font-size: 13px; }
+    .ov-legend-total .lg-label { flex: 1 1 auto; color: var(--text); font-family: var(--font-head); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+    .ov-legend-total .lg-val { color: var(--accent); font-family: var(--font-head); font-weight: 600; white-space: nowrap; }
+
+    /* ---- Editable outflow table (kept — with the single-editor lock) ---- */
+    .ov-table-bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .ov-table-bar label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+    .ov-table-bar input { width: 16px; height: 16px; accent-color: var(--accent); }
+    .ov-table-bar .ov-selcount { font-size: 12px; color: var(--text-dim); }
+    .ov-etable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    .ov-etable th, .ov-etable td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .ov-etable th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.07em; font-size: 10.5px; color: var(--text-dim); font-weight: 600; }
+    .ov-etable td.et-amount { color: var(--accent); font-weight: 600; white-space: nowrap; font-family: var(--font-head); }
+    .ov-etable .et-slno { color: var(--text-faint); width: 42px; }
+    .ov-etable .et-check { width: 30px; }
+    .ov-etable .et-check input { width: 15px; height: 15px; accent-color: var(--accent); }
+    .ov-etable tr.sel td { background: rgba(245, 158, 11, 0.06); }
+    .et-actions { white-space: nowrap; text-align: right; }
+    .et-btn { font-family: var(--font-head); font-weight: 600; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent-line); padding: 6px 10px; cursor: pointer; margin-left: 6px; }
+    .et-btn:hover { color: #ffb020; }
+    .et-btn.del { color: var(--text-dim); border-color: var(--line-strong); }
+    .et-btn.del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
+    .et-empty { color: var(--text-dim); text-align: center; padding: 18px 10px; }
+    .et-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+    /* Lock banners: teal = someone else editing (view-only); amber = you hold it. */
+    .msg.lock-view { display: block; border-left-color: var(--ov-neg); background: rgba(45,212,191,0.10); color: #a7f3e6; }
+    .msg.lock-mine { display: block; border-left-color: var(--accent); background: var(--accent-soft); color: #f8dca6; }
+    @media (max-width: 620px) {
+      .ov-etable thead { display: none; }
+      .ov-etable tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
+      .ov-etable tbody td { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: none; border-bottom: 1px solid var(--line); padding: 8px 0; }
+      .ov-etable tbody tr td:last-child { border-bottom: none; }
+      .ov-etable tbody td::before { content: attr(data-label); font-family: var(--font-head); text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.07em; color: var(--text-dim); }
+      .ov-etable td.et-actions { justify-content: flex-end; }
+      .ov-etable td.et-actions::before { content: ''; }
+      .ov-etable td.et-check { justify-content: flex-start; }
+    }
+
+    /* ---- Edit modal (hosts the shared cash-out form) ---- */
+    .ef-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: start center; padding: 24px 16px; background: rgba(0,0,0,0.66); overflow: auto; }
+    .ef-backdrop[hidden] { display: none; }
+    .ef-dialog { width: 100%; max-width: 560px; background: var(--panel); border: 1px solid var(--accent-line); padding: 22px 20px; clip-path: var(--angular); box-shadow: 0 24px 70px -20px rgba(0,0,0,0.8); }
+    .ef-dialog-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .ef-dialog-head h2 { font-family: var(--font-head); font-weight: 600; font-size: 18px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text); margin: 0; }
+    .ef-x { background: transparent; border: 1px solid var(--line-strong); color: var(--text-dim); width: 34px; height: 34px; cursor: pointer; font-size: 15px; }
+    .ef-x:hover { color: var(--accent); border-color: var(--accent-line); }
+    .ef-form .field { margin-bottom: 13px; }
+    .ef-form select {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      color: var(--text); background-color: var(--panel-2); border: 1px solid var(--line-strong);
+      border-radius: 0; padding: 12px 36px 12px 13px; outline: none; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='9'%20viewBox='0%200%2014%209'%3E%3Cpath%20d='M1%201l6%206%206-6'%20fill='none'%20stroke='%23f59e0b'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center; background-size: 13px;
+    }
+    .ef-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .ef-form select:disabled { opacity: 0.5; cursor: default; background-image: none; }
+    .ef-form select option { background: #15161a; color: var(--text); }
+    .ef-form input[type="number"] {
+      width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
+      padding: 12px 14px; color: var(--text); background: var(--panel-2);
+      border: 1px solid var(--line-strong); border-radius: 0; outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .ef-form input[type="number"]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .co-dim { color: var(--text-faint); }
+    .co-note { margin: 6px 0 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
+    .co-warn { display: none; margin: 0 0 13px; padding: 10px 13px; font-size: 12.5px; line-height: 1.4; color: #f8dca6; background: var(--accent-soft); border: 1px solid var(--accent-line); border-left: 3px solid var(--accent); }
+    .co-warn.show { display: block; }
+    .ef-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+    .ef-actions .btn { width: auto; min-height: 48px; padding: 0 20px; font-size: 14px; flex: 1 1 auto; }
+    .ef-actions .btn.danger { flex: 0 0 auto; color: #f8dca6; background: var(--panel-2); border: 1px solid var(--line-strong); }
+    .ef-actions .btn.danger:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+
+    @media (max-width: 620px) {
+      .ov-table-bar input, .ov-etable .et-check input { width: 22px; height: 22px; }
+      .ov-table-bar label { min-height: 44px; }
+      .et-btn { min-height: 44px; padding: 10px 16px; margin-left: 10px; }
+      .ef-x { width: 44px; height: 44px; }
+      .ef-form .field { margin-bottom: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Galaxy WebGL background + dark scrim (both behind content, non-interactive). -->
+
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="ov-stack">
+    <main class="ov-card">
+      <div class="ov-top">
+        <div class="brand">
+          <div class="mark"><img src="/logo.svg" alt="" aria-hidden="true"></div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+        <div class="ov-top-actions">
+          <select id="ovPdfPart" class="ov-pdf-sel" aria-label="PDF section">
+            <option value="full">Whole overview</option>
+            <option value="pie">Pie chart</option>
+            <option value="table">Transaction table</option>
+            <option value="ledger">Spending by Ledger</option>
+          </select>
+          <button type="button" class="ov-pdf" id="ovPdfBtn">Download PDF</button>
+          <a class="ov-back" href="/">&larr; Back</a>
+        </div>
+      </div>
+
+      <div class="ov-head">
+        <span class="chip">Analytics</span>
+        <h1>Overview</h1>
+        <p>Where the money went, against the contracts and budget. Amounts in rupees (₹).</p>
+      </div>
+
+      <div id="ovMsg" class="msg" role="alert"></div>
+      <!-- Phase 10G — discreet reconciliation warning: shown only when reconciliation.ok is false. -->
+      <div class="ov-recon" id="ovRecon" role="status" hidden></div>
+
+      <!-- 0. Date range — scopes the spending figures (B, C, D), the budget bar, and the
+           Spending by Ledger pie. Default = all transactions. A / E / F stay cumulative. -->
+      <div class="ov-section">
+        <p class="ov-section-title">Date range</p>
+        <!-- Collapsed (default): Edit + the current span text, mirroring the Outflow
+             Entries edit bar (same .tx-bar / .btn.primary style + placement). -->
+        <div class="tx-bar" id="ovRangeBar">
+          <button type="button" class="btn primary" id="ovRangeEditBtn">Edit</button>
+          <span class="tx-status ov-span" id="ovSpan">Showing all transactions.</span>
+        </div>
+        <!-- Expanded editor (hidden until Edit is clicked). -->
+        <div class="ov-range" id="ovRangeEditor" hidden>
+          <div class="ov-range-field">
+            <label for="ovStartMonth">From</label>
+            <div class="ov-date-grid">
+              <select id="ovStartDay" aria-label="Start day"></select>
+              <select id="ovStartMonth" aria-label="Start month"></select>
+              <select id="ovStartYear" aria-label="Start year"></select>
+            </div>
+          </div>
+          <div class="ov-range-field">
+            <label for="ovEndMonth">To</label>
+            <div class="ov-date-grid">
+              <select id="ovEndDay" aria-label="End day"></select>
+              <select id="ovEndMonth" aria-label="End month"></select>
+              <select id="ovEndYear" aria-label="End year"></select>
+            </div>
+          </div>
+          <div class="ov-range-actions">
+            <button type="button" class="btn primary" id="ovRangeApply">Apply</button>
+            <button type="button" class="btn ghost" id="ovRangeAll">All dates</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 1. Summary bar — the range-scoped spending figures B / C / D, then the cumulative dues
+           balance Owed to Contractors (F), shown on-screen using the SAME value the PDF prints. -->
+      <div class="ov-section">
+        <div class="ov-figs6">
+          <div class="ov-fig"><div class="ov-fig-label">Spent by self (C)</div><div class="ov-fig-val" id="figC">₹0.00</div><div class="ov-fig-note">Σ all cash outflow</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Paid to contractors (B)</div><div class="ov-fig-val" id="figB">₹0.00</div><div class="ov-fig-note">Σ contractor payments</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Total money paid</div><div class="ov-fig-val" id="figD">₹0.00</div><div class="ov-fig-note">B + C</div></div>
+        </div>
+        <div class="ov-owed" id="ovOwed" hidden>
+          <div class="ov-fig-label">Owed to contractors (F)</div>
+          <div class="ov-fig-val" id="figF">₹0.00</div>
+          <div class="ov-owed-note">Total contract value − payments − reimbursement offsets (cumulative). The same figure as the downloadable PDF.</div>
+        </div>
+      </div>
+
+      <!-- 3. Budget (optional) + total-spent bar. -->
+      <div class="ov-section">
+        <p class="ov-section-title">Overall budget (optional)</p>
+        <div class="ov-budget-row">
+          <div class="amount-wrap">
+            <span class="rupee" aria-hidden="true">₹</span>
+            <input id="budgetInput" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-label="Budget in rupees">
+          </div>
+          <button type="button" class="btn primary" id="budgetSave">Set budget</button>
+          <button type="button" class="btn ghost" id="budgetClear">Clear</button>
+        </div>
+        <div class="ov-bar" id="ovBar">
+          <div class="ov-bar-fill" id="ovBarFill"></div>
+          <div class="ov-bar-marker" id="ovBarMarker" hidden></div>
+        </div>
+        <div class="ov-bar-labels">
+          <span id="ovBarSpent">Spent ₹0.00</span>
+          <span id="ovBarBudget">No budget set</span>
+        </div>
+      </div>
+
+      <!-- 4. Pie — spending per MAIN ledger, counting EVERY transaction (cash outflow
+           and contractor payments). Untagged contractor payments roll into Custom. -->
+      <div class="ov-section">
+        <p class="ov-section-title">Spending by Ledger</p>
+        <div class="ov-charts">
+          <div class="ov-pie-wrap"><div id="ovPie"></div></div>
+          <div class="ov-legend" id="ovLegend"></div>
+        </div>
+      </div>
+
+      <!-- Part C — upcoming contract payments. Scheduled dates surfaced forward; honest about the data
+           (no per-date amount, best-effort overdue). Hidden when the contract has no scheduled dates. -->
+      <div class="ov-section" id="ovUpcomingSection" hidden>
+        <p class="ov-section-title">Upcoming contract payments</p>
+        <p class="ov-up-note">Scheduled payment dates for the contract. Amounts aren’t tracked per scheduled date, and a recorded payment can’t be tied to a specific scheduled date — so an “overdue” note is a best-effort match on the exact date, not a confirmed amount.</p>
+        <div id="ovUpcoming" class="ov-up-list"></div>
+      </div>
+
+      <!-- 5. Editable outflow entries — bulk edit mode + Save All (single-editor lock). -->
+      <div class="ov-section">
+        <p class="ov-section-title">Outflow entries — editable</p>
+        <div id="ovLockBanner" class="msg" role="status" hidden></div>
+        <div id="ovEditMsg" class="msg" role="alert"></div>
+        <div class="tx-bar">
+          <button type="button" class="btn primary" id="ovEditBtn">Edit</button>
+          <button type="button" class="btn primary" id="ovSaveAllBtn" hidden>Save All</button>
+          <button type="button" class="btn ghost" id="ovCancelBtn" hidden>Cancel</button>
+          <span class="tx-status" id="ovEditStatus"></span>
+        </div>
+        <!-- Part A — search/filter bar (text + ledger/sub + amount). The DATE range lives in the
+             Date-range section above (it also scopes the figures); this bar has showDates:false and
+             the page merges that range into the /api/cash-out query. -->
+        <div id="ovFilter"></div>
+        <div class="tx-scroll">
+        <table class="tx-table">
+          <thead>
+            <tr>
+              <th>S.No</th><th>Date</th>
+              <th data-tip="The broad budget category this expense belongs to (one of 23 fixed categories).">Ledger</th>
+              <th data-tip="The specific item within that ledger category.">Sub-ledger</th>
+              <th>Amount</th><th>By</th><th>Remark</th><th>In Contract?</th>
+              <th data-tip="What the contract stated for this item (the reimbursement offset that reduces the contractor's dues) — not the amount actually spent.">Contract Stated</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="ovEntries"></tbody>
+        </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/ledgers.js"></script>
+  <script src="/plannr-ui.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const { formatPaise: fmtPaise, formatOwed: fmtOwed, escapeHtml: esc, formatDate: fmtDate, makeMsg, guardAuth, createDatePicker } = window.PlannrUI;
+    const LEDGERS = window.LEDGERS;
+    const ovMsg = makeMsg($('ovMsg'));
+    guardAuth();
+
+    // Vivid, high-contrast categorical palette for the pie — a DELIBERATE exception to
+    // the app's amber-only rule, chosen so up to 23 ledger slices stay distinguishable
+    // at a glance. 23 saturated colours across the wheel, ordered so neighbouring
+    // ledgers land in different colour families (adjacent slices never clash), and all
+    // bright enough to read on the dark panel. Colour is stable per ledger (fixed index);
+    // Custom / Uncategorized uses a neutral light grey that stands apart from the hues.
+    const CUSTOM_CODE = 'CUSTOM';
+    const LEDGER_PALETTE = [
+      '#e6194b', '#42d4f4', '#ffe119', '#b23fe0', '#3cb44b', '#f58231', '#4f8cff', '#f032e6',
+      '#bfef45', '#ff69b4', '#2dd4bf', '#6a4cff', '#dcbeff', '#9acd32', '#00bfff', '#ffb347',
+      '#c56bff', '#aaffc3', '#c9a66b', '#a0e7ff', '#fabed4', '#fff29a', '#7cf5a0'];
+    const colorByCode = (code) => {
+      if (code === CUSTOM_CODE) return '#cbd5e1';
+      const i = LEDGERS.findIndex((l) => l.code === code);
+      return LEDGER_PALETTE[(i < 0 ? 0 : i) % LEDGER_PALETTE.length];
+    };
+
+    let data = null;
+
+    // ---- Date range: scopes the spending figures (B/C/D), budget bar, and pie.
+    // Default = all (both bounds null). A/E/F are cumulative server-side. ----
+    const startPicker = createDatePicker({ day: $('ovStartDay'), month: $('ovStartMonth'), year: $('ovStartYear') });
+    const endPicker = createDatePicker({ day: $('ovEndDay'), month: $('ovEndMonth'), year: $('ovEndYear') });
+    let range = { start: null, end: null };
+
+    // Inclusive day count -> the two largest meaningful units. Units: year=365, month=30,
+    // week=7, day=1. Take the largest unit, then the next-smaller unit ROUNDED from the
+    // remainder (dropped when it rounds to 0). One unit when nothing smaller is meaningful.
+    function spanLabel(days) {
+      if (days <= 0) return '';
+      const UNITS = [['year', 365], ['month', 30], ['week', 7], ['day', 1]];
+      const plural = (n, u) => n + ' ' + u + (n === 1 ? '' : 's');
+      for (let i = 0; i < UNITS.length; i++) {
+        const [name, size] = UNITS[i];
+        const big = Math.floor(days / size);
+        if (big < 1) continue;
+        const next = UNITS[i + 1];
+        if (!next) return plural(big, name);
+        const small = Math.round((days - big * size) / next[1]);
+        return small > 0 ? plural(big, name) + ' ' + plural(small, next[0]) : plural(big, name);
+      }
+      return '';
+    }
+    const spanDays = (a, b) => { const [ya, ma, da] = a.split('-').map(Number), [yb, mb, db] = b.split('-').map(Number); return Math.round((Date.UTC(yb, mb - 1, db) - Date.UTC(ya, ma - 1, da)) / 86400000) + 1; };
+    // self-check (silent unless it fails): matches the spec examples + boundary cases.
+    console.assert(spanLabel(50) === '1 month 3 weeks', 'spanLabel(50)');
+    console.assert(spanLabel(400) === '1 year 1 month', 'spanLabel(400)');
+    console.assert(spanLabel(5) === '5 days', 'spanLabel(5)');
+    console.assert(spanLabel(7) === '1 week', 'spanLabel(7)');
+    console.assert(spanLabel(1) === '1 day', 'spanLabel(1)');
+
+    const overviewUrl = () => {
+      const q = [];
+      if (range.start) q.push('start=' + range.start);
+      if (range.end) q.push('end=' + range.end);
+      return '/api/overview' + (q.length ? '?' + q.join('&') : '');
+    };
+    function updateSpan() {
+      if (!range.start && !range.end) { $('ovSpan').textContent = 'Showing all transactions.'; return; }
+      $('ovSpan').innerHTML = `Showing: <b>${esc(fmtDate(range.start))} – ${esc(fmtDate(range.end))}</b> · ${esc(spanLabel(spanDays(range.start, range.end)))}`;
+    }
+
+    // Collapsed (Edit + span) <-> expanded (From/To editor) toggle, mirroring the Outflow
+    // Entries edit pattern. Filtering logic and the span-label calc are untouched.
+    let rangeEditorSeeded = false;
+    function collapseRange() { $('ovRangeEditor').hidden = true; $('ovRangeBar').hidden = false; }
+    function expandRange() {
+      if (!rangeEditorSeeded) {
+        // Sensible starting point on first open: From = earliest transaction, To = today.
+        const earliest = outflows.map((x) => x.txDate).filter(Boolean).sort()[0] || null;
+        startPicker.setISO(earliest); // null -> today
+        endPicker.setISO(null);       // -> today
+        rangeEditorSeeded = true;
+      }
+      $('ovRangeBar').hidden = true; $('ovRangeEditor').hidden = false;
+    }
+    $('ovRangeEditBtn').addEventListener('click', expandRange);
+    $('ovRangeApply').addEventListener('click', async () => {
+      const s = startPicker.getISO(), e = endPicker.getISO();
+      if (s > e) { ovMsg.show('Start date must be on or before the end date.', 'error'); return; }
+      ovMsg.clear();
+      range = { start: s, end: e };
+      updateSpan();
+      collapseRange();
+      await refreshOverview();
+      if (!txTable.isEditing()) await loadOutflows(); // re-fetch the SQL-filtered rows for the new range
+    });
+    $('ovRangeAll').addEventListener('click', async () => {
+      range = { start: null, end: null };
+      ovMsg.clear();
+      updateSpan();
+      collapseRange();
+      await refreshOverview();
+      if (!txTable.isEditing()) await loadOutflows();
+    });
+
+    async function load() {
+      const r = await fetch(overviewUrl());
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      data = await r.json();
+      $('budgetInput').value = data.budgetPaise != null ? (Math.floor(data.budgetPaise / 100) + '.' + String(data.budgetPaise % 100).padStart(2, '0')) : '';
+      renderAll();
+      // Editable-table setup: give the shared table the session user (fallback) AND the full
+      // user roster (Phase 2 — the "By" edit dropdown must list every real payer so it never
+      // silently rewrites attribution). If the roster fetch fails, the table falls back to the
+      // session user only (degraded, never blank).
+      const me = await fetch('/api/me'); if (me.ok) txTable.setUser((await me.json()).user);
+      try { const ru = await fetch('/api/users'); if (ru.ok) txTable.setRoster((await ru.json()).users); } catch { /* keep session-user fallback */ }
+      await loadOutflows();
+    }
+
+    // Re-read the SERVER's computed summary after an edit (ONE source of truth — no
+    // client-side recompute) and re-render the whole analytics section.
+    async function refreshOverview() {
+      const r = await fetch(overviewUrl());
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      data = await r.json();
+      renderAll();
+    }
+
+    function renderAll() { renderHeadlines(); renderTotalBar(); renderPieChart(); renderRecon(); renderUpcoming(); }
+    // Part C — upcoming scheduled contract payments. Dates + days remaining; a soft, clearly-labelled
+    // overdue note (no amount claimed). classList/textContent only — CSP-safe.
+    function renderUpcoming() {
+      const sec = document.getElementById('ovUpcomingSection');
+      const list = (data && data.upcomingPayments) || [];
+      if (!list.length) { sec.hidden = true; return; }
+      sec.hidden = false;
+      document.getElementById('ovUpcoming').innerHTML = list.map((u) => {
+        const overdue = u.possiblyOverdue;
+        const when = u.daysRemaining < 0
+          ? (overdue ? 'no payment recorded — possibly overdue' : 'past · payment recorded')
+          : (u.daysRemaining === 0 ? 'due today' : 'in ' + u.daysRemaining + ' day' + (u.daysRemaining === 1 ? '' : 's'));
+        return `<div class="ov-up-item${overdue ? ' ov-up-overdue' : ''}"><span class="ov-up-date">${esc(fmtDate(u.date))}</span><span class="ov-up-when">${esc(when)}</span></div>`;
+      }).join('');
+    }
+    // Phase 10G — surface the reconciliation flags (orphaned payments, missing/over offset) that
+    // previously lived only in the API response + server logs. Discreet, and figures stay as-is.
+    function renderRecon() {
+      const el = document.getElementById('ovRecon');
+      const rc = data && data.reconciliation;
+      if (!rc || rc.ok) { el.hidden = true; el.textContent = ''; return; }
+      const issues = [];
+      if (rc.orphanedContractorPayments && rc.orphanedContractorPayments.count) issues.push(rc.orphanedContractorPayments.count + ' contractor payment(s) attributed to a contract that no longer exists');
+      if (rc.includedDebitsMissingOffset && rc.includedDebitsMissingOffset.count) issues.push(rc.includedDebitsMissingOffset.count + ' "included" debit(s) with no contract-stated offset (dues don’t drop for that spend)');
+      if (rc.overOffset && rc.overOffset.over) issues.push('payments + offsets exceed the contract value by ' + fmtPaise(rc.overOffset.excessPaise) + ' (over-offset)');
+      el.textContent = '⚠ Reconciliation: ' + (issues.join('; ') || 'figures do not reconcile') + '. Figures are shown as-is, not adjusted.';
+      el.hidden = false;
+    }
+
+    // ---- 1. Summary bar — three figures (B / C / D; single source of truth). D is
+    // labelled "Total money paid" but is the SAME B + C total as before. ----
+    function renderHeadlines() {
+      const m = data.money;
+      $('figB').textContent = fmtPaise(m.paidToContractorsPaise);
+      $('figC').textContent = fmtPaise(m.spentBySelfPaise);
+      $('figD').textContent = fmtPaise(m.totalSpentPaise);
+      // Owed (F) — the SAME value the PDF uses (m.owedToContractorsPaise). Shown only when a contract
+      // exists (owed is meaningless at ₹0 with no contract). No inline styles — classes + textContent.
+      $('figF').textContent = fmtOwed(m.owedToContractorsPaise); // Phase 4C — negative = "Overpaid by ₹X"
+      $('ovOwed').hidden = !(m.totalContractPaise > 0);
+    }
+
+    // ---- 3. Total-spent bar (spent = D, total money out = self + contractor payments) ----
+    function renderTotalBar() {
+      const spent = data.money.totalSpentPaise, budget = data.budgetPaise;
+      const scale = Math.max(spent, budget || 0, 1);
+      const over = budget != null && spent > budget;
+      const fill = $('ovBarFill');
+      fill.style.width = (spent / scale * 100).toFixed(2) + '%';
+      fill.className = 'ov-bar-fill' + (over ? ' over' : '');
+      const marker = $('ovBarMarker');
+      if (budget != null) { marker.hidden = false; marker.style.left = (budget / scale * 100).toFixed(2) + '%'; }
+      else { marker.hidden = true; }
+      $('ovBarSpent').textContent = 'Spent ' + fmtPaise(spent);
+      const bl = $('ovBarBudget');
+      if (budget == null) { bl.textContent = 'No budget set'; bl.className = ''; }
+      else if (over) { bl.textContent = 'Over budget by ' + fmtPaise(spent - budget); bl.className = 'over'; }
+      else { bl.textContent = fmtPaise(budget - spent) + ' left · Budget ' + fmtPaise(budget); bl.className = ''; }
+    }
+
+    // ---- 4. Pie: one slice per MAIN ledger of ALL spending — cash outflow AND
+    // contractor payments (nothing excluded by who paid or scope). Sub-ledgers are
+    // already rolled into each main's totalPaise server-side; Custom is one slice. ----
+    function ledgerSlices() {
+      return (data.ledgers || [])
+        .filter((L) => L.totalPaise > 0)
+        .map((L) => ({ code: L.code, label: L.name, value: L.totalPaise, color: colorByCode(L.code), subs: L.subs || [], noSub: L.noSub || { totalPaise: 0 } }));
+    }
+    function renderPie(slices) {
+      const total = slices.reduce((a, s) => a + s.value, 0);
+      if (total <= 0) { $('ovPie').innerHTML = '<div class="ov-pie-empty">No spending to chart yet.</div>'; return; }
+      const cx = 50, cy = 50, r = 46;
+      if (slices.length === 1) {
+        $('ovPie').innerHTML = `<svg class="ov-pie" viewBox="0 0 100 100" role="img" aria-label="Spending by ledger"><circle cx="${cx}" cy="${cy}" r="${r}" fill="${slices[0].color}"/></svg>`;
+        return;
+      }
+      let a0 = -Math.PI / 2;
+      const paths = slices.map((s) => {
+        const a1 = a0 + (s.value / total) * Math.PI * 2;
+        const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+        const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+        const large = (a1 - a0) > Math.PI ? 1 : 0;
+        a0 = a1;
+        return `<path d="M${cx},${cy} L${x0.toFixed(3)},${y0.toFixed(3)} A${r},${r} 0 ${large},1 ${x1.toFixed(3)},${y1.toFixed(3)} Z" fill="${s.color}"/>`;
+      }).join('');
+      // Full pie (no centre hole).
+      $('ovPie').innerHTML = `<svg class="ov-pie" viewBox="0 0 100 100" role="img" aria-label="Spending by ledger">${paths}</svg>`;
+    }
+    // Sub-ledger breakdown rows for one ledger (respecting the active range: `subs` and
+    // `noSub` are server-computed for the current /api/overview range — the SAME filtered
+    // dataset the pie uses). They always sum back to the ledger's own total (server
+    // invariant subsSumToMains), so an expanded ledger reconciles exactly.
+    function subRowsFor(s) {
+      const rows = (s.subs || []).filter((x) => x.totalPaise > 0).map((x) => ({ name: x.name, value: x.totalPaise }));
+      if (s.noSub && s.noSub.totalPaise > 0) rows.push({ name: 'No sub-ledger', value: s.noSub.totalPaise });
+      return rows.sort((a, b) => b.value - a.value);
+    }
+    function renderLegend(slices) {
+      if (!slices.length) { $('ovLegend').innerHTML = '<div class="ov-empty">No spending recorded yet.</div>'; return; }
+      const total = slices.reduce((a, s) => a + s.value, 0); // == pie total (Σ of all ledgers)
+      const rows = slices.map((s) => {
+        const subsHtml = subRowsFor(s).map((r) => `<div class="ov-legend-subrow"><span class="lg-sublabel">${esc(r.name)}</span><span class="lg-subval">${fmtPaise(r.value)}</span></div>`).join('');
+        return `<div class="ov-legend-row expandable" role="button" tabindex="0" aria-expanded="false" aria-label="${esc(s.label)}, ${fmtPaise(s.value)} — expand sub-ledger breakdown">
+            <span class="ov-swatch" data-color="${s.color}"></span>
+            <span class="lg-label">${esc(s.label)}</span>
+            <span class="lg-caret" aria-hidden="true">▸</span>
+            <span class="lg-val">${fmtPaise(s.value)}</span>
+          </div>
+          <div class="ov-legend-subs" hidden>${subsHtml}</div>`;
+      }).join('');
+      $('ovLegend').innerHTML = rows + `<div class="ov-legend-total"><span class="lg-label">Total</span><span class="lg-val">${fmtPaise(total)}</span></div>`;
+      // Set swatch colours via the CSSOM (data-color) rather than an inline style= attribute, so a
+      // hash-based CSP style-src needs no 'unsafe-hashes' (Phase 8C). el.style.x is not gated by CSP.
+      $('ovLegend').querySelectorAll('.ov-swatch[data-color]').forEach((el) => { el.style.background = el.dataset.color; });
+    }
+    function renderPieChart() { const s = ledgerSlices(); renderPie(s); renderLegend(s); }
+
+    // Expand/collapse a ledger legend row to show its sub-ledger breakdown. Delegated on
+    // the stable #ovLegend container so it survives re-renders (range change / edits).
+    (function () {
+      const legend = $('ovLegend');
+      const toggle = (row) => {
+        const subs = row.nextElementSibling;
+        if (!subs || !subs.classList.contains('ov-legend-subs')) return;
+        const open = subs.hidden; subs.hidden = !open;
+        row.setAttribute('aria-expanded', String(open));
+        row.classList.toggle('open', open);
+      };
+      legend.addEventListener('click', (ev) => { const row = ev.target.closest && ev.target.closest('.ov-legend-row.expandable'); if (row) toggle(row); });
+      legend.addEventListener('keydown', (ev) => { if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList && ev.target.classList.contains('expandable')) { ev.preventDefault(); toggle(ev.target); } });
+    })();
+
+    // ---- Budget set / clear ----
+    async function putBudget(rupees) {
+      ovMsg.clear();
+      const res = await fetch('/api/budget', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ budgetRupees: rupees }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { ovMsg.show(d.error || 'Could not save the budget.', 'error'); return; }
+      data.budgetPaise = d.budgetPaise;
+      $('budgetInput').value = d.budgetPaise != null ? (Math.floor(d.budgetPaise / 100) + '.' + String(d.budgetPaise % 100).padStart(2, '0')) : '';
+      renderTotalBar();
+      ovMsg.show(d.budgetPaise != null ? 'Budget set.' : 'Budget cleared.', 'success');
+    }
+    $('budgetSave').addEventListener('click', () => {
+      const v = $('budgetInput').value.trim().replace(/,/g, '');
+      if (v !== '' && (!/^\d+(\.\d{1,2})?$/.test(v) || Number(v) <= 0)) { ovMsg.show('Enter a valid budget greater than 0 (up to 2 decimals).', 'error'); return; }
+      putBudget(v);
+    });
+    $('budgetClear').addEventListener('click', () => { $('budgetInput').value = ''; putBudget(''); });
+
+    // ---- PDF download (server-side Playwright). Four independent parts. Delivery via
+    // the native share sheet (Web Share API with files) where supported, else a normal
+    // file download. Carries the currently-selected date range. ----
+    const pdfRangeQuery = () => {
+      const q = [];
+      if (range.start) q.push('start=' + range.start);
+      if (range.end) q.push('end=' + range.end);
+      return q.length ? '&' + q.join('&') : '';
+    };
+    async function downloadPdf(part) {
+      ovMsg.clear();
+      // Light/dark theme choice before rendering (cancel aborts).
+      const theme = await window.PlannrUI.choiceModal({
+        title: 'PDF theme',
+        message: 'Render this PDF in light or dark mode?',
+        options: [{ label: 'Light', value: 'light' }, { label: 'Dark', value: 'dark' }],
+      });
+      if (!theme) return;
+      const btn = $('ovPdfBtn'); btn.disabled = true;
+      try {
+        const res = await fetch(`/api/overview/pdf?part=${encodeURIComponent(part)}&theme=${theme}${pdfRangeQuery()}`);
+        if (!res.ok) { const d = await res.json().catch(() => ({})); ovMsg.show(d.error || 'Could not generate the PDF.', 'error'); return; }
+        const blob = await res.blob();
+        const fname = `plannr-overview-${part}-${new Date().toISOString().slice(0, 10)}.pdf`;
+        const file = new File([blob], fname, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try { await navigator.share({ files: [file], title: 'Plannr' }); return; }
+          catch (err) { if (err && err.name === 'AbortError') return; } // user cancelled; else fall through to download
+        }
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = objUrl; a.download = fname;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+      } catch { ovMsg.show('Network error generating the PDF.', 'error'); }
+      finally { btn.disabled = false; }
+    }
+    $('ovPdfBtn').addEventListener('click', () => downloadPdf($('ovPdfPart').value));
+
+    // ===================== Editable outflow table (bulk edit + Save All) =====================
+    // ONE shared table (PlannrUI.createEditableCashOutTable) — same component as the
+    // Money Debited log. Editing is guarded by the single-editor lock: entering edit
+    // mode acquires it (heartbeat while held), Save All / Cancel release it. Save All
+    // asks the "Are you sure?" confirm modal (editing EXISTING rows); per-row validation
+    // flags + holds back bad rows while the rest save.
+    const tableMsg = makeMsg($('ovEditMsg'));
+    let outflows = [];
+    let dirty = false;
+    let lockStatus = { locked: false, holder: null, byMe: false, stale: false };
+    let heartbeatTimer = null, pollTimer = null;
+    const readOnlyForMe = () => lockStatus.locked && !lockStatus.byMe;
+    const OVERVIEW_EDIT_HEADER = { 'X-Overview-Edit': '1' }; // marks lock-protected writes
+
+    const txTable = window.PlannrUI.createEditableCashOutTable({
+      tbody: $('ovEntries'),
+      emptyText: 'No outflow entries yet.',
+      tooltips: true,          // Ledger/Sub-ledger cells reveal full name when clipped
+      deleteInEditMode: true,  // per-row Delete only appears once Edit is active
+      onDirty: (d) => { dirty = d; $('ovEditStatus').textContent = d ? 'Unsaved changes' : ''; },
+    });
+    // Part A — search/filter bar (text/ledger/amount). The DATE range comes from the section above
+    // (it also scopes the figures); we merge it into the SAME /api/cash-out query so the table is
+    // SQL-filtered server-side (no client-side filtering over the DOM). Disabled while editing.
+    const filterBar = window.PlannrUI.createLedgerFilterBar({
+      container: $('ovFilter'),
+      showDates: false,
+      onChange: () => { if (!txTable.isEditing()) loadOutflows(); },
+    });
+    function outflowQuery() {
+      const f = filterBar.getFilters();
+      const p = new URLSearchParams();
+      for (const k of ['q', 'ledger', 'subledger', 'min', 'max']) if (f[k]) p.set(k, f[k]);
+      if (range.start) p.set('start', range.start);
+      if (range.end) p.set('end', range.end);
+      const s = p.toString();
+      return '/api/cash-out' + (s ? '?' + s : '');
+    }
+
+    async function loadOutflows() {
+      const r = await fetch(outflowQuery());
+      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
+      const data = await r.json();
+      outflows = data.entries; // only the SQL-filtered rows (date range + bar filters, all server-side)
+      txTable.setEntries(outflows);
+      filterBar.setCount(outflows.length, data.total != null ? data.total : outflows.length);
+    }
+
+    // Delete is an EDIT-MODE row action now (the button only renders while editing).
+    // It keeps its own window.confirm — the "Are you sure?" modal is ONLY for Save All.
+    $('ovEntries').addEventListener('click', (ev) => {
+      const del = ev.target.getAttribute && ev.target.getAttribute('data-del');
+      if (del) deleteRow(Number(del));
+    });
+
+    // Tooltip controller (Change 2): concept tips on Ledger/Sub-ledger headers; full-name
+    // reveal on data cells that the column width clips. Delegated, so it survives table
+    // re-renders. Shows on hover (mouse) and on tap/click (touch) — tap elsewhere / Esc
+    // dismisses. Truncated-cell tips only fire when the text is actually clipped.
+    (function initTooltips() {
+      const bub = document.createElement('div');
+      bub.className = 'pl-tip'; bub.setAttribute('role', 'tooltip'); bub.hidden = true;
+      document.body.appendChild(bub);
+      let curr = null, sticky = false;
+      const source = (n) => {
+        if (!n || !n.closest) return null;
+        if (n.closest('.col-grip, .row-grip')) return null; // don't show a tip while grabbing a resize handle
+        return n.closest('.tx-clabel, .tx-table th[data-tip], .tx-table td.tx-tip');
+      };
+      function tipText(el) {
+        // Phone stacked layout: the in-cell label span carries the SAME concept as the
+        // (hidden) header — look it up from the matching header's data-tip. One source.
+        if (el.classList && el.classList.contains('tx-clabel')) {
+          const label = el.textContent.trim();
+          const th = [].slice.call(document.querySelectorAll('.tx-table thead th')).find((t) => t.textContent.trim() === label);
+          return th ? (th.getAttribute('data-tip') || '') : '';
+        }
+        if (el.hasAttribute('data-tip')) return el.getAttribute('data-tip');
+        // Truncated data cell -> reveal the full name (data-full avoids the hidden label text).
+        if (el.classList.contains('tx-tip') && el.scrollWidth > el.clientWidth + 1) return el.getAttribute('data-full') || el.textContent.trim();
+        return '';
+      }
+      function show(el) {
+        const t = tipText(el);
+        if (!t) { hide(); return; }
+        bub.textContent = t; bub.hidden = false; curr = el;
+        const r = el.getBoundingClientRect();
+        const vw = document.documentElement.clientWidth;
+        let left = r.left + r.width / 2 - bub.offsetWidth / 2 + window.scrollX;
+        left = Math.max(window.scrollX + 8, Math.min(left, window.scrollX + vw - bub.offsetWidth - 8));
+        let top = r.top + window.scrollY - bub.offsetHeight - 8;
+        if (top < window.scrollY + 4) top = r.bottom + window.scrollY + 8; // flip below if no room above
+        bub.style.left = left + 'px'; bub.style.top = top + 'px';
+      }
+      function hide() { bub.hidden = true; curr = null; }
+      document.addEventListener('mouseover', (e) => { if (sticky) return; const s = source(e.target); if (s) show(s); });
+      document.addEventListener('mouseout', (e) => { if (sticky) return; const s = source(e.target); if (s && s === curr) hide(); });
+      document.addEventListener('click', (e) => {
+        const s = source(e.target);
+        if (s) { sticky = true; show(s); }
+        else { sticky = false; hide(); }
+      });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { sticky = false; hide(); } });
+      window.addEventListener('resize', () => { if (curr) show(curr); });
+    })();
+
+    // Phase 2B — drag-to-resize (mouse + touch via Pointer Events). Session-only: sizes
+    // are inline styles that vanish on reload — no storage. Minimums keep everything
+    // readable. AMOUNT_MIN is only a DRAG clamp — it stops the user dragging the Amount
+    // column narrower than ~148px; it is NOT a base-layout floor (the base widths are pure
+    // proportional %, see styles.css — there is no CSS floor, min-width on a cell is inert
+    // under table-layout:fixed). At desktop width the proportional share already exceeds the
+    // ₹12,34,567.89 text (80.3px), and .tx-amount is overflow:visible, so it does not clip there.
+    (function initResize() {
+      const table = document.querySelector('.tx-table');
+      if (!table) return;
+      const headRow = table.tHead && table.tHead.rows[0];
+      const tbody = $('ovEntries');
+      const COL_MIN = 52, AMOUNT_COL = 5, AMOUNT_MIN = 148, ROW_MIN = 34;
+
+      function drag(e, grip, onMove) {
+        e.preventDefault(); e.stopPropagation();
+        document.body.classList.add('tx-resizing');
+        // Listen on window (not the grip): mouse moves leave the 9px grip immediately,
+        // and touch keeps an implicit capture that still bubbles here. Robust for both.
+        const move = (ev) => onMove(ev);
+        const end = () => {
+          document.body.classList.remove('tx-resizing');
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', end);
+          window.removeEventListener('pointercancel', end);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', end);
+        window.addEventListener('pointercancel', end);
+      }
+
+      // Column handles — one per header cell, except the trailing empty actions column.
+      if (headRow) {
+        const cells = [].slice.call(headRow.cells);
+        cells.forEach((th, i) => {
+          if (i >= cells.length - 1) return;
+          const grip = document.createElement('span');
+          grip.className = 'col-grip'; grip.setAttribute('aria-hidden', 'true');
+          th.appendChild(grip);
+          const min = (i + 1) === AMOUNT_COL ? AMOUNT_MIN : COL_MIN;
+          grip.addEventListener('pointerdown', (e) => {
+            const startX = e.clientX, startW = th.getBoundingClientRect().width;
+            drag(e, grip, (ev) => { th.style.width = Math.max(min, startW + (ev.clientX - startX)) + 'px'; });
+          });
+        });
+      }
+
+      // Row handles — rows re-render, so (re)decorate after each tbody mutation.
+      function decorateRows() {
+        [].slice.call(tbody.querySelectorAll('tr[data-id]')).forEach((tr) => {
+          if (tr.querySelector('.row-grip')) return;
+          const host = tr.querySelector('.tx-actions') || tr.lastElementChild;
+          if (!host) return;
+          const grip = document.createElement('span');
+          grip.className = 'row-grip'; grip.setAttribute('aria-hidden', 'true');
+          host.appendChild(grip);
+          grip.addEventListener('pointerdown', (e) => {
+            const startY = e.clientY, startH = tr.getBoundingClientRect().height;
+            drag(e, grip, (ev) => { tr.style.height = Math.max(ROW_MIN, startH + (ev.clientY - startY)) + 'px'; });
+          });
+        });
+      }
+      new MutationObserver(decorateRows).observe(tbody, { childList: true });
+      decorateRows();
+    })();
+
+    // ---- Edit-mode toolbar ----
+    function toggleEditUI(on) { $('ovEditBtn').hidden = on; $('ovSaveAllBtn').hidden = !on; $('ovCancelBtn').hidden = !on; filterBar.setEnabled(!on); }
+    $('ovEditBtn').addEventListener('click', async () => {
+      tableMsg.clear();
+      if (readOnlyForMe()) { tableMsg.show(lockBusyText(), 'error'); return; }
+      if (!(await acquireLock())) { tableMsg.show(lockBusyText(), 'error'); return; }
+      if (!txTable.enterEdit()) { tableMsg.show('No entries to edit in this range.', 'error'); await releaseLock(); pollLock(); return; }
+      startHeartbeat();
+      toggleEditUI(true);
+    });
+    $('ovCancelBtn').addEventListener('click', async () => {
+      txTable.cancelEdit(); toggleEditUI(false); stopHeartbeat(); dirty = false; $('ovEditStatus').textContent = '';
+      tableMsg.clear();
+      await releaseLock(); pollLock();
+    });
+    $('ovSaveAllBtn').addEventListener('click', saveAll);
+
+    async function saveAll() {
+      tableMsg.clear();
+      const c = txTable.collect(); // validates changed rows; flags invalid ones in place
+      if (!c.changed) { tableMsg.show('No changes to save.', 'success'); return; }
+      // Save All confirm — shared builder includes the loud attribution warning (Phase 2/2.1).
+      const ok = await window.PlannrUI.confirmModal({
+        title: 'Save changes?',
+        message: window.PlannrUI.saveAllMessage(c),
+        confirmLabel: 'Save changes',
+      });
+      if (!ok) return;
+      $('ovSaveAllBtn').disabled = true;
+      // Phase 6B: one batched request (was one PUT per row). Overview sends X-Overview-Edit so the
+      // server checks the single-editor lock once; per-row hold-back comes back in the results.
+      const { saved, held } = await window.PlannrUI.saveAllBatch(c, { table: txTable, headers: OVERVIEW_EDIT_HEADER });
+      $('ovSaveAllBtn').disabled = false;
+      if (held === 0) {
+        stopHeartbeat(); toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
+        await releaseLock();
+        await refreshOverview(); await loadOutflows(); pollLock();
+        tableMsg.show(`Saved ${saved} change${saved === 1 ? '' : 's'} — totals recomputed.`, 'success');
+      } else {
+        await refreshOverview(); // saved rows already persisted; keep editing the held ones
+        tableMsg.show(`Saved ${saved}, held back ${held}. Fix the flagged row${held === 1 ? '' : 's'} and Save All again.`, 'error');
+      }
+    }
+
+    async function deleteRow(id) {
+      // Delete lives in edit mode only now (button hidden otherwise), so the single-editor
+      // lock is already held. Reloading resets any OTHER in-progress row edits, so warn
+      // when there are unsaved changes. Stays in edit mode afterwards (lock/heartbeat kept).
+      const warn = dirty
+        ? 'Delete this entry? Your other unsaved changes will be reset. The entry is soft-deleted and recoverable.'
+        : 'Delete this entry? It can be recovered later (soft-deleted).';
+      if (!window.confirm(warn)) return;
+      tableMsg.clear();
+      try {
+        const res = await fetch('/api/cash-out/' + id, { method: 'DELETE', headers: OVERVIEW_EDIT_HEADER });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { tableMsg.show(d.error || 'Could not delete the entry.', 'error'); return; }
+        tableMsg.show('Entry deleted — totals recomputed.', 'success');
+      } catch { tableMsg.show('Network error. Please try again.', 'error'); return; }
+      await refreshOverview();
+      await loadOutflows();               // setEntries -> read render; component leaves edit
+      if (!txTable.enterEdit()) {          // no rows left in range -> fully exit edit mode
+        toggleEditUI(false); stopHeartbeat(); dirty = false; $('ovEditStatus').textContent = '';
+        await releaseLock(); pollLock();
+      }
+    }
+
+    // ---- Single-editor lock (server-authoritative; heartbeat; stale takeover) ----
+    const lockBusyText = () => (lockStatus.holder ? lockStatus.holder.displayName : 'Someone') + ' is editing right now — you can view but not edit.';
+    function applyLock(ls) {
+      if (!ls) return;
+      lockStatus = ls;
+      const b = $('ovLockBanner');
+      if (readOnlyForMe()) { b.textContent = lockBusyText(); b.className = 'msg show lock-view'; b.hidden = false; $('ovEditBtn').disabled = true; }
+      else if (lockStatus.byMe) { b.textContent = 'You are editing (lock held). Save or Cancel to free it for others.'; b.className = 'msg show lock-mine'; b.hidden = false; $('ovEditBtn').disabled = false; }
+      else { b.hidden = true; b.className = 'msg'; $('ovEditBtn').disabled = false; }
+    }
+    async function pollLock() { try { const r = await fetch('/api/overview/lock'); if (r.ok) applyLock((await r.json()).lock); } catch {} }
+    async function acquireLock() { const res = await fetch('/api/overview/lock', { method: 'POST' }); const d = await res.json().catch(() => ({})); if (d.lock) applyLock(d.lock); return res.ok; }
+    async function releaseLock() { try { await fetch('/api/overview/lock', { method: 'DELETE', keepalive: true }); } catch {} }
+    function stopHeartbeat() { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } }
+    function startHeartbeat() {
+      stopHeartbeat();
+      heartbeatTimer = setInterval(async () => {
+        try {
+          const res = await fetch('/api/overview/lock/heartbeat', { method: 'POST' });
+          const d = await res.json().catch(() => ({}));
+          if (d.lock) applyLock(d.lock);
+          if (!res.ok) { // lock taken over after going stale — discard unsaved edits, refresh
+            stopHeartbeat(); txTable.cancelEdit(); toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
+            tableMsg.show('Your edit lock was taken over — unsaved changes were discarded. Showing the latest.', 'error');
+            await refreshOverview(); await loadOutflows(); await pollLock();
+          }
+        } catch {}
+      }, 30000);
+    }
+
+    // Warn before navigating away with unsaved edits; free the lock on real unload.
+    window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('pagehide', () => { clearInterval(pollTimer); if (lockStatus.byMe) releaseLock(); });
+    // Returning to a backgrounded tab refreshes lock state immediately so it's never stale.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLock(); });
+
+    // Poll every 15s ONLY while the tab is visible AND the lock isn't held here: a background
+    // tab makes zero lock requests, and while editing the 30s heartbeat already refreshes state.
+    load().then(() => { pollLock(); pollTimer = setInterval(() => { if (!document.hidden && !lockStatus.byMe) pollLock(); }, 15000); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Log in · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bp-host">
+  <div class="blueprint" aria-hidden="true">
+    <svg viewBox="0 0 1000 720" fill="none" stroke="#f59e0b" stroke-width="1.6"
+         stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+      <!-- drawing sheet frame -->
+      <rect x="42" y="42" width="916" height="636"/>
+      <rect x="60" y="60" width="880" height="600" stroke-width="1"/>
+      <!-- north arrow -->
+      <circle cx="892" cy="112" r="20" stroke-width="1"/>
+      <path d="M892 94 L899 124 L892 116 L885 124 Z" stroke-width="1"/>
+      <!-- ground line + hatch -->
+      <line x1="120" y1="600" x2="880" y2="600"/>
+      <path d="M150 600 l-13 17 M186 600 l-13 17 M222 600 l-13 17 M258 600 l-13 17 M294 600 l-13 17 M330 600 l-13 17 M366 600 l-13 17 M402 600 l-13 17 M438 600 l-13 17 M474 600 l-13 17 M510 600 l-13 17 M546 600 l-13 17 M582 600 l-13 17 M618 600 l-13 17 M654 600 l-13 17 M690 600 l-13 17 M726 600 l-13 17 M762 600 l-13 17 M798 600 l-13 17 M834 600 l-13 17" stroke-width="1"/>
+      <!-- roof + eave -->
+      <path d="M278 300 L500 186 L722 300"/>
+      <line x1="270" y1="309" x2="730" y2="309"/>
+      <!-- chimney -->
+      <path d="M624 258 L624 210 L658 210 L658 240"/>
+      <!-- house body + storey division -->
+      <rect x="300" y="300" width="400" height="300"/>
+      <line x1="300" y1="450" x2="700" y2="450"/>
+      <!-- door + steps -->
+      <rect x="466" y="492" width="68" height="108"/>
+      <line x1="500" y1="492" x2="500" y2="600" stroke-width="1"/>
+      <circle cx="522" cy="548" r="3" stroke-width="1"/>
+      <path d="M452 600 L548 600 M444 612 L556 612 M436 624 L564 624" stroke-width="1"/>
+      <!-- ground-floor windows -->
+      <rect x="336" y="500" width="74" height="66"/>
+      <line x1="373" y1="500" x2="373" y2="566" stroke-width="1"/>
+      <line x1="336" y1="533" x2="410" y2="533" stroke-width="1"/>
+      <rect x="590" y="500" width="74" height="66"/>
+      <line x1="627" y1="500" x2="627" y2="566" stroke-width="1"/>
+      <line x1="590" y1="533" x2="664" y2="533" stroke-width="1"/>
+      <!-- upper-floor windows -->
+      <rect x="336" y="345" width="74" height="66"/>
+      <line x1="373" y1="345" x2="373" y2="411" stroke-width="1"/>
+      <line x1="336" y1="378" x2="410" y2="378" stroke-width="1"/>
+      <rect x="463" y="345" width="74" height="66"/>
+      <line x1="500" y1="345" x2="500" y2="411" stroke-width="1"/>
+      <line x1="463" y1="378" x2="537" y2="378" stroke-width="1"/>
+      <rect x="590" y="345" width="74" height="66"/>
+      <line x1="627" y1="345" x2="627" y2="411" stroke-width="1"/>
+      <line x1="590" y1="378" x2="664" y2="378" stroke-width="1"/>
+      <!-- overall width dimension -->
+      <line x1="278" y1="612" x2="278" y2="662" stroke-width="1"/>
+      <line x1="722" y1="612" x2="722" y2="662" stroke-width="1"/>
+      <line x1="278" y1="650" x2="722" y2="650" stroke-width="1"/>
+      <path d="M278 650 l14 -5 M278 650 l14 5 M722 650 l-14 -5 M722 650 l-14 5" stroke-width="1"/>
+      <!-- height dimension -->
+      <line x1="248" y1="186" x2="212" y2="186" stroke-width="1"/>
+      <line x1="248" y1="600" x2="212" y2="600" stroke-width="1"/>
+      <line x1="230" y1="186" x2="230" y2="600" stroke-width="1"/>
+      <path d="M230 186 l-5 14 M230 186 l5 14 M230 600 l-5 -14 M230 600 l5 -14" stroke-width="1"/>
+      <!-- title block -->
+      <rect x="726" y="606" width="214" height="54" stroke-width="1"/>
+      <line x1="726" y1="633" x2="940" y2="633" stroke-width="1"/>
+      <line x1="806" y1="606" x2="806" y2="660" stroke-width="1"/>
+    </svg>
+  </div>
+
+  <div class="hud-frame hud-frame--pulse" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <main class="shell">
+    <aside class="brand-panel brand-panel--anim">
+      <canvas class="lw-canvas" aria-hidden="true"></canvas>
+      <div class="brand-content">
+        <div class="brand reveal d1">
+          <div class="mark">
+            <img src="/logo.svg" alt="" aria-hidden="true">
+          </div>
+          <div>
+            <div class="wordmark">Plannr</div>
+            <span class="sub">Construction Ledger</span>
+          </div>
+        </div>
+
+        <p class="tagline reveal d2">Track every rupee of the build against the <b>contract and budget</b>.</p>
+      </div>
+    </aside>
+
+    <section class="form-panel">
+      <div class="form-head reveal d2">
+        <span class="chip">Sign in</span>
+        <h1>Log in</h1>
+        <p>Enter your credentials to open the ledger.</p>
+      </div>
+
+      <div id="msg" class="msg" role="alert"></div>
+
+      <form id="loginForm" class="reveal d3" novalidate>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" type="text"
+                 autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="password-wrap">
+            <input id="password" name="password" type="password"
+                   autocomplete="current-password" required>
+            <button type="button" class="toggle" id="toggle" aria-label="Show password" aria-pressed="false">
+              <svg class="icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn primary" id="submitBtn">Log in</button>
+      </form>
+
+      <p class="switch reveal d4"><span class="chip">New here?</span> <a href="/register.html">Create an account</a></p>
+    </section>
+  </main>
+
+  <script src="/auth.js"></script>
+  <script>
+    initAuth({
+      formId: 'loginForm',
+      endpoint: '/api/login',
+      bodyFields: ['username', 'password'],
+      toggleFields: ['password'],
+      checkSession: true,
+      busyText: 'Logging in…',
+      idleText: 'Log in',
+      onSuccess: 'redirect',
+      successRedirect: '/',
+      errorFallback: 'Login failed. Please try again.',
+    });
+  </script>
+
+  <script type="module">
+    import { initLineWaves } from '/linewaves.js';
+    const canvas = document.querySelector('.lw-canvas');
+    if (canvas) {
+      initLineWaves(canvas, {
+        colors: [
+          [0.961, 0.620, 0.043],  // #f59e0b
+          [0.984, 0.749, 0.141],  // #fbbf24
+          [0.706, 0.325, 0.035],  // #b45309
+        ],
+        brightness: 0.18,
+        amplitude: 1.0,
+        mouse: true,
+      });
+    }
+  </script>
+</body>
+</html>

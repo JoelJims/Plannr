@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Data Backup · Plannr</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="preload" href="/fonts/chakra-petch-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/rajdhani-600.woff2" as="font" type="font/woff2" crossorigin>
+
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Content layer sits above the shared blueprint-grid background, below the
+       HUD frame. Single centred card — this is a plain settings-style screen. */
+    .bk-stack {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 820px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .bk-card {
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      padding: 24px 20px 22px;
+    }
+    .bk-card .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .bk-card .mark { width: 44px; height: 44px; }
+    .bk-card .mark svg { width: 29px; height: 29px; }
+    .bk-card .wordmark { font-size: 21px; }
+    .bk-card .sub { font-size: 10px; margin-top: 5px; }
+
+    .bk-head .chip { margin-bottom: 12px; }
+    .bk-head h1 {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 28px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      margin: 0 0 5px;
+      line-height: 1;
+    }
+    .bk-head .lead { margin: 0 0 6px; color: var(--text-dim); font-size: 14px; line-height: 1.5; max-width: 52ch; }
+
+    /* ---- One section per action, separated by a hairline ---- */
+    .bk-section { border-top: 1px solid var(--line-strong); padding-top: 20px; margin-top: 22px; }
+    .bk-section h2 {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 15px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin: 0 0 6px;
+    }
+    .bk-section h2 .tag {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      border: 1px solid var(--accent-line);
+      background: var(--accent-soft);
+      padding: 2px 7px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .bk-section h2 .tag.muted { color: var(--text-dim); border-color: var(--line-strong); background: rgba(255,255,255,0.04); }
+    .bk-section p { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; max-width: 54ch; }
+    .bk-note { color: var(--text-faint); font-size: 12px; line-height: 1.45; margin: 12px 0 0; }
+    .bk-warn { color: #ffb020; font-size: 12.5px; line-height: 1.45; margin: 0 0 12px; } /* amber-only (was coral) */
+    .bk-optin { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 13px; margin: 0 0 6px; cursor: pointer; max-width: 54ch; }
+    .bk-optin input { flex: none; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+
+    /* ---- Themed file picker ---- */
+    .file-input {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      color: var(--text-dim);
+      font-size: 13px;
+      background: var(--panel-2);
+      border: 1px solid var(--line-strong);
+      padding: 8px;
+      margin-bottom: 12px;
+    }
+    .file-input::file-selector-button {
+      font-family: var(--font-head);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-size: 12px;
+      color: var(--accent);
+      background: transparent;
+      border: 1px solid var(--accent-line);
+      padding: 7px 12px;
+      margin-right: 12px;
+      cursor: pointer;
+    }
+    .file-input::file-selector-button:hover { background: var(--accent-soft); }
+
+    /* ---- Back link (amber underline, like the other screens) ---- */
+    .bk-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid var(--accent-line);
+      padding-bottom: 2px;
+      align-self: flex-start;
+    }
+    .bk-back:hover { color: #ffb020; border-bottom-color: var(--accent); }
+    .bk-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ---- Change-password section (relocated from Home; styling unchanged) ---- */
+    .change-pw {
+      margin-top: 22px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);   /* same divider weight as .switch */
+    }
+    .change-pw .cp-title {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 18px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin: 12px 0 16px;
+      line-height: 1.2;
+    }
+    .change-pw .btn { margin-top: 4px; }
+
+    /* ---- Delete-account section (relocated from Home; destructive) ---- */
+    .delete-acct {
+      margin-top: 22px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+    .delete-acct .da-title {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: 18px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin: 12px 0 6px;
+      line-height: 1.2;
+    }
+    .delete-acct .da-warn { font-size: 13px; color: #ffb020; margin: 0 0 14px; line-height: 1.4; } /* amber-only (was coral) */
+    .btn.danger {
+      color: #f3b4a8;
+      background: transparent;
+      border: 1px solid #7a3b33;
+      margin-top: 4px;
+    }
+    .btn.danger:hover { background: rgba(200, 80, 60, 0.14); border-color: #b0554b; color: #ffcabf; }
+    .btn.danger:active { transform: translateY(1px); }
+    .btn.danger:disabled { opacity: 0.55; cursor: default; }
+
+    /* ---- Recycle Bin: a compact grouped list (NOT the 9-column table) so the Data card
+       stays a centered, comfortable width. Cyber-HUD: amber accent, angular clipped buttons. */
+    .rb-group { margin-top: 16px; }
+    .rb-group:first-of-type { margin-top: 4px; }
+    .rb-group h3 { font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
+    .rb-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .rb-item { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border: 1px solid var(--line-strong); background: var(--panel-2); font-size: 13.5px; }
+    .rb-item .rb-what { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .rb-item .rb-when { color: var(--text-faint); font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
+    .rb-item .rb-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+    .rb-btn { font-family: var(--font-head); font-weight: 600; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 10px; cursor: pointer; border: 1px solid var(--accent-line); background: transparent; color: var(--accent); line-height: 1;
+      clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px); }
+    .rb-btn:hover { background: var(--accent-soft); color: #ffb020; }
+    .rb-btn.rb-del { color: #f3b4a8; border-color: #7a3b33; }
+    .rb-btn.rb-del:hover { background: rgba(200, 80, 60, 0.14); border-color: #b0554b; color: #ffcabf; }
+    .rb-empty { color: var(--text-faint); font-size: 13px; margin: 6px 0 0; }
+    @media (max-width: 560px) { .rb-item { flex-wrap: wrap; } .rb-item .rb-actions { width: 100%; } }
+
+    @media (min-width: 720px) {
+      .bk-card { padding: 34px 34px 30px; }
+      .bk-head h1 { font-size: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="hud-frame" aria-hidden="true">
+    <span class="corner tl"></span>
+    <span class="corner tr"></span>
+    <span class="corner bl"></span>
+    <span class="corner br"></span>
+  </div>
+
+  <div class="bk-stack">
+    <a class="bk-back" href="/">&larr; Back to home</a>
+
+    <main class="bk-card">
+      <div class="brand">
+        <div class="mark">
+          <img src="/logo.svg" alt="" aria-hidden="true">
+        </div>
+        <div>
+          <div class="wordmark">Plannr</div>
+          <span class="sub">Construction Ledger</span>
+        </div>
+      </div>
+
+      <div class="bk-head">
+        <span class="chip">Backup</span>
+        <h1>Data Backup</h1>
+        <p class="lead">Save a copy of your ledger, restore it, or export a spreadsheet-friendly copy for Excel. Your account, password and login sessions are never included in a backup.</p>
+      </div>
+
+      <!-- 1. JSON backup (restorable) -->
+      <section class="bk-section">
+        <h2>JSON backup <span class="tag">Restorable</span></h2>
+        <p>Downloads your complete ledger — every inflow, outflow, loan, contract and the budget, including entries you've deleted — as one <code>.json</code> file. This is the file to keep for a safe restore.</p>
+        <label class="bk-optin"><input type="checkbox" id="includeContactsChk"> Include Daily Report contacts (Gmail addresses &amp; WhatsApp numbers)</label>
+        <p class="bk-note">Off by default: a backup you email or store elsewhere then carries your family's contact details. Leave this unchecked unless you specifically need them in the file — the budget and schedule times are always included either way, and restoring a backup without contacts leaves any already saved on this device untouched.</p>
+        <div id="jsonMsg" class="msg" role="status" aria-live="polite"></div>
+        <button type="button" id="downloadJsonBtn" class="btn primary">Download JSON backup</button>
+      </section>
+
+      <!-- 2. Import / restore -->
+      <section class="bk-section">
+        <h2>Import / Restore <span class="tag">Replaces data</span></h2>
+        <p>Restores a Plannr JSON backup, replacing all current ledger data with the file's contents. Your current data is automatically saved to a snapshot first.</p>
+        <p class="bk-warn">Warning: this replaces everything in the ledger and can't be undone from inside the app.</p>
+        <div id="importMsg" class="msg" role="status" aria-live="polite"></div>
+        <input type="file" id="importFile" class="file-input" accept="application/json,.json" aria-label="Choose a Plannr JSON backup to restore">
+        <button type="button" id="importBtn" class="btn ghost">Import / Restore</button>
+      </section>
+
+      <!-- 3. CSV export (Excel, export-only) -->
+      <section class="bk-section">
+        <h2>CSV for Excel <span class="tag muted">Export only</span></h2>
+        <p>Downloads a set of clearly-named <code>.csv</code> files (one per table) with amounts in rupees and ledger codes shown with their names — easy to open, read and print in Excel.</p>
+        <div id="csvMsg" class="msg" role="status" aria-live="polite"></div>
+        <button type="button" id="downloadCsvBtn" class="btn ghost">Download CSV (for Excel)</button>
+        <p class="bk-note">CSV is for viewing/printing in Excel and cannot be imported back — use JSON to restore. CSV shows your live entries only (deleted rows are left out; the JSON backup keeps them).</p>
+      </section>
+
+      <!-- 4. Recycle Bin (Phase 3C) — view / restore / permanently-delete soft-deleted rows. -->
+      <section class="bk-section">
+        <h2>Recycle Bin <span class="tag muted">Restore / delete</span></h2>
+        <p>Everything you've deleted across Plannr is kept here. <b>Restore</b> returns a row to its page and back into the Overview totals. <b>Delete permanently</b> removes it for good — that one, unlike every other delete in the app, cannot be undone.</p>
+        <div id="trashMsg" class="msg" role="status" aria-live="polite"></div>
+        <div id="trashBody"><p class="rb-empty">Loading…</p></div>
+      </section>
+
+      <!-- Part D — sign-in activity: last login, active sessions, recent auth events, sign-out-everywhere.
+           Detection surface: a log nobody reads is storage, not detection. -->
+      <section class="bk-section">
+        <h2>Sign-in activity <span class="tag muted">Security</span></h2>
+        <p>Who has signed in to your account, from where, and any failed attempts — so a stolen session leaves a trace. Sessions aren't tied to one network (your phone roams between Wi-Fi and mobile data), so if anything here looks wrong, use <b>Sign out everywhere</b>.</p>
+        <div id="avMsg" class="msg" role="status" aria-live="polite"></div>
+        <p class="av-summary" id="avSummary"></p>
+        <p class="av-sub">Active sessions</p>
+        <div id="avSessions" class="av-list"><p class="av-empty">Loading…</p></div>
+        <button type="button" id="signOutAll" class="btn ghost">Sign out everywhere</button>
+        <p class="av-sub">Recent events</p>
+        <div id="avEvents" class="av-list"><p class="av-empty">Loading…</p></div>
+        <!-- Part D (follow-up) — GLOBAL username-enumeration signal: attempts on usernames that don't
+             exist. Not tied to your account (kept out of the events above), shown so you can see it. -->
+        <p class="av-sub">Attempts on unknown usernames <span class="tag muted">global</span></p>
+        <div id="avUnknown" class="av-list"><p class="av-empty">None recorded.</p></div>
+      </section>
+
+      <!-- Change password (relocated from Home). Reuses the shared .field / label /
+           input / .password-wrap / .toggle / .msg / .btn styles from styles.css. -->
+      <div class="change-pw">
+        <span class="chip">Security</span>
+        <p class="cp-title">Change password</p>
+
+        <div id="cpMsg" class="msg" role="alert"></div>
+
+        <div class="field">
+          <label for="currentPassword">Current password</label>
+          <div class="password-wrap">
+            <input id="currentPassword" type="password" autocomplete="current-password">
+            <button type="button" class="toggle pw-toggle" aria-label="Show password" aria-pressed="false" data-target="currentPassword">
+              <svg class="icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="newPassword">New password</label>
+          <div class="password-wrap">
+            <input id="newPassword" type="password" autocomplete="new-password">
+            <button type="button" class="toggle pw-toggle" aria-label="Show password" aria-pressed="false" data-target="newPassword">
+              <svg class="icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="confirmNewPassword">Confirm new password</label>
+          <div class="password-wrap">
+            <input id="confirmNewPassword" type="password" autocomplete="new-password">
+            <button type="button" class="toggle pw-toggle" aria-label="Show password" aria-pressed="false" data-target="confirmNewPassword">
+              <svg class="icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="button" class="btn primary" id="changePwBtn">Change password</button>
+      </div>
+
+      <!-- Delete my own account (destructive). Requires the current password +
+           a confirm dialog; the server also enforces a data-safety guard that
+           blocks deletion if the account owns any ledger entries. -->
+      <div class="delete-acct">
+        <p class="da-title">Delete account</p>
+        <p class="da-warn">Permanently deletes your account. This cannot be undone.</p>
+
+        <div id="daMsg" class="msg" role="alert"></div>
+
+        <div class="field">
+          <label for="daPassword">Confirm with your password</label>
+          <div class="password-wrap">
+            <input id="daPassword" type="password" autocomplete="current-password">
+            <button type="button" class="toggle pw-toggle" aria-label="Show password" aria-pressed="false" data-target="daPassword">
+              <svg class="icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="button" class="btn danger" id="deleteAcctBtn">Delete my account</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="/plannr-ui.js"></script>
+  <script>
+    (function () {
+      const { paiseToInput, formatDate: fmtDate, makeMsg, guardAuth } = window.PlannrUI;
+      guardAuth(); // secondary client-side guard (server-side requireAuth is primary)
+
+      const jsonMsg = makeMsg(document.getElementById('jsonMsg'));
+      const importMsg = makeMsg(document.getElementById('importMsg'));
+      const csvMsg = makeMsg(document.getElementById('csvMsg'));
+
+      // Trigger a browser download of a Blob under a chosen filename.
+      function download(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      }
+
+      const today = () => {
+        const d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      };
+
+      // Phase 10C — deleted_at is stored UTC (SQLite datetime('now')). Convert to the IST calendar
+      // date for display; otherwise a row deleted between 00:00 and 05:30 IST reads a day early.
+      const istDate = (utc) => {
+        if (!utc) return '';
+        const d = new Date(String(utc).replace(' ', 'T') + 'Z'); // parse the stored value as UTC
+        return isNaN(d) ? String(utc).slice(0, 10) : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+      };
+
+      // ---- 1. Download JSON backup ------------------------------------------
+      const downloadJsonBtn = document.getElementById('downloadJsonBtn');
+      downloadJsonBtn.addEventListener('click', async () => {
+        jsonMsg.clear();
+        downloadJsonBtn.disabled = true;
+        try {
+          const includeContacts = document.getElementById('includeContactsChk').checked;
+          const res = await fetch('/api/backup/export' + (includeContacts ? '?includeContacts=1' : ''));
+          if (!res.ok) { jsonMsg.show('Could not build the backup. Please try again.', 'error'); return; }
+          const data = await res.json();
+          download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `plannr-backup-${today()}.json`);
+          jsonMsg.show('Backup downloaded. Keep this file somewhere safe.', 'success');
+        } catch {
+          jsonMsg.show('Network error. Please try again.', 'error');
+        } finally {
+          downloadJsonBtn.disabled = false;
+        }
+      });
+
+      // ---- 2. Import / Restore ----------------------------------------------
+      const importFile = document.getElementById('importFile');
+      const importBtn = document.getElementById('importBtn');
+      const TABLE_LABEL = {
+        cash_in: 'inflow', cash_out: 'outflow', loans: 'loan',
+        contract: 'contract row', contract_payment_dates: 'payment date', contractor_payments: 'contractor payment', settings: 'setting',
+      };
+      function summariseCounts(imported) {
+        // e.g. "3 inflows, 1 outflow, 0 loans, ..." in a fixed, readable order.
+        return ['cash_in', 'cash_out', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments', 'settings']
+          .map((t) => {
+            const n = imported[t] || 0;
+            const w = TABLE_LABEL[t];
+            const word = n === 1 ? w : (w.endsWith('y') ? w.slice(0, -1) + 'ies' : w + 's');
+            return n + ' ' + word;
+          })
+          .join(', ');
+      }
+
+      importBtn.addEventListener('click', async () => {
+        importMsg.clear();
+        const file = importFile.files && importFile.files[0];
+        if (!file) { importMsg.show('Choose a Plannr JSON backup file first.', 'error'); return; }
+
+        let text;
+        try { text = await file.text(); } catch { importMsg.show('Could not read that file.', 'error'); return; }
+        let parsed;
+        try { parsed = JSON.parse(text); } catch { importMsg.show("This file isn't valid JSON — choose a Plannr JSON backup.", 'error'); return; }
+
+        if (!window.confirm('This REPLACES all current data with the backup. Current data is auto-saved first, but this can\'t be undone in the app.')) return;
+
+        importBtn.disabled = true;
+        try {
+          const res = await fetch('/api/backup/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(parsed),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            let msg = 'Restored ✓ — ' + summariseCounts(data.imported || {}) + '.';
+            if (data.snapshot) msg += ' A safety copy of your previous data was saved to ' + data.snapshot + '.';
+            if (data.remappedUsers > 0) msg += ' ' + data.remappedUsers + ' entr' + (data.remappedUsers === 1 ? 'y' : 'ies') + ' referenced a person not in this install — kept the label, shown as “Unknown”.';
+            importMsg.show(msg, 'success');
+          } else {
+            importMsg.show(data.error || 'Import failed. Your current data is unchanged.', 'error');
+          }
+        } catch {
+          importMsg.show('Network error. Your current data is unchanged.', 'error');
+        } finally {
+          importBtn.disabled = false;
+        }
+      });
+
+      // ---- 3. Download CSV (for Excel) --------------------------------------
+      // Human-readable, from the LIVE list endpoints (already-resolved "by" and
+      // ledger labels). One file per table. Excludes soft-deleted rows.
+      const csvCell = (v) => {
+        const s = String(v == null ? '' : v);
+        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const toCsv = (header, rows) => '﻿' + [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
+      const rupees = (paise) => (paise == null ? '' : paiseToInput(paise)); // plain rupees, e.g. 14000.00
+      const scopeLabel = (s) => (s === 'included' ? 'Yes' : s === 'extra' ? 'No' : (s || '')); // "Contract Included"
+
+      const downloadCsvBtn = document.getElementById('downloadCsvBtn');
+      downloadCsvBtn.addEventListener('click', async () => {
+        csvMsg.clear();
+        downloadCsvBtn.disabled = true;
+        try {
+          const [ci, co, ln, ct, cp] = await Promise.all([
+            fetch('/api/cash-in').then((r) => r.json()),
+            fetch('/api/cash-out').then((r) => r.json()),
+            fetch('/api/loans').then((r) => r.json()),
+            fetch('/api/contracts').then((r) => r.json()),
+            fetch('/api/contractor-payments').then((r) => r.json()),
+          ]);
+
+          const contractsList = ct.contracts || [];
+          const paymentsList = cp.payments || [];
+          const stamp = today();
+          const files = [];
+
+          // Cash Inflow
+          files.push([`plannr-cash-inflow-${stamp}.csv`, toCsv(
+            ['Sl.No', 'Amount (₹)', 'By', 'Reason'],
+            (ci.entries || []).map((e, i) => [i + 1, rupees(e.amountPaise), e.by, e.reason]),
+          )]);
+
+          // Cash Outflow
+          files.push([`plannr-cash-outflow-${stamp}.csv`, toCsv(
+            ['Sl.No', 'Date', 'Amount (₹)', 'By', 'Ledger / Sub-ledger', 'Remark', 'Contract Included', 'Contract Stated (₹)'],
+            // Phase 5-follow-up: contract's stated amount for the item (reimbursement offset) in
+            // rupees via the same rupees() converter; blank for 'extra' rows (rupees(null) === '').
+            (co.entries || []).map((e, i) => [i + 1, fmtDate(e.txDate), rupees(e.amountPaise), e.by, e.ledger, e.reason, scopeLabel(e.contractScope), rupees(e.contractStatedPaise)]),
+          )]);
+
+          // Loans
+          files.push([`plannr-loans-${stamp}.csv`, toCsv(
+            ['Sl.No', 'Amount (₹)', 'Bank', 'Interest rate (%)', 'Tenure'],
+            (ln.loans || []).map((l, i) => [i + 1, rupees(l.amountPaise), l.bankName, l.interestRate == null ? '' : l.interestRate, l.tenure]),
+          )]);
+
+          // Contracts (one row per contract; scheduled payment dates joined)
+          files.push([`plannr-contracts-${stamp}.csv`, toCsv(
+            ['Sl.No', 'Contractor', 'Area of work', 'Ledger', 'Amount (₹)', 'Stated amount (₹)', 'Date signed', 'Date ends', 'Payment dates'],
+            contractsList.map((c, i) => [i + 1, c.contractorName, c.areaOfWork, c.ledger, rupees(c.amountPaise), rupees(c.statedAmountPaise), fmtDate(c.dateSigned), fmtDate(c.dateEnds), (c.paymentDates || []).map(fmtDate).join('; ')]),
+          )]);
+
+          // Contractor Payments (money paid to contractors, per contract)
+          files.push([`plannr-contractor-payments-${stamp}.csv`, toCsv(
+            ['Sl.No', 'Contract', 'Date', 'Amount (₹)', 'Ledger', 'Remarks'],
+            paymentsList.map((p, i) => [i + 1, p.contractorName || '', fmtDate(p.payDate), rupees(p.amountPaise), p.ledger, p.remarks]),
+          )]);
+
+          // Trigger the downloads one after another (browsers ask once to allow
+          // multiple files; no zip dependency needed).
+          files.forEach(([name, content], i) => {
+            setTimeout(() => download(new Blob([content], { type: 'text/csv;charset=utf-8' }), name), i * 350);
+          });
+          csvMsg.show('Downloading ' + files.length + ' CSV files (your browser may ask to allow multiple downloads).', 'success');
+        } catch {
+          csvMsg.show('Could not build the CSV files. Please try again.', 'error');
+        } finally {
+          downloadCsvBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
+  <script>
+    // ---- Account controls (relocated from Home; logic unchanged) ----
+    (function () {
+      // Show/hide eye toggles — mirror the login/register pattern (CSS swaps the
+      // icon via [aria-pressed]; JS only flips the input type + aria state).
+      document.querySelectorAll('.change-pw .pw-toggle, .delete-acct .pw-toggle').forEach((btn) => {
+        const input = document.getElementById(btn.dataset.target);
+        btn.addEventListener('click', () => {
+          const reveal = input.type === 'password';
+          input.type = reveal ? 'text' : 'password';
+          btn.setAttribute('aria-pressed', String(reveal));
+          btn.setAttribute('aria-label', reveal ? 'Hide password' : 'Show password');
+        });
+      });
+
+      // ---- Change password ----
+      const cpMsg = document.getElementById('cpMsg');
+      const changePwBtn = document.getElementById('changePwBtn');
+      const cpCurrent = document.getElementById('currentPassword');
+      const cpNew = document.getElementById('newPassword');
+      const cpConfirm = document.getElementById('confirmNewPassword');
+      const MIN_PW = 8;
+
+      function showCpMsg(text, type) {
+        cpMsg.textContent = text;
+        cpMsg.className = 'msg show ' + type;
+      }
+
+      changePwBtn.addEventListener('click', async () => {
+        cpMsg.className = 'msg';
+        // Client-side pre-check (mirror the server messages).
+        if (cpNew.value.length < MIN_PW) {
+          showCpMsg('Password must be at least ' + MIN_PW + ' characters.', 'error');
+          return;
+        }
+        if (cpNew.value !== cpConfirm.value) {
+          showCpMsg('Passwords do not match.', 'error');
+          return;
+        }
+        changePwBtn.disabled = true;
+        try {
+          const res = await fetch('/api/change-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              currentPassword: cpCurrent.value,
+              newPassword: cpNew.value,
+              confirmPassword: cpConfirm.value,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            showCpMsg(data.message || 'Password changed. Please log in again.', 'success');
+            setTimeout(() => { location.href = '/login.html'; }, 900); // logged out everywhere
+            return; // keep the button disabled while we navigate away
+          }
+          showCpMsg(data.error || 'Could not change password.', 'error'); // leave fields intact
+        } catch {
+          showCpMsg('Network error. Please try again.', 'error');
+        }
+        changePwBtn.disabled = false; // re-enable only on failure
+      });
+
+      // ---- Delete my own account (server enforces the data-safety guard + own-account only) ----
+      const daMsg = document.getElementById('daMsg');
+      const daPassword = document.getElementById('daPassword');
+      const deleteAcctBtn = document.getElementById('deleteAcctBtn');
+      function showDaMsg(text, type) { daMsg.textContent = text; daMsg.className = 'msg show ' + type; }
+
+      deleteAcctBtn.addEventListener('click', async () => {
+        daMsg.className = 'msg';
+        if (!daPassword.value) { showDaMsg('Enter your password to confirm.', 'error'); return; }
+        if (!window.confirm('This permanently deletes your account. This cannot be undone.')) return;
+        deleteAcctBtn.disabled = true;
+        try {
+          const res = await fetch('/api/delete-account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentPassword: daPassword.value }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) { location.href = '/login.html'; return; } // account gone; keep disabled while navigating
+          showDaMsg(data.error || 'Could not delete the account.', 'error'); // e.g. wrong password, or data-safety block
+        } catch {
+          showDaMsg('Network error. Please try again.', 'error');
+        }
+        deleteAcctBtn.disabled = false; // re-enable only on failure
+      });
+    })();
+  </script>
+  <script>
+    // ---- Recycle Bin (Phase 3C): list soft-deleted rows grouped by table, restore, or
+    // permanently delete. Compact list; Delete permanently is the one irreversible action. ----
+    (function () {
+      const { makeMsg, confirmModal, formatPaise: fp, formatDate: fmtDate } = window.PlannrUI;
+      const msg = makeMsg(document.getElementById('trashMsg'));
+      const body = document.getElementById('trashBody');
+      const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const LABELS = { cash_out: 'Cash outflow', cash_in: 'Cash inflow', loans: 'Loans', contract: 'Contracts', contractor_payments: 'Contractor payments' };
+      const ORDER = ['cash_out', 'cash_in', 'loans', 'contract', 'contractor_payments'];
+
+      // One-line human description per table, reusing the resolved fields the API already sent.
+      function describe(t, e) {
+        if (t === 'cash_in') return `${fp(e.amountPaise)} — ${esc(e.by) || '—'}${e.reason ? ' · ' + esc(e.reason) : ''}`;
+        if (t === 'cash_out') return `${fp(e.amountPaise)} — ${esc(e.ledger) || '—'} · ${esc(e.by) || '—'}`;
+        if (t === 'loans') return `${fp(e.amountPaise)} — ${esc(e.bankName) || 'loan'}`;
+        if (t === 'contract') return `${esc(e.contractorName) || '—'} — ${esc(e.areaOfWork) || '—'} · stated ${fp(e.statedAmountPaise)}`;
+        if (t === 'contractor_payments') return `${fp(e.amountPaise)} to ${esc(e.contractorName) || '—'} · ${esc(fmtDate(e.payDate))}`;
+        return '';
+      }
+
+      function render(trash) {
+        const groups = ORDER.filter((t) => (trash[t] || []).length);
+        if (!groups.length) { body.innerHTML = '<p class="rb-empty">The Recycle Bin is empty — nothing has been deleted.</p>'; return; }
+        body.innerHTML = groups.map((t) => `
+          <div class="rb-group">
+            <h3>${esc(LABELS[t])} (${trash[t].length})</h3>
+            <ul class="rb-list">
+              ${trash[t].map((e) => `<li class="rb-item" data-t="${t}" data-id="${e.id}">
+                <span class="rb-what">${describe(t, e)}</span>
+                <span class="rb-when">deleted ${esc(fmtDate(istDate(e.deletedAt)))} IST</span>
+                <span class="rb-actions">
+                  <button type="button" class="rb-btn rb-restore">Restore</button>
+                  <button type="button" class="rb-btn rb-del">Delete permanently</button>
+                </span>
+              </li>`).join('')}
+            </ul>
+          </div>`).join('');
+      }
+
+      async function load() {
+        try {
+          const r = await fetch('/api/trash');
+          if (!r.ok) { body.innerHTML = '<p class="rb-empty">Could not load the Recycle Bin.</p>'; return; }
+          render((await r.json()).trash || {});
+        } catch { body.innerHTML = '<p class="rb-empty">Network error loading the Recycle Bin.</p>'; }
+      }
+
+      body.addEventListener('click', async (ev) => {
+        const btn = ev.target.closest && ev.target.closest('button'); if (!btn) return;
+        const li = btn.closest('.rb-item'); if (!li) return;
+        const t = li.getAttribute('data-t'), id = li.getAttribute('data-id');
+        if (btn.classList.contains('rb-restore')) {
+          msg.clear();
+          try {
+            const r = await fetch(`/api/trash/${t}/${id}/restore`, { method: 'POST' });
+            const d = await r.json().catch(() => ({}));
+            if (r.ok) { msg.show('Restored — it is back in its list and the Overview totals.', 'success'); load(); }
+            else msg.show(d.error || 'Could not restore this item.', 'error');
+          } catch { msg.show('Network error while restoring.', 'error'); }
+        } else if (btn.classList.contains('rb-del')) {
+          const ok = await confirmModal({
+            title: 'Delete permanently?',
+            message: 'This permanently removes the item and CANNOT be recovered — unlike every other delete in Plannr, there is no undo.',
+            confirmLabel: 'Delete permanently',
+          });
+          if (!ok) return;
+          msg.clear();
+          try {
+            const r = await fetch(`/api/trash/${t}/${id}`, { method: 'DELETE' });
+            const d = await r.json().catch(() => ({}));
+            if (r.ok) { msg.show('Permanently deleted.', 'success'); load(); }
+            else msg.show(d.error || 'Could not delete this item.', 'error');
+          } catch { msg.show('Network error while deleting.', 'error'); }
+        }
+      });
+
+      load();
+    })();
+
+    // ---- Part D — sign-in activity: last login, active sessions, recent auth events, sign-out-everywhere.
+    // A log nobody reads is storage, not detection — this is the reading surface. ----
+    (function () {
+      const { makeMsg, confirmModal, formatDate: fmtDate } = window.PlannrUI;
+      const msg = makeMsg(document.getElementById('avMsg'));
+      const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const summaryEl = document.getElementById('avSummary');
+      const sessEl = document.getElementById('avSessions');
+      const evEl = document.getElementById('avEvents');
+      const EVENT_LABEL = { login_success: 'Signed in', login_failed: 'Failed sign-in', logout: 'Signed out', password_change: 'Password changed', lockout: 'Locked (too many failures)' };
+
+      function renderSummary(d) {
+        summaryEl.replaceChildren();
+        summaryEl.append(document.createTextNode(d.lastLogin ? ('Last login: ' + d.lastLogin.atIST + (d.lastLogin.ip ? ' · ' + d.lastLogin.ip : '')) : 'First login — welcome.'));
+        const n = d.failedSinceLastLogin || 0;
+        if (n > 0) { const w = document.createElement('span'); w.className = 'home-fail'; w.textContent = ' ⚠ ' + n + ' failed attempt' + (n === 1 ? '' : 's') + ' since then.'; summaryEl.append(w); }
+        const u = (d.unknownLoginFailures && d.unknownLoginFailures.sinceLastLogin) || 0;
+        if (u > 0) { const w = document.createElement('span'); w.className = 'home-fail'; w.textContent = ' ⚠ ' + u + ' on unknown usernames since then (possible enumeration).'; summaryEl.append(w); }
+      }
+      function renderUnknown(info) {
+        const el = document.getElementById('avUnknown');
+        const list = (info && info.recent) || [];
+        if (!list.length) { el.innerHTML = '<p class="av-empty">None recorded.</p>'; return; }
+        el.innerHTML = list.map((e) => `<div class="av-item av-warn">
+          <span class="av-when">${esc(e.atIST || '')}</span>
+          <span class="av-type">tried “${esc(e.username || '')}”</span>
+          <span class="av-ip">${esc(e.ip || '')}</span>
+        </div>`).join('');
+      }
+      function renderSessions(list) {
+        if (!list.length) { sessEl.innerHTML = '<p class="av-empty">No active sessions.</p>'; return; }
+        sessEl.innerHTML = list.map((s) => `<div class="av-item${s.current ? ' av-current' : ''}">
+          <span class="av-when">${esc(fmtDate((s.createdAt || '').slice(0, 10)))}</span>
+          <span class="av-ip">${esc(s.ip || 'unknown IP')}${s.current ? ' · this device' : ''}</span>
+          <span class="av-ua">${esc((s.userAgent || '').slice(0, 80)) || '—'}</span>
+        </div>`).join('');
+      }
+      function renderEvents(list) {
+        if (!list.length) { evEl.innerHTML = '<p class="av-empty">No recent events.</p>'; return; }
+        evEl.innerHTML = list.map((e) => `<div class="av-item${(e.type === 'login_failed' || e.type === 'lockout') ? ' av-warn' : ''}">
+          <span class="av-when">${esc(e.atIST || '')}</span>
+          <span class="av-type">${esc(EVENT_LABEL[e.type] || e.type)}${e.username ? ' (' + esc(e.username) + ')' : ''}</span>
+          <span class="av-ip">${esc(e.ip || '')}</span>
+        </div>`).join('');
+      }
+      async function load() {
+        try {
+          const r = await fetch('/api/sessions');
+          if (!r.ok) { sessEl.innerHTML = '<p class="av-empty">Could not load sign-in activity.</p>'; evEl.innerHTML = ''; return; }
+          const d = await r.json();
+          renderSummary(d); renderSessions(d.sessions || []); renderEvents(d.events || []); renderUnknown(d.unknownLoginFailures);
+        } catch { sessEl.innerHTML = '<p class="av-empty">Network error.</p>'; }
+      }
+      document.getElementById('signOutAll').addEventListener('click', async () => {
+        const ok = await confirmModal({ title: 'Sign out everywhere?', message: 'This ends every active session, including this one — you will need to sign in again on all your devices.', confirmLabel: 'Sign out everywhere' });
+        if (!ok) return;
+        try {
+          const r = await fetch('/api/sign-out-everywhere', { method: 'POST' });
+          if (r.ok) { location.href = '/login.html'; return; }
+          msg.show('Could not sign out. Please try again.', 'error');
+        } catch { msg.show('Network error. Please try again.', 'error'); }
+      });
+      load();
+    })();
+  </script>
+</body>
+</html>
