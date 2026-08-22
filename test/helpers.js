@@ -10,8 +10,7 @@ const crypto = require('node:crypto');
 const assert = require('node:assert');
 
 // --- env, set BEFORE any require of ./db or ./server ---------------------------------------------
-process.env.PLANNR_TEST = '1';                       // structural: whatsapp.init() no-ops, makeTransport() -> null
-process.env.PLANNR_NO_CATCHUP = '1';                 // Phase 11A: boot catch-up is a NO-OP under test — every file starts the app, and without this a due channel could fire a real send at boot
+process.env.PLANNR_TEST = '1';                       // structural: makeTransport() -> null
 if (!process.env.PLANNR_DB) {
   process.env.PLANNR_DB = path.join(os.tmpdir(), `plannr-test-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
 }
@@ -23,7 +22,6 @@ assert.notStrictEqual(path.resolve(TEST_DB).toLowerCase(), LIVE_DB.toLowerCase()
 const app = require('../server'); // requires ./db (binds prepared statements to TEST_DB) with side effects gated off
 const { db } = require('../db');
 const pw = require('../password');
-const dailyReport = require('../daily-report');
 
 // One bcrypt hash, computed ONCE and reused for every seeded user via direct INSERT — bcrypt at 12
 // rounds is ~200ms, so registering users through the route would dominate the suite's runtime.
@@ -42,9 +40,6 @@ function startApp() {
   });
 }
 async function stopApp() {
-  // Stop any node-cron jobs a test's saveConfig()/reschedule() created — their timers keep the event
-  // loop alive and would hang node --test's per-file process on exit.
-  try { dailyReport._stopAll(); } catch { /* ignore */ }
   // Close a Playwright PDF browser that a GET /overview may have warmed — its open handles would
   // otherwise keep the process alive and hang the file's runner.
   try { if (app._closePdfBrowser) await app._closePdfBrowser(); } catch { /* ignore */ }

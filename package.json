@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch --require ./dev-env.js server.js",
+    "dev": "node --watch server.js",
     "reset-db": "node reset-db.js --confirm",
     "seed:demo": "node seed-demo.js",
     "test": "node run-tests.js",
@@ -21,8 +21,6 @@
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2",
-    "node-cron": "^4.6.0",
-    "nodemailer": "^9.0.3",
     "playwright": "^1.61.1"
   }
 }

@@ -1,9 +1,8 @@
 // Plannr — Express server: registration, login, sessions, logout.
 
-// Load .env (Gmail credentials for the Daily Report emailer) BEFORE anything reads
-// process.env. Node built-in — no dotenv dependency. Real environment variables win
-// over the file, and a missing .env is fine (the Daily Report just stays unconfigured).
-try { process.loadEnvFile(); } catch { /* no .env present — Daily Report stays unconfigured */ }
+// Load .env (if present) BEFORE anything reads process.env. Node built-in — no dotenv
+// dependency. Real environment variables win over the file, and a missing .env is fine.
+try { process.loadEnvFile(); } catch { /* no .env present */ }
 
 const path = require('path');
 const fs = require('fs');
@@ -13,9 +12,16 @@ const cookieParser = require('cookie-parser');
 const pw = require('./password'); // shared hashing + strength (bcrypt + cost factor live there)
 const { db, init, DB_PATH, SESSION_TTL_DAYS, cleanupExpiredSessions } = require('./db');
 const { LEDGERS } = require('./public/ledgers.js'); // fixed 23-ledger reference (single source, shared with the browser)
-const dailyReport = require('./daily-report');       // scheduled Overview-PDF delivery (email)
-const { makeCooldown } = require('./cooldown');      // per-session throttle for the manual test-send buttons
 const csp = require('./csp');                        // Phase 8C: per-page CSP (inline hashes computed at boot)
+
+// Shared IST (Asia/Kolkata) date/time stamps — used by auth-event logging, the Overview PDF
+// filename, and upcoming-payment day counts. IST has no DST, so no seasonal complexity.
+const IST_TZ = 'Asia/Kolkata';
+function istDateStamp(d = new Date()) { return new Intl.DateTimeFormat('en-CA', { timeZone: IST_TZ }).format(d); }
+function istStampFull(d = new Date()) {
+  const hm = new Intl.DateTimeFormat('en-GB', { timeZone: IST_TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(d).replace(/^24:/, '00:');
+  return `${istDateStamp(d)} ${hm} IST`;
+}
 
 const app = express();
 app.disable('x-powered-by'); // don't advertise the framework/version
@@ -178,7 +184,7 @@ function pushRing(tenantId, key, rec) {
 }
 function evRec(type, detail = {}) {
   const now = new Date();
-  const rec = { at: now.toISOString(), atIST: dailyReport.istStampFull(now), type, ip: detail.ip || null };
+  const rec = { at: now.toISOString(), atIST: istStampFull(now), type, ip: detail.ip || null };
   if (detail.username != null) rec.username = String(detail.username).slice(0, 60); // NEVER the password
   return rec;
 }
@@ -1805,7 +1811,7 @@ function daysBetweenIso(fromIso, toIso) {
   return Math.round((Date.UTC(yb, mb - 1, db2) - Date.UTC(ya, ma - 1, da)) / 86400000);
 }
 function computeUpcomingPayments(tenantId) {
-  const today = dailyReport.istDateStamp();
+  const today = istDateStamp();
   const out = [];
   for (const c of repo.contract.list(tenantId)) { // one live contract per tenant, but loop is correct either way
     for (const d of repo.contract.payDatesFor(tenantId, c.id)) {
@@ -1816,60 +1822,6 @@ function computeUpcomingPayments(tenantId) {
   }
   out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return out;
-}
-
-// Part B — the "what changed since the last report" text + the current figures (for the next snapshot).
-// Injected into daily-report.js via init(), so computeOverview + repo stay here. prevSnapshot is the
-// channel's last-success snapshot (or null on the first-ever send).
-function buildReportExtras(tenantId, prevSnapshot) {
-  const ov = computeOverview(tenantId, { start: null, end: null }); // all-time — matches the scheduled PDF's scope
-  const figures = ov.money;
-  const today = dailyReport.istDateStamp();
-  const since = prevSnapshot && prevSnapshot.at ? repo.overview.outsSince(tenantId, prevSnapshot.at) : null; // { c, s } | null
-  const todayRows = LEDGER_CRUDS.cash_out.search(tenantId, { start: today, end: today }).map(cashOutRow); // reuse Part A's search
-  return { text: formatReportDelta({ figures, prevSnapshot, since, todayRows, upcoming: ov.upcomingPayments }), figures };
-}
-
-// +₹x / −₹x / '' — signed rupee delta for the headline-movement line.
-function fmtSigned(paise) { return (paise > 0 ? '+' : paise < 0 ? '−' : '') + fmtRs(Math.abs(paise)); }
-
-function formatReportDelta({ figures, prevSnapshot, since, todayRows, upcoming }) {
-  const L = ['— What changed since the last report —'];
-  if (!prevSnapshot) {
-    L.push('This is the first report — there is no earlier one to compare against.');
-  } else {
-    const boundary = prevSnapshot.atIST || prevSnapshot.at;
-    if (!since || since.c === 0) {
-      L.push(`Nothing new has been logged since the last report (${boundary}).`);
-    } else {
-      L.push(`Since the last report (${boundary}): ${since.c} new ${since.c === 1 ? 'entry' : 'entries'} logged, ${fmtRs(since.s)} in total.`);
-    }
-    const pf = prevSnapshot.figures || {};
-    const moves = [];
-    for (const [label, key] of [['Total spent', 'totalSpentPaise'], ['Paid to contractors', 'paidToContractorsPaise'], ['Owed to contractors', 'owedToContractorsPaise'], ['Loans received', 'loanReceivedPaise']]) {
-      const d = (figures[key] || 0) - (pf[key] || 0);
-      if (d !== 0) moves.push(`${label} ${fmtSigned(d)} (now ${fmtRs(figures[key] || 0)})`);
-    }
-    L.push(moves.length ? 'Movement: ' + moves.join('; ') + '.' : 'Headline figures are unchanged.');
-  }
-  // Today's individual transactions (a handful of lines — bounded, unlike the removed full table).
-  if (todayRows.length) {
-    L.push(`Logged today (${todayRows.length}):`);
-    const CAP = 15;
-    for (const r of todayRows.slice(0, CAP)) L.push(`  • ${r.ledger} · ${fmtRs(r.amountPaise)}${r.reason ? ' — ' + r.reason : ''}`);
-    if (todayRows.length > CAP) L.push(`  …and ${todayRows.length - CAP} more.`);
-  } else {
-    L.push('Nothing logged today.');
-  }
-  // Part C — upcoming scheduled payments (dates only; no amount is tracked per date) + soft overdue flags.
-  if (upcoming && upcoming.length) {
-    const next = upcoming.find((u) => u.daysRemaining >= 0);
-    if (next) L.push(`Next scheduled payment: ${next.date} (${next.daysRemaining === 0 ? 'today' : 'in ' + next.daysRemaining + ' day' + (next.daysRemaining === 1 ? '' : 's')}). Scheduled dates carry no amount in Plannr.`);
-    for (const o of upcoming.filter((u) => u.possiblyOverdue)) {
-      L.push(`⚠ Scheduled ${o.date} has no recorded payment on that date — possibly overdue (best-effort date match, not a confirmed amount).`);
-    }
-  }
-  return L.join('\n');
 }
 
 // Optional inclusive date range via ?start=&end= (ISO 'YYYY-MM-DD'); blank/absent = all.
@@ -2076,10 +2028,8 @@ function buildOverviewPdfHtml(part, o, rows, range, theme) {
 }
 
 // Render the Overview PDF to a Buffer. The SINGLE source of PDF generation — used by
-// the HTTP export below AND the scheduled Daily Report email (daily-report.js), so the
-// automated send is byte-for-byte the same document builder. Defaults: full report,
-// light theme (the automated send passes theme:'light' explicitly since no user is
-// present to choose light/dark). Throws on Playwright failure (callers handle it).
+// the HTTP export below. Defaults: full report, light theme. Throws on Playwright
+// failure (callers handle it).
 async function generateOverviewPdf({ tenantId, part = 'full', theme = 'light', range = { start: null, end: null } } = {}) {
   if (tenantId == null) throw new Error('generateOverviewPdf requires a tenantId'); // every render is per-tenant
   const o = computeOverview(tenantId, range);
@@ -2129,7 +2079,7 @@ app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
   try {
     const pdf = await generateOverviewPdf({ tenantId: req.user.id, part, theme, range: { start: s.date, end: e.date } });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${dailyReport.istDateStamp()}.pdf"`); // Phase 10C — IST date, not UTC
+    res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${istDateStamp()}.pdf"`); // Phase 10C — IST date, not UTC
     res.send(pdf);
   } catch (err) {
     _pdfBrowserPromise = null; // reset so a later request can relaunch
@@ -2141,33 +2091,9 @@ app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Daily Report — recipient list + send time (persisted), plus an immediate test send.
-// The scheduled send itself is driven by node-cron inside daily-report.js.
-// ---------------------------------------------------------------------------
-app.get('/api/daily-report', requireApiAuth, (req, res) => {
-  // Tenancy Phase 3 (Part B.6) — the caller's OWN tenant config + status (B can't read A's recipients/schedule).
-  res.json({ ...dailyReport.getConfig(req.user.id), status: dailyReport.sendStatus(req.user.id) });
-});
-// Phase 2 — one-request health check for the windowless case. Auth-gated. Per channel: configured,
-// last attempt (outcome + reason), last success, next fire (IST), stale flag, and readiness (email
-// credentials present). Plus server start time + CSP mode. Deliberately returns NO recipient
-// addresses or phone numbers (Phase 8 stripped contacts from backups — they don't reappear here):
-// only COUNTS and HH:MM send times, never the values.
+// Phase 2 — one-request health check for the windowless case. Auth-gated. Plus server start
+// time + CSP mode and recent auth activity.
 app.get('/api/health', requireApiAuth, (req, res) => {
-  // Tenancy Phase 3 (Part B.8) — per-channel config + status for the CALLER's tenant only.
-  const cfg = dailyReport.getConfig(req.user.id);
-  const st = dailyReport.sendStatus(req.user.id);
-  const emailReady = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
-  const chan = (recips, times, s, ready) => ({
-    configured: recips.length > 0 && times.length > 0,
-    recipientCount: recips.length,          // COUNT only — never the addresses/numbers
-    sendTimes: [...times].sort(),           // HH:MM only — not PII
-    nextFire: dailyReport.nextFireIST(times),
-    lastSuccess: s.lastSuccess,
-    lastAttempt: s.lastAttempt,             // { atIST, outcome, reason } — reason carries no numbers
-    stale: s.stale,
-    ready,
-  });
   // Part D — auth-detection summary + recent events for the CALLER's tenant only (read by req.user.id).
   // The events are the caller's own account activity; isolation-harness verified they don't leak.
   const events = readAuthEvents(req.user.id);
@@ -2175,48 +2101,12 @@ app.get('/api/health', requireApiAuth, (req, res) => {
   res.json({
     serverStart: SERVER_START.toISOString(),
     csp: csp.REPORT_ONLY ? 'report-only' : 'enforcing',
-    channels: {
-      email: chan(cfg.recipients, cfg.sendTimes, st.email, emailReady),
-    },
     auth: {
       ...authSummary(req.user.id),        // lastLogin { atIST, ip } + failedSinceLastLogin
       activeSessions,
       recentEvents: events.slice(-25).reverse(), // most-recent first
     },
   });
-});
-app.put('/api/daily-report', requireApiAuth, (req, res) => {
-  // Partial update: only the fields present in the body are changed. An omitted field is left
-  // untouched, so saving recipients never resets send times (and vice versa).
-  const r = dailyReport.saveConfig({
-    recipients: req.body.recipients,
-    sendTimes: req.body.sendTimes,
-  }, req.user.id); // Tenancy Phase 2 — attribute the config write to the saving tenant
-  if (r.error) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, recipients: r.recipients, sendTimes: r.sendTimes });
-});
-// Per-session cooldown (~45s, within the requested 30–60s) for the manual test-send
-// button — one send per session per window. Keyed by the session cookie. Armed on entry
-// so a rapid second click (or a script) can't slip a second send through; a too-soon
-// retry gets a clear 429 telling the user how long to wait (never a silent drop). Cleared
-// when nothing was actually sent (no recipients), so a genuine first use isn't penalised.
-// The auth rate limiter + login lockout are untouched by this.
-const TEST_SEND_COOLDOWN_MS = 45 * 1000;
-const emailTestCooldown = makeCooldown(TEST_SEND_COOLDOWN_MS);
-const cooldownKey = (req) => req.cookies[COOKIE_NAME] || req.ip || 'anon'; // per session
-
-// Immediate manual EMAIL send to the currently-saved recipients — separate from the schedule.
-app.post('/api/daily-report/test', requireApiAuth, async (req, res) => {
-  const key = cooldownKey(req);
-  const wait = emailTestCooldown.remaining(key);
-  if (wait > 0) return res.status(429).json({ error: `You just sent a test email. Please wait ${Math.ceil(wait / 1000)}s before sending another.` });
-  emailTestCooldown.arm(key); // arm up front so a rapid repeat can't double-send
-  const r = await dailyReport.sendEmail(req.user.id, 'Send Test Email Now (manual)'); // the caller's tenant config
-  if (r.ok) return res.json({ ok: true, sent: r.sent });
-  // Nothing sent -> release the cooldown so a retry isn't falsely blocked.
-  emailTestCooldown.clear(key);
-  if (r.skipped) return res.status(400).json({ error: 'Add at least one recipient and Save before sending a test email.' });
-  res.status(502).json({ error: r.error || 'The test email could not be sent.' });
 });
 
 // ---------------------------------------------------------------------------
@@ -2663,7 +2553,6 @@ if (swept) console.log(`[sessions] removed ${swept} expired session(s) on boot.`
 // Test seam: clear the in-memory auth limiters (per-IP rate limit + per-(ip,user) lockout) so tests
 // sharing one process don't leak brute-force state between cases. No effect on production behaviour.
 app._resetAuthLimits = () => { rateBuckets.clear(); loginFails.clear(); };
-app._buildReportExtras = buildReportExtras; // Part B — tested directly (init/generatePdf are gated off under test)
 app._recordUnknownLoginFailure = recordUnknownLoginFailure; // Part D follow-up — fast bounded-ring test seam
 app._readUnknownLoginFailures = readUnknownLoginFailures;
 app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: exercised by schema tests
@@ -2723,17 +2612,5 @@ if (require.main === module) {
     // production unprotected with every test still green, so log it (alarmingly, when not enforced).
     if (csp.REPORT_ONLY) console.warn('[csp] REPORT-ONLY — policy NOT enforced (PLANNR_CSP_REPORT_ONLY is set). Unset it in production.');
     else console.log('[csp] enforcing.');
-    // Phase 7G — PDF browser is warmed on Overview page load, not boot (nothing Chromium-for-PDF
-    // resident until Overview is visited). Start the Daily Report scheduler from the saved config
-    // (idle if no send time set), injecting the PDF generator so the automated send reuses the
-    // exact same builder.
-    dailyReport.init(generateOverviewPdf, buildReportExtras); // Part B — inject the "since last report" delta builder
-    // Phase 2 — one clear status line per boot (configured state, last success, and whether the last
-    // attempt failed), so the windowless case is answerable by opening the log once.
-    console.log(dailyReport.bootSummaryLine());
-    // Phase 11A — after the scheduler is up and we're listening, catch up any send MISSED while the
-    // machine was off/asleep at its scheduled minute (once/day). Fire-and-forget: it never throws and
-    // must never block or crash boot. PLANNR_NO_CATCHUP=1 disables it (set in the test harness).
-    dailyReport.runCatchUp();
   });
 }

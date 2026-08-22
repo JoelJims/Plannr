@@ -14,33 +14,15 @@ after(async () => {
 });
 beforeEach(async () => {
   H.clearLedger();
-  await H.put('/api/daily-report', { recipients: ['keep@gmail.com'], whatsappRecipients: ['+919999999999'], sendTimes: ['09:00'], whatsappSendTimes: ['10:00'] }, { cookie });
   await H.put('/api/budget', { budgetRupees: '500.00' }, { cookie });
 });
 const settingKeys = (backup) => backup.tables.settings.map((r) => r.key);
 
-test('a default export contains NEITHER contact key (but keeps budget + schedule)', async () => {
+test('a default export contains NEITHER contact key (but keeps budget)', async () => {
   const b = (await H.get('/api/backup/export', { cookie })).json;
   const keys = settingKeys(b);
   assert.ok(!CONTACT.some((k) => keys.includes(k)), 'no contact keys: ' + JSON.stringify(keys));
-  assert.ok(keys.includes('budget_paise') && keys.includes('daily_report_times'), 'budget + schedule kept');
-});
-
-test('an opt-in export contains the email contact key', async () => {
-  const b = (await H.get('/api/backup/export?includeContacts=1', { cookie })).json;
-  const keys = settingKeys(b);
-  assert.ok(keys.includes('daily_report_recipients'), 'email contact key present: ' + JSON.stringify(keys));
-});
-
-test('importing an export with contact keys ABSENT leaves existing recipients intact', async () => {
-  const dflt = (await H.get('/api/backup/export', { cookie })).json;   // no contacts
-  // change the install's contacts, then import the default export (which omits them)
-  await H.put('/api/daily-report', { recipients: ['other@gmail.com'] }, { cookie });
-  const imp = await H.post('/api/backup/import', dflt, { cookie });
-  assert.strictEqual(imp.status, 200, JSON.stringify(imp.json));
-  const cfg = (await H.get('/api/daily-report', { cookie })).json;
-  assert.deepStrictEqual(cfg.recipients, ['other@gmail.com'], 'absent contact key = leave untouched, not clear');
-  assert.ok(cfg.sendTimes.length === 1, 'schedule still present (Daily Report still scheduled)');
+  assert.ok(keys.includes('budget_paise'), 'budget kept');
 });
 
 test('an invalid import rolls back completely with the snapshot written', async () => {

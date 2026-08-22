@@ -10,7 +10,6 @@
 // tenancy work is done. Run it, don't add it to `npm test`, until then.
 
 process.env.PLANNR_TEST = '1';
-process.env.PLANNR_NO_CATCHUP = '1';
 const path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 process.env.PLANNR_DB = path.join(os.tmpdir(), `plannr-isolation-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
 
@@ -137,14 +136,6 @@ const row = (table, id) => db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get
 
   const budget = await req('GET', '/api/budget', { cookie: B.cookie });
   check('budget read', `/api/budget is null for B (saw ${budget.json && budget.json.budgetPaise})`, budget.json && (budget.json.budgetPaise === null || budget.json.budgetPaise === undefined));
-
-  const dr = await req('GET', '/api/daily-report', { cookie: B.cookie });
-  check('daily-report read', `daily-report recipients empty for B (saw ${(dr.json && dr.json.recipients || []).length})`, dr.json && (dr.json.recipients || []).length === 0);
-  check('daily-report read', `daily-report whatsapp recipients empty for B (saw ${(dr.json && dr.json.whatsappRecipients || []).length})`, dr.json && (dr.json.whatsappRecipients || []).length === 0);
-
-  const health = await req('GET', '/api/health', { cookie: B.cookie });
-  const ch = (health.json && health.json.channels) || {};
-  check('health read', `health email recipientCount 0 for B (saw ${ch.email && ch.email.recipientCount})`, ch.email && ch.email.recipientCount === 0);
 
   // ── Point 4: cross-tenant contract creation must be WRITABLE — run it now, WHILE A still has a
   // live contract (the mutation section below soft-deletes it via a leak), so it genuinely exercises

@@ -24,7 +24,6 @@ const REGISTRY = [
   { method: 'GET', path: '/api/backup/export', kind: 'read', tables: ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'] },
   { method: 'GET', path: '/api/users', kind: 'read', tables: ['users'] },
   { method: 'GET', path: '/api/budget', kind: 'read', tables: ['settings'] },
-  { method: 'GET', path: '/api/daily-report', kind: 'read', tables: ['settings'] },
   { method: 'GET', path: '/api/health', kind: 'read', tables: ['settings'] },
   // ── mutations ────────────────────────────────────────────────────────────────────────────────
   { method: 'POST', path: '/api/cash-in', kind: 'mutate', tables: ['cash_in'] },
@@ -54,8 +53,6 @@ const REGISTRY = [
   { method: 'DELETE', path: '/api/trash/:table/:id', kind: 'mutate', tables: ['cash_in', 'cash_out', 'loans', 'contract', 'contractor_payments'] },
   { method: 'POST', path: '/api/backup/import', kind: 'mutate', tables: ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'] },
   { method: 'PUT', path: '/api/budget', kind: 'mutate', tables: ['settings'] },
-  { method: 'PUT', path: '/api/daily-report', kind: 'mutate', tables: ['settings'] },
-  { method: 'POST', path: '/api/daily-report/test', kind: 'mutate', tables: ['settings'] },
 ];
 
 // Tenant-NEUTRAL /api routes: auth + the caller's own session/account, no cross-tenant data surface.

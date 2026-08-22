@@ -13,11 +13,6 @@ test('resolved DB_PATH is NOT the live database (fails outright if it is)', () =
   assert.ok(!/[\\/]data[\\/]plannr\.db$/i.test(DB_PATH), `DB_PATH looks live: ${DB_PATH}`);
 });
 
-test('structurally cannot construct a Nodemailer transport (makeTransport -> null under PLANNR_TEST)', () => {
-  const dr = require('../daily-report');
-  assert.strictEqual(dr.makeTransport(), null, 'makeTransport must return null before ever calling nodemailer.createTransport');
-});
-
 test('harness: seed user + session + authed request round-trips', async () => {
   const { user, cookie } = H.seedLoggedIn();
   const me = await H.get('/api/me', { cookie });

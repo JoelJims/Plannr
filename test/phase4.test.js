@@ -2,14 +2,13 @@
 // removal. The DOM-only behaviours (ledger carry-over, the overpaid UI surfaces, login→home, the
 // unsaved cue) are exercised by the Playwright pass; these cover everything testable in node:test.
 const H = require('./helpers');
-const dr = require('../daily-report');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
 let cookie, TENANT;
 before(async () => { await H.startApp(); const s = H.seedLoggedIn(); cookie = s.cookie; TENANT = s.user.id; });
-after(async () => { dr._stopAll(); await H.stopApp(); });
-beforeEach(() => { H.clearLedger(); dr._stopAll(); });
+after(async () => { await H.stopApp(); });
+beforeEach(() => { H.clearLedger(); });
 
 // ---- Part C1 — overpaid renders "Overpaid by", underlying value stays negative ----
 test('Part C1 — owed stays NEGATIVE in computeOverview; the PDF prints "Overpaid by ₹X"', async () => {
@@ -32,14 +31,6 @@ test('Part C2 — summary PDF omits the transactions table but keeps the ledger 
   assert.doesNotMatch(summary, /<h2>Transactions<\/h2>/, 'summary has NO transactions table');
   assert.match(summary, /Spending by Ledger/, 'summary keeps the ledger rollup + pie');
   assert.match(full, /<h2>Transactions<\/h2>/, 'the manual full export keeps the transactions table');
-});
-
-test('Part C2 — the daily report (fireAt / catch-up path) builds the SUMMARY part, not full', async () => {
-  let seenPart = null;
-  dr.init((opts) => { seenPart = opts.part; return Promise.resolve(Buffer.from('%PDF-1.4')); });
-  dr.saveConfig({ recipients: ['x@gmail.com'], sendTimes: ['09:00'] });
-  await dr.fireAt(TENANT, '09:00', true, false); // scheduled send path (per-tenant) -> buildPdf()
-  assert.strictEqual(seenPart, 'summary', 'the scheduled/catch-up send uses the bounded summary');
 });
 
 // ---- Part C3 — cash_in.tx_date ----
