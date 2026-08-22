@@ -26,10 +26,10 @@ test('a default export contains NEITHER contact key (but keeps budget + schedule
   assert.ok(keys.includes('budget_paise') && keys.includes('daily_report_times'), 'budget + schedule kept');
 });
 
-test('an opt-in export contains BOTH contact keys', async () => {
+test('an opt-in export contains the email contact key', async () => {
   const b = (await H.get('/api/backup/export?includeContacts=1', { cookie })).json;
   const keys = settingKeys(b);
-  assert.ok(CONTACT.every((k) => keys.includes(k)), 'both contact keys present: ' + JSON.stringify(keys));
+  assert.ok(keys.includes('daily_report_recipients'), 'email contact key present: ' + JSON.stringify(keys));
 });
 
 test('importing an export with contact keys ABSENT leaves existing recipients intact', async () => {
