@@ -147,17 +147,23 @@ const row = (table, id) => db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get
   check('health read', `health email recipientCount 0 for B (saw ${ch.email && ch.email.recipientCount})`, ch.email && ch.email.recipientCount === 0);
   check('health read', `health whatsapp recipientCount 0 for B (saw ${ch.whatsapp && ch.whatsapp.recipientCount})`, ch.whatsapp && ch.whatsapp.recipientCount === 0);
 
-  // ── Point 4: the contract test is UNWRITABLE — run it now, WHILE A still has a live contract (the
-  // mutation section below soft-deletes it via a leak), so it genuinely exercises idx_contract_single_live.
+  // ── Point 4: cross-tenant contract creation must be WRITABLE — run it now, WHILE A still has a
+  // live contract (the mutation section below soft-deletes it via a leak), so it genuinely exercises
+  // the single-live-contract invariant. That invariant is enforced by idx_contract_single_live_tenant
+  // (db.js), a PER-TENANT unique index — Tenancy Phase 2 (Part B) retired the old database-wide
+  // idx_contract_single_live specifically because it made a second tenant unable to create ANY
+  // contract. So B succeeding here is correct isolation, not a leak; test/tenancy.test.js already
+  // asserts the same invariant directly at the DB level (one tenant is capped at one live contract,
+  // two different tenants can each hold one simultaneously).
   const cRes = await req('POST', '/api/contracts', { cookie: B.cookie, body: { contractorName: 'B Contractor', areaOfWork: 'Roof', ledgerCode: '5.0', statedAmountRupees: '1000', dateSigned: '2025-06-01' } });
-  const contractCreateFinding =
-    `POST /api/contracts as B (while A has a live contract) → HTTP ${cRes.status}: ${JSON.stringify(cRes.json).slice(0, 160)}\n` +
-    '      idx_contract_single_live is a DATABASE-WIDE unique index. ' +
-    (cRes.status === 201
-      ? 'B\'s create SUCCEEDED — the single-live-contract invariant must not be enforcing; investigate.'
-      : (cRes.json && /already|single contract|another/i.test(JSON.stringify(cRes.json))
-        ? 'B is REJECTED, and the error CONFIRMS a contract already exists — worse than leaky, an existence leak in its own right, AND proof multi-user is broken: B cannot create a contract while A has one.'
-        : 'B is REJECTED (raw UNIQUE / guard). Multi-user is not merely leaky here — it is BROKEN: a second user cannot even start their own ledger while another has a contract.'));
+  check('contract create (cross-tenant)', `POST /api/contracts as B (while A has a live contract) → HTTP 201 (saw ${cRes.status}: ${JSON.stringify(cRes.json).slice(0, 160)})`, cRes.status === 201);
+
+  // Verify it's the PER-TENANT index doing the work, not an absent/disabled constraint: the old
+  // database-wide index must be gone and the per-tenant one must exist and actually key off tenant_id.
+  const contractIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='contract'").all();
+  const perTenantIdx = contractIndexes.find((i) => i.name === 'idx_contract_single_live_tenant');
+  check('contract create (cross-tenant)', 'idx_contract_single_live_tenant exists and is scoped by tenant_id', !!perTenantIdx && /\btenant_id\b/.test(perTenantIdx.sql || ''));
+  check('contract create (cross-tenant)', 'the old database-wide idx_contract_single_live has been retired', !contractIndexes.some((i) => i.name === 'idx_contract_single_live'));
 
   // ── as B: mutations must 404 (not 403), and leave A's row byte-identical ─────────────────────────
   const mut = async (surface, method, p, table, id, body) => {
@@ -202,8 +208,6 @@ const row = (table, id) => db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get
     console.log('LEAKS BY SURFACE (failing assertions = data B could see/touch that belongs to A):');
     for (const s of surfaces) { console.log(`  ✖ ${s}: ${fails[s].length}`); for (const d of fails[s]) console.log(`       - ${d}`); }
   }
-  console.log('\nPoint 4 — contract creation (expected unwritable):');
-  console.log('  ' + contractCreateFinding);
 
   console.log('\n── SUMMARY ───────────────────────────────────────────────────────────');
   console.log(`  assertions run:    ${passed + failed}`);
