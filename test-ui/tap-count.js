@@ -16,8 +16,6 @@ const { chromium } = require('playwright');
   const ctx = await browser.newContext();
   await ctx.addCookies([{ name: 'plannr_session', value: token, domain: '127.0.0.1', path: '/' }]);
   const page = await ctx.newPage();
-  let cspViolations = 0;
-  page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warning') && /content security policy|refused to/i.test(m.text())) cspViolations++; });
   await page.goto(base + '/cash-outflow.html', { waitUntil: 'networkidle' });
 
   const visible = (sel) => page.$eval(sel, (el) => !el.hidden && el.offsetParent !== null).catch(() => false);
@@ -61,12 +59,11 @@ const { chromium } = require('playwright');
   console.log('  rows actually saved                        :', rows, '(expected 5)');
   console.log('  TAPS — 5 NON-CONTRACT entries              :', taps, '  [= ledger(1) + 5×(amount, in-contract?, submit)]');
   console.log('  service-picker options offered on the path :', svcOpts, '(0 = no contract seeded; picker hidden anyway on non-contract rows)');
-  console.log('  CSP violations during the flow             :', cspViolations);
   console.log('  => the picker adds 0 taps to the everyday (non-contract) path — it renders only in-contract,');
   console.log('     so the five-entry non-contract cost is UNCHANGED from Phase 4 (this phase touched nothing on it).');
   console.log('───────────────────────────────────────────────────────────────────');
 
-  const ok = svcHiddenExtra && statedHiddenExtra && svcShownIncluded && statedShownIncluded && rows === 5 && cspViolations === 0;
+  const ok = svcHiddenExtra && statedHiddenExtra && svcShownIncluded && statedShownIncluded && rows === 5;
   await browser.close();
   await new Promise((r) => { const s = require('http'); H.stopApp().then(r); });
   process.exit(ok ? 0 : 1);

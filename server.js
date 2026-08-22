@@ -12,7 +12,6 @@ const cookieParser = require('cookie-parser');
 const pw = require('./password'); // shared hashing + strength (bcrypt + cost factor live there)
 const { db, init, DB_PATH, SESSION_TTL_DAYS, cleanupExpiredSessions } = require('./db');
 const { LEDGERS } = require('./public/ledgers.js'); // fixed 23-ledger reference (single source, shared with the browser)
-const csp = require('./csp');                        // Phase 8C: per-page CSP (inline hashes computed at boot)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by auth-event logging, the Overview PDF
 // filename, and upcoming-payment day counts. IST has no DST, so no seasonal complexity.
@@ -110,17 +109,6 @@ app.use((req, res, next) => {
   jsonSmall(req, res, next);
 });
 app.use(cookieParser());
-
-// Baseline security headers on every response (defense-in-depth; no dependency).
-// nosniff: don't let the browser MIME-sniff; DENY: block framing (clickjacking);
-// same-origin referrer: don't leak full URLs cross-site. (CSP/CSRF intentionally
-// not added here — see review notes.)
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'same-origin');
-  next();
-});
 
 // ---------------------------------------------------------------------------
 // Session helpers
@@ -505,19 +493,6 @@ app.post('/api/sign-out-everywhere', (req, res) => {
   recordAuthEvent(user.id, 'logout', { ip: reqIp(req) });
   res.clearCookie(COOKIE_NAME, { path: '/' });
   res.json({ ok: true, cleared: info.changes });
-});
-
-// Phase 8C — CSP violation sink. Browsers POST a report (application/csp-report) for every blocked
-// resource; we log a compact line so report-only mode surfaces exactly what to fix before enforcing.
-// Public (a violation can happen on the login page, pre-auth) and cheap; parses ANY content-type as
-// JSON since browsers use application/csp-report, not application/json.
-app.post('/api/csp-report', express.json({ type: () => true, limit: '64kb' }), (req, res) => {
-  const r = (req.body && (req.body['csp-report'] || req.body)) || {};
-  console.warn('[csp-report]', JSON.stringify({
-    doc: r['document-uri'], violated: r['violated-directive'] || r['effective-directive'],
-    blocked: r['blocked-uri'], source: r['source-file'], line: r['line-number'],
-  }));
-  res.status(204).end();
 });
 
 // User roster for the "By" attribution pickers. Auth-gated (requireApiAuth): a public
@@ -2010,7 +1985,7 @@ app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Phase 2 — one-request health check for the windowless case. Auth-gated. Plus server start
-// time + CSP mode and recent auth activity.
+// time and recent auth activity.
 app.get('/api/health', requireApiAuth, (req, res) => {
   // Part D — auth-detection summary + recent events for the CALLER's tenant only (read by req.user.id).
   // The events are the caller's own account activity; isolation-harness verified they don't leak.
@@ -2018,7 +1993,6 @@ app.get('/api/health', requireApiAuth, (req, res) => {
   const activeSessions = db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND expires_at > datetime('now')").get(req.user.id).n;
   res.json({
     serverStart: SERVER_START.toISOString(),
-    csp: csp.REPORT_ONLY ? 'report-only' : 'enforcing',
     auth: {
       ...authSummary(req.user.id),        // lastLogin { atIST, ip } + failedSinceLastLogin
       activeSessions,
@@ -2332,8 +2306,6 @@ app.use(express.static(path.join(__dirname, 'public'), {
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     } else if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache');
-      const policy = csp.cspFor(path.basename(filePath)); // Phase 8C — per-page inline-hash CSP
-      if (policy) res.setHeader(csp.HEADER_NAME, policy);
     }
   },
 }));
@@ -2342,10 +2314,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // raw .html above — these ARE the same files, just reached via clean URLs (/overview vs
 // /overview.html) — so the shell is never served stale from either path.
 const sendPage = (res, file) => {
-  const policy = csp.cspFor(file); // Phase 8C — same per-page CSP as the raw .html path
-  const headers = { 'Cache-Control': 'no-cache' };
-  if (policy) headers[csp.HEADER_NAME] = policy;
-  res.sendFile(path.join(__dirname, 'public', file), { headers });
+  res.sendFile(path.join(__dirname, 'public', file), { headers: { 'Cache-Control': 'no-cache' } });
 };
 
 // Home (the "logged-in" page). Guarded server-side; the in-page /api/me check
@@ -2525,10 +2494,5 @@ if (require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Plannr running at http://localhost:${PORT}`);
     if (lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}`);
-    // Phase 10A — make the active CSP mode visible on every start. The default is enforcing and the
-    // suite asserts that, but PLANNR_CSP_REPORT_ONLY is an env flag — a forgotten override would leave
-    // production unprotected with every test still green, so log it (alarmingly, when not enforced).
-    if (csp.REPORT_ONLY) console.warn('[csp] REPORT-ONLY — policy NOT enforced (PLANNR_CSP_REPORT_ONLY is set). Unset it in production.');
-    else console.log('[csp] enforcing.');
   });
 }

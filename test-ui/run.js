@@ -6,7 +6,6 @@ const { chromium } = require('playwright');
 
 const BIG_PAISE = 123456789;           // ₹12,34,567.89 — the unclipped-render case
 const LEDGERS = Array.from({ length: 23 }, (_, i) => (i + 1) + '.0');
-const isCsp = (t) => /content security policy|refused to (execute|load|apply|connect|evaluate|create|run)/i.test(t);
 
 let failures = 0;
 const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
@@ -26,22 +25,9 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   const host = new URL(base).hostname;
   await ctx.addCookies([{ name: 'plannr_session', value: token, domain: host, path: '/' }]);
 
-  // ---- CSP violations across every page ----
-  const cspByPage = {};
-  let curPage = '';
-  ctx.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warning') && isCsp(m.text())) (cspByPage[curPage] ||= []).push(m.text()); });
   const page = await ctx.newPage();
-  page.on('pageerror', (e) => { if (isCsp(String(e.message || e))) (cspByPage[curPage] ||= []).push(String(e.message)); });
-
-  const PAGES = ['/login.html', '/register.html', '/', '/cash-flow', '/cash-inflow', '/cash-outflow', '/overview', '/contract-details', '/contractor-payments', '/data-backup'];
-  console.log('\nCSP — loading every page with the console captured:');
-  for (const p of PAGES) { curPage = p; await page.goto(base + p, { waitUntil: 'networkidle' }).catch(() => {}); await page.waitForTimeout(900); }
-  let totalCsp = 0;
-  for (const p of PAGES) { const n = (cspByPage[p] || []).length; totalCsp += n; if (n) console.log(`    ${p}: ${n} violation(s) -> ${cspByPage[p][0].slice(0, 120)}`); }
-  check('zero CSP violations across every page', totalCsp === 0, `${totalCsp} total`);
 
   // ---- Overview: swatches, re-render, table width, unclipped amount ----
-  curPage = '/overview';
   await page.goto(base + '/overview', { waitUntil: 'networkidle' });
   await page.waitForTimeout(1000);
   const swatches1 = await page.$$eval('.ov-swatch', (els) => els.map((e) => getComputedStyle(e).backgroundColor));

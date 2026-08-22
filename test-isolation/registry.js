@@ -67,7 +67,6 @@ const NEUTRAL = new Set([
   'POST /api/logout',
   'POST /api/change-password',
   'POST /api/delete-account',
-  'POST /api/csp-report',
   // Part D (auth detection): the caller's OWN sessions + auth-event ring. GET /api/sessions reads
   // sessions WHERE user_id = caller and the caller's own auth_events (settings keyed by tenant_id =
   // user.id); sign-out-everywhere deletes the caller's OWN sessions. Account-scoped like logout /
