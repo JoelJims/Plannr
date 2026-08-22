@@ -56,9 +56,3 @@ test('a bogus :table returns 400', async () => {
   assert.strictEqual((await H.post('/api/trash/bogus/1/restore', undefined, { cookie })).status, 400);
   assert.strictEqual((await H.del('/api/trash/bogus/1', { cookie })).status, 400);
 });
-
-test('all three trash routes return 401 unauthenticated', async () => {
-  assert.strictEqual((await H.get('/api/trash')).status, 401);
-  assert.strictEqual((await H.post('/api/trash/cash_out/1/restore')).status, 401);
-  assert.strictEqual((await H.del('/api/trash/cash_out/1')).status, 401);
-});

@@ -9,20 +9,12 @@ const { DatabaseSync } = require('node:sqlite');
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_PATH = process.env.PLANNR_DB || path.join(DATA_DIR, 'plannr.db');
 
-// Phase 8A — absolute session lifetime. ONE named constant, used by the sessions.expires_at column
-// default (below), the migration backfill, the login-time expires_at insert, AND the cookie maxAge
-// in server.js (imported from here) — so the browser and server can never disagree on the window.
-// 90 days: this is a household app on a home network; re-logging in on a phone is friction, so
-// long-but-finite is the right trade. set-password.js already deletes all of a user's sessions, so
-// a revocation path exists without needing a shorter window.
-const SESSION_TTL_DAYS = 90;
-
 // Make sure the folder for the database file exists before opening it.
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL'); // better concurrency / durability
-db.exec('PRAGMA foreign_keys = ON');  // enforce the sessions -> users foreign key
+db.exec('PRAGMA foreign_keys = ON');  // enforce foreign keys
 
 // Schema-version marker: stamped at the END of init() once all migrations succeed. It lets a
 // DESTRUCTIVE, presence-keyed migration be gated so it runs ONLY on a pre-marker DB and can never
@@ -41,41 +33,7 @@ function init() {
       password_hash TEXT    NOT NULL,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
     );
-
-    -- One row per active login. expires_at is an ABSOLUTE expiry set at creation and never
-    -- extended (Phase 8A). A session is valid only while expires_at is in the future OR the row is
-    -- deleted (logout / set-password revocation). The default here uses the SAME SESSION_TTL_DAYS
-    -- constant as the cookie, so a fresh DB and the browser agree on the 90-day window.
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash TEXT    PRIMARY KEY,
-      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-      expires_at TEXT    NOT NULL DEFAULT (datetime('now', '+${SESSION_TTL_DAYS} days'))
-    );
-
-    -- Speeds up the ON DELETE CASCADE from users and any "sessions for user" lookup.
-    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
   `);
-
-  // Phase 8A migration — existing DBs have a sessions table WITHOUT expires_at. Add it (SQLite
-  // forbids a non-constant default on ADD COLUMN, so it's added nullable) and backfill every current
-  // row to created_at + SESSION_TTL_DAYS. Rows whose backfilled expiry is already in the past are
-  // left as-is: they expire naturally (rejected by currentUser, swept by cleanupExpiredSessions) —
-  // not artificially kept alive, and not force-invalidated either.
-  const sessCols = db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name);
-  if (!sessCols.includes('expires_at')) {
-    db.exec('ALTER TABLE sessions ADD COLUMN expires_at TEXT');
-    const info = db.prepare(`UPDATE sessions SET expires_at = datetime(created_at, '+${SESSION_TTL_DAYS} days') WHERE expires_at IS NULL`).run();
-    const past = db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE expires_at <= datetime('now')").get().n;
-    console.log(`[db] Phase 8A: backfilled expires_at on ${info.changes} existing session(s) (created_at + ${SESSION_TTL_DAYS}d); ${past} already past (will expire naturally).`);
-  }
-  // Part D (auth detection) — record the origin IP + user-agent per session so the app can SURFACE
-  // active sessions (record-and-surface; sessions are NOT hard-bound to an IP — a phone roams between
-  // WiFi and mobile data). Nullable (older rows + the pre-column past keep NULL); presence-keyed so
-  // re-running is a no-op. Same additive ADD COLUMN pattern as expires_at above.
-  for (const col of ['ip', 'user_agent']) {
-    if (!sessCols.includes(col)) db.exec(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`);
-  }
 
   // Services phase — contract_services RETURNS (dropped in Phase 5C). If a PRE-Phase-5 database still
   // carries the OLD-shaped contract_services (detected by the absence of the new tenant_id column),
@@ -708,11 +666,4 @@ function init() {
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
-// Phase 8A — delete sessions whose absolute expiry has passed, so the table can't grow unbounded.
-// Called on boot and opportunistically at login (NOT per request — see currentUser's no-idle-expiry
-// note). Returns how many rows were removed.
-function cleanupExpiredSessions() {
-  return db.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')").run().changes;
-}
-
-module.exports = { db, init, DB_PATH, SESSION_TTL_DAYS, cleanupExpiredSessions };
+module.exports = { db, init, DB_PATH };

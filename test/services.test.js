@@ -141,16 +141,9 @@ test('Part D — worked example still owed ₹20,000, cumulative under a debit-e
 });
 
 // ── Part E — per-user customs ─────────────────────────────────────────────────────────────────────
-test('Part E — a typed custom ledger name is saved to the caller list and is INVISIBLE to other users', async () => {
-  const A = H.seedLoggedIn();
-  const B = H.seedLoggedIn();
-  const r = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: A.user.id, ledgerCode: 'CUSTOM', ledgerCustomName: 'Scaffolding hire', contractScope: 'extra' }, { cookie: A.cookie });
-  assert.strictEqual(r.status, 201, JSON.stringify(r.json));
-  const aList = (await H.get('/api/ledger-customs', { cookie: A.cookie })).json.customs;
-  assert.ok(aList.includes('Scaffolding hire'), 'A sees their own saved custom');
-  const bList = (await H.get('/api/ledger-customs', { cookie: B.cookie })).json.customs;
-  assert.ok(!bList.includes('Scaffolding hire'), "B does NOT see A's custom (per-user isolation)");
-});
+// 'Part E — a typed custom ledger name is saved to the caller list and is INVISIBLE to other users' is
+// removed: it verified the "invisible to B" half via a second logged-in identity (B) over HTTP.
+// Phase 1.6 (single-owner auth) removed login, so there is no second live identity left to request as.
 
 test('Part E — existing free-text custom ledger names still display on their rows', async () => {
   // A pre-existing row written directly (as a migration/legacy row would be), custom ledger, no list entry.

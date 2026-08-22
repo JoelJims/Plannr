@@ -21,12 +21,10 @@ assert.notStrictEqual(path.resolve(TEST_DB).toLowerCase(), LIVE_DB.toLowerCase()
 
 const app = require('../server'); // requires ./db (binds prepared statements to TEST_DB) with side effects gated off
 const { db } = require('../db');
-const pw = require('../password');
 
-// One bcrypt hash, computed ONCE and reused for every seeded user via direct INSERT — bcrypt at 12
-// rounds is ~200ms, so registering users through the route would dominate the suite's runtime.
+// No login exists; password_hash is a placeholder, reused for every seeded user via direct INSERT.
 const SEED_PW = 'TestPass123!aa';
-const SEED_HASH = pw.hashSync(SEED_PW);
+const SEED_HASH = 'seed-no-auth';
 
 // --- app lifecycle (ephemeral port; drive over real HTTP) ----------------------------------------
 let server = null, base = null;
@@ -64,27 +62,24 @@ const post = (p, body, o) => req('POST', p, Object.assign({ body }, o));
 const put = (p, body, o) => req('PUT', p, Object.assign({ body }, o));
 const del = (p, o) => req('DELETE', p, o);
 
-// login through the REAL route (auth tests use this; returns the threaded session cookie).
-async function login(username, password) {
-  const r = await post('/api/login', { username, password });
-  return { status: r.status, cookie: r.cookie, json: r.json };
-}
-
 // --- seed helpers (direct INSERT — fast, bypasses routes) -----------------------------------------
 let userSeq = 0;
+// Single-owner auth (Phase 1.6): the real app only ever has one users row (getOwner() in server.js
+// picks the lowest id). Mirror that here — if a row already exists, every caller gets THAT SAME
+// row back, whatever name/opts it asked for, instead of fabricating a second identity.
 function seedUser(opts = {}) {
+  const existing = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1').get();
+  if (existing) return { id: existing.id, username: existing.username, displayName: existing.displayName, password: SEED_PW };
   const username = opts.username || `user${++userSeq}`;
   const displayName = opts.displayName || username;
   const info = db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)').run(username, displayName, SEED_HASH);
   return { id: Number(info.lastInsertRowid), username, displayName, password: SEED_PW };
 }
-// A valid session cookie WITHOUT a bcrypt login — for the many functional tests that just need "a
-// logged-in user" and aren't testing auth. token_hash = sha256(token), matching server.js hashToken.
+// No sessions table and no cookie check exist anymore — every request resolves to the fixed
+// local owner regardless of cookie. Kept as a no-op returning a placeholder cookie string so
+// the many functional tests that just need "a logged-in user" call sites are untouched.
 function seedSession(userId) {
-  const token = crypto.randomBytes(24).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, datetime('now','+90 days'))").run(tokenHash, userId);
-  return 'plannr_session=' + token;
+  return 'plannr_session=test';
 }
 // A logged-in user in one step: seed the user + a session, return { user, cookie }.
 function seedLoggedIn(opts) { const user = seedUser(opts); return { user, cookie: seedSession(user.id) }; }
@@ -134,7 +129,7 @@ function clearLedger() {
 process.on('exit', () => { for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } } });
 
 module.exports = {
-  app, db, pw, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH,
-  startApp, stopApp, req, get, post, put, del, login, clearLedger,
+  app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH,
+  startApp, stopApp, req, get, post, put, del, clearLedger,
   seedUser, seedSession, seedLoggedIn, seedContract, seedPayment, seedCashOut, seedCashIn,
 };

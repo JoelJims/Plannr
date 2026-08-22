@@ -12,7 +12,6 @@ guardDbTarget();                          // refuses data/plannr.db unless --i-r
 const { db, init } = require('./db');
 init();
 const { LEDGERS } = require('./public/ledgers.js');
-const pw = require('./password');
 
 // ---- deterministic RNG (LCG) — no Math.random, so seed:demo reproduces exactly ----
 let _s = 20260803;
@@ -77,9 +76,9 @@ db.exec('DELETE FROM cash_out; DELETE FROM cash_in; DELETE FROM contractor_payme
 db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('cash_out','cash_in','contractor_payments','contract','loans')").run();
 db.prepare("DELETE FROM settings WHERE key='budget_paise'").run();
 
-// ---- a login user for the UI walkthroughs ----
+// ---- the owner user for the UI walkthroughs (no login exists; password_hash is a placeholder) ----
 let owner = db.prepare('SELECT id FROM users WHERE username = ?').get('demo');
-if (!owner) owner = { id: Number(db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?,?,?)').run('demo', 'Demo Owner', pw.hashSync('DemoPass123!aa')).lastInsertRowid) };
+if (!owner) owner = { id: Number(db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?,?,?)').run('demo', 'Demo Owner', 'demo-no-auth').lastInsertRowid) };
 const ownerId = owner.id;
 
 db.exec('BEGIN');

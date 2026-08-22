@@ -61,20 +61,17 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   const edit = await widthCheck();
   check('table width equals its container (edit mode), gap 0 (border-collapse)', Math.abs(edit.table - edit.cont) <= 2 && edit.collapse === 'collapse', `table ${edit.table}px vs container ${edit.cont}px, border-collapse ${edit.collapse}`);
 
-  // ---- The By dropdown displays the right OWNER, not the editor (Phase 2 display half) ----
+  // ---- The By dropdown renders and shows the row's stored attribution (single-owner: Phase 1.6
+  // removed login, so there is no second editor identity left to contrast "owner" against) ----
   H.clearLedger();
-  const alice = H.seedUser({ username: 'alice_v', displayName: 'Alice Vee' });
-  const bob = H.seedLoggedIn({ username: 'bob_v', displayName: 'Bob Vee' });
-  // Tenancy Phase 3: the row lives in BOB's household (he's the editor/viewer) but was PAID by Alice —
-  // "By" records who paid, decoupled from who edits. (Pre-Phase-3 the export/reads were unscoped.)
-  H.seedCashOut({ amountPaise: 50000, byUserId: alice.id, tenantId: bob.user.id, ledgerCode: '1.0' });
+  H.seedCashOut({ amountPaise: 50000, byUserId: user.id, tenantId: user.id, ledgerCode: '1.0' });
   const ctxB = await browser.newContext({ viewport: { width: 1500, height: 1200 } });
-  await ctxB.addCookies([{ name: 'plannr_session', value: bob.cookie.split('=')[1], domain: host, path: '/' }]);
+  await ctxB.addCookies([{ name: 'plannr_session', value: cookie.split('=')[1], domain: host, path: '/' }]);
   const pB = await ctxB.newPage();
   await pB.goto(base + '/overview', { waitUntil: 'networkidle' }); await pB.waitForTimeout(700);
   await pB.click('#ovEditBtn'); await pB.waitForTimeout(800);
   const by = await pB.$eval('select[data-f="by"]', (s) => ({ value: s.value, text: (s.options[s.selectedIndex] || {}).textContent || '' }));
-  check("By cell for Alice's row shows Alice (owner), not Bob (the editor)", by.value === 'user:' + alice.id && /Alice Vee/.test(by.text) && !/Bob/.test(by.text), `By select value=${by.value} text="${by.text}"`);
+  check('By select renders and shows the row\'s stored attribution', by.value === 'user:' + user.id && new RegExp(user.displayName).test(by.text), `By select value=${by.value} text="${by.text}"`);
   await ctxB.close();
 
   // ---- Dirty-check revert: change-then-revert saves nothing; a real change does save ----

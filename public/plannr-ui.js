@@ -49,13 +49,6 @@
     };
   }
 
-  // Secondary client-side auth guard (server-side requireAuth is the primary):
-  // if /api/me says not logged in, redirect to the login page.
-  function guardAuth(redirect) {
-    redirect = redirect || '/login.html';
-    fetch('/api/me').then((r) => { if (!r.ok) location.href = redirect; });
-  }
-
   // ---------------------------------------------------------------------------
   // Shared Cash Outflow FORM editor. Extracted VERBATIM from cash-outflow.html so
   // the Overview edit modal reuses the EXACT same behaviour: dependent Ledger→Sub
@@ -906,5 +899,5 @@
     return { getFilters, setCount, setEnabled, clearAll };
   }
 
-  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, escapeHtml, formatDate, makeMsg, guardAuth, createCashOutForm, createLedgerPicker, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
+  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
 })(window);

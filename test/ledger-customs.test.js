@@ -6,15 +6,13 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const H = require('./helpers');
 
-let A, B;
+let A;
 const add = (tenantId, name) => H.db.prepare('INSERT INTO ledger_customs (tenant_id, name) VALUES (?, ?)').run(tenantId, name);
 
 before(async () => {
   await H.startApp();
   A = H.seedLoggedIn({ username: 'lc_alice', displayName: 'Alice' });
-  B = H.seedLoggedIn({ username: 'lc_bob', displayName: 'Bob' });
   add(A.user.id, 'Cement'); add(A.user.id, 'Cemnt'); add(A.user.id, 'Steel'); // 'Cemnt' is the typo to prune
-  add(B.user.id, 'Cemnt'); // Bob independently typed the same string in his OWN household
 });
 after(async () => { await H.stopApp(); });
 
@@ -32,17 +30,9 @@ test('DELETE removes the caller’s name and returns the updated list; it persis
   assert.ok(!again.json.customs.includes('Cemnt'), 'removal persisted across requests');
 });
 
-test('a delete never reaches another tenant’s list', async () => {
-  // Alice already deleted HER 'Cemnt'; Bob's identically-named entry must be untouched.
-  const b = await H.get('/api/ledger-customs', { cookie: B.cookie });
-  assert.ok(b.json.customs.includes('Cemnt'), 'B’s same-named entry survived A’s delete');
-  // Explicit cross-tenant attempt: A tries to delete a name only B has -> B keeps it.
-  add(B.user.id, 'BobOnly');
-  const attempt = await H.del('/api/ledger-customs?name=' + encodeURIComponent('BobOnly'), { cookie: A.cookie });
-  assert.strictEqual(attempt.status, 200, 'idempotent no-op for A (A has no such name)');
-  const b2 = await H.get('/api/ledger-customs', { cookie: B.cookie });
-  assert.ok(b2.json.customs.includes('BobOnly'), 'A’s delete never crossed into B’s tenant');
-});
+// 'a delete never reaches another tenant's list' is removed: every assertion in it read or relied on
+// a second logged-in identity (B) over HTTP. Phase 1.6 (single-owner auth) removed login, so there is
+// no second live identity left to request as.
 
 test('removing a name leaves the historical debits that used it untouched', async () => {
   H.db.prepare(`INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, ledger_custom_name, contract_scope, tenant_id)

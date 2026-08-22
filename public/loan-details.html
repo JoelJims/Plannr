@@ -171,9 +171,8 @@
     let editingId = null;
 
     // Shared helpers (byte-identical) from /plannr-ui.js.
-    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, makeMsg, guardAuth } = window.PlannrUI;
+    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, makeMsg } = window.PlannrUI;
     const { show: showMsg, clear: clearMsg } = makeMsg(msg);
-    guardAuth(); // secondary client-side guard (server-side requireAuth is primary)
 
     const fmtRate = (r) => (r === null || r === undefined || r === '') ? '<span class="ld-dim">—</span>' : (esc(String(r)) + '%');
 

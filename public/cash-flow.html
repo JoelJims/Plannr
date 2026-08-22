@@ -168,7 +168,6 @@
 
   <script>
     // Secondary client-side guard (server-side requireAuth is the primary one).
-    fetch('/api/me').then((r) => { if (!r.ok) location.href = '/login.html'; });
 
     // Option buttons: each navigates to its data-href.
     document.querySelectorAll('.cf-nav .navbtn').forEach((btn) => {

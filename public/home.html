@@ -67,47 +67,6 @@
     .navbtn:active { background: var(--panel-2); }
     .navbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    /* ---- Log-out confirmation dialog (above the HUD frame) ---- */
-    .logout-backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 100;                    /* above .hud-frame (40) */
-      display: grid;
-      place-items: center;
-      padding: 20px;
-      background: rgba(0, 0, 0, 0.62);  /* dim backdrop */
-    }
-    .logout-backdrop[hidden] { display: none; }
-    .logout-dialog {
-      width: 100%;
-      max-width: 420px;
-      background: var(--panel);
-      border: 1px solid var(--accent-line);
-      padding: 24px 22px 20px;
-      clip-path: polygon(var(--clip) 0, 100% 0, 100% calc(100% - var(--clip)), calc(100% - var(--clip)) 100%, 0 100%, 0 var(--clip));
-      box-shadow: 0 24px 70px -20px rgba(0, 0, 0, 0.8);
-    }
-    .logout-msg {
-      font-family: var(--font-head);
-      font-weight: 600;
-      font-size: 19px;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--text);
-      margin: 0 0 20px;
-      line-height: 1.25;
-    }
-    .logout-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .logout-actions .navbtn { min-height: 46px; }
-    #logoutCancel { color: var(--text-dim); border-color: var(--line-strong); }
-    #logoutCancel:hover {
-      background: linear-gradient(rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.05)), var(--panel);
-      border-color: var(--accent-line);
-      color: var(--text);
-    }
-    #logoutConfirm { color: #17120a; background: var(--accent); border-color: var(--accent); }
-    #logoutConfirm:hover { background: #ffb020; color: #17120a; }
-
     /* Brand column (the contained Prism box was removed): on desktop the shared
        style anchors the tagline to the bottom to fill space the box used to take —
        with the box gone, group the header content at the top so there's no empty
@@ -159,30 +118,14 @@
                built via textContent (CSP-safe). The failed-attempts note is the part that does the work. -->
           <p class="home-lastlogin" id="lastLogin" hidden></p>
         </div>
-
-        <button type="button" class="btn ghost" id="logout">Log out</button>
       </section>
     </main>
   </div>
 
-  <!-- Log-out confirmation dialog (sits above the HUD frame). -->
-  <div class="logout-backdrop" id="logoutModal" hidden>
-    <div class="logout-dialog" role="dialog" aria-modal="true" aria-labelledby="logoutMsg">
-      <p class="logout-msg" id="logoutMsg">Are you sure you want to log out?</p>
-      <div class="logout-actions">
-        <button type="button" class="navbtn" id="logoutCancel">Cancel</button>
-        <button type="button" class="navbtn" id="logoutConfirm">Log out</button>
-      </div>
-    </div>
-  </div>
-
   <script>
     const nameEl = document.getElementById('name');
-    const logoutBtn = document.getElementById('logout');
 
-    // Gate the page: if there's no valid session, go to login.
     fetch('/api/me').then(async (r) => {
-      if (!r.ok) { location.href = '/login.html'; return; }
       const data = await r.json();
       nameEl.textContent = data.user.displayName;
       renderLastLogin(data);
@@ -226,42 +169,6 @@
         // TODO: route to the target page when it exists.
         void target;
       });
-    });
-
-    // ---- Log-out confirmation ----
-    const modal = document.getElementById('logoutModal');
-    const cancelBtn = document.getElementById('logoutCancel');
-    const confirmBtn = document.getElementById('logoutConfirm');
-
-    function openModal() {
-      modal.hidden = false;
-      cancelBtn.focus();
-      document.addEventListener('keydown', onKeydown);
-    }
-    function closeModal() {
-      modal.hidden = true;
-      document.removeEventListener('keydown', onKeydown);
-      logoutBtn.focus(); // return focus to the LOG OUT button
-    }
-    function onKeydown(e) {
-      if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
-      if (e.key === 'Tab') { // keep focus within the dialog
-        const f = [cancelBtn, confirmBtn];
-        const i = f.indexOf(document.activeElement);
-        if (e.shiftKey && i <= 0) { e.preventDefault(); confirmBtn.focus(); }
-        else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); cancelBtn.focus(); }
-      }
-    }
-
-    logoutBtn.addEventListener('click', openModal);           // LOG OUT now asks first
-    cancelBtn.addEventListener('click', closeModal);
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); }); // backdrop click cancels
-
-    // Confirm: disable immediately (no double-submit), then run the existing logout.
-    confirmBtn.addEventListener('click', async () => {
-      confirmBtn.disabled = true;
-      await fetch('/api/logout', { method: 'POST' });
-      location.href = '/login.html';
     });
 
   </script>

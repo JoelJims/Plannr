@@ -376,7 +376,6 @@
     // only (degraded, never blank).
     async function loadMe() {
       const r = await fetch('/api/me');
-      if (!r.ok) { location.href = '/login.html'; return; }
       const u = (await r.json()).user;
       let roster = null;
       try { const ru = await fetch('/api/users'); if (ru.ok) roster = (await ru.json()).users; } catch { /* fall back to session user */ }

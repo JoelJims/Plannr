@@ -244,7 +244,6 @@
     // auth-gated /api/users returns id + displayName only (no username/hash leak).
     async function loadMe() {
       const r = await fetch('/api/me');
-      if (!r.ok) { location.href = '/login.html'; return; }
       const { user } = await r.json();
       let roster = null;
       try { const ru = await fetch('/api/users'); if (ru.ok) roster = (await ru.json()).users; } catch { /* fall back to session user */ }

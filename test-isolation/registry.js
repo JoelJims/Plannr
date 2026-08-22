@@ -50,9 +50,7 @@ const REGISTRY = [
   { method: 'PUT', path: '/api/budget', kind: 'mutate', tables: ['settings'] },
 ];
 
-// Tenant-NEUTRAL /api routes: auth + the caller's own session/account, no cross-tenant data surface.
-// (delete-account touches cash_in/cash_out by by_user_id, but it's a caller-account op, not a "B reads
-// A's data" surface; its attribution semantics change under tenancy — see the Phase 0 audit.)
+// Tenant-NEUTRAL /api routes: no cross-tenant data surface.
 const NEUTRAL = new Set([
   // Services phase (Part E): the caller's OWN saved custom-ledger names, filtered by req.user.id — a
   // genuinely per-user pick-list, not shared household data, so it is correctly isolated (no leak).
@@ -62,17 +60,6 @@ const NEUTRAL = new Set([
   'GET /api/ledger-customs',
   'DELETE /api/ledger-customs',
   'GET /api/me',
-  'POST /api/register',
-  'POST /api/login',
-  'POST /api/logout',
-  'POST /api/change-password',
-  'POST /api/delete-account',
-  // Part D (auth detection): the caller's OWN sessions + auth-event ring. GET /api/sessions reads
-  // sessions WHERE user_id = caller and the caller's own auth_events (settings keyed by tenant_id =
-  // user.id); sign-out-everywhere deletes the caller's OWN sessions. Account-scoped like logout /
-  // change-password above — a cross-tenant call only ever sees/clears the caller's rows.
-  'GET /api/sessions',
-  'POST /api/sign-out-everywhere',
 ]);
 
 function listApiRoutes(app) {

@@ -1,4 +1,4 @@
-// Plannr — Express server: registration, login, sessions, logout.
+// Plannr — Express server.
 
 // Load .env (if present) BEFORE anything reads process.env. Node built-in — no dotenv
 // dependency. Real environment variables win over the file, and a missing .env is fine.
@@ -6,15 +6,12 @@ try { process.loadEnvFile(); } catch { /* no .env present */ }
 
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const express = require('express');
-const cookieParser = require('cookie-parser');
-const pw = require('./password'); // shared hashing + strength (bcrypt + cost factor live there)
-const { db, init, DB_PATH, SESSION_TTL_DAYS, cleanupExpiredSessions } = require('./db');
+const { db, init, DB_PATH } = require('./db');
 const { LEDGERS } = require('./public/ledgers.js'); // fixed 23-ledger reference (single source, shared with the browser)
 
-// Shared IST (Asia/Kolkata) date/time stamps — used by auth-event logging, the Overview PDF
-// filename, and upcoming-payment day counts. IST has no DST, so no seasonal complexity.
+// Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
+// upcoming-payment day counts. IST has no DST, so no seasonal complexity.
 const IST_TZ = 'Asia/Kolkata';
 function istDateStamp(d = new Date()) { return new Intl.DateTimeFormat('en-CA', { timeZone: IST_TZ }).format(d); }
 function istStampFull(d = new Date()) {
@@ -28,24 +25,15 @@ const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 const SERVER_START = new Date(); // Phase 2 — process start time, surfaced by GET /api/health
 
-// Behind a reverse proxy in production, trust the first hop so req.ip is the
-// real client address (used by the auth rate limiter), not the proxy's.
-if (IS_PROD) app.set('trust proxy', 1);
-
-const COOKIE_NAME = 'plannr_session';
-// Phase 8A — cookie lifetime derives from the SAME SESSION_TTL_DAYS as the DB expires_at column,
-// so browser and server agree on the absolute 90-day window. The SQL modifier ('+90 days') used to
-// stamp expires_at at login comes from the same constant too — one source, no drift.
-const SESSION_MAX_AGE_MS = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
-const SESSION_EXPIRY_MODIFIER = `+${SESSION_TTL_DAYS} days`;
-
-// A valid-format hash we compare against when the username is unknown, so a
-// wrong username and a wrong password take roughly the same time (limits
-// username enumeration via timing). A login-FLOW concern, so it stays here — but it
-// uses the shared hasher so the cost factor is still defined only in password.js.
-const DUMMY_HASH = pw.hashSync('plannr-timing-equalizer'); // sync at boot (see password.js)
-
 init();
+
+// Single-user offline app: no login, no sessions. The one existing users row is the fixed
+// local owner; every request resolves to it, regardless of any cookie. There is no
+// registration route, so a user row must already exist (seed-demo.js or a direct INSERT).
+// Queried fresh per call (not resolved once at require-time): the test harness requires this
+// module before seeding any user, so a value captured at load time would be permanently stale.
+const OWNER_STMT = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
+const getOwner = () => OWNER_STMT.get();
 
 // Tenancy Phase 3 — the tenant data-access layer. Required AFTER init() so it can prepare its
 // tenant-scoped statements against the migrated schema. Every read/write touching one of the eight
@@ -56,23 +44,10 @@ const repo = require('./repo');
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
 // each binds to the final schema. node:sqlite compiles each SQL once here instead of on
-// every call. These sit on the hottest paths: currentUser() runs on every authenticated
-// request and guarded page load; computeOverview()'s four queries + getBudgetPaise() back
-// the Overview screen and every PDF export.
+// every call. These sit on the hottest paths: computeOverview()'s four queries + getBudgetPaise()
+// back the Overview screen and every PDF export.
 // (Order matters — declaring these before init() would prepare against a pre-migration or
 // dropped table. Keep them here.)
-// currentUser enforces the ABSOLUTE expiry here: a session past expires_at is treated as if it did
-// not exist (no row returned → 401 → redirect to login). We deliberately do NOT implement idle/sliding
-// expiry: that would require a last_seen_at (or expires_at) WRITE on every authenticated request — this
-// statement runs on the hottest path — and keeping that path read-only is intentional. The expiry is
-// absolute-from-creation by design; do not add a per-request write here.
-const CURRENT_USER_STMT = db.prepare(
-  `SELECT u.id, u.username, u.display_name AS displayName
-     FROM sessions s
-     JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ?
-      AND s.expires_at > datetime('now')`
-);
 // Tenancy Phase 3 (Part B.6) — the budget read is now tenant-scoped (settings has a composite
 // (tenant_id, key) key). B can no longer read A's budget.
 const BUDGET_STMT = db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'budget_paise'");
@@ -108,391 +83,26 @@ app.use((req, res, next) => {
   if (req.method === 'POST' && /^\/api\/[a-z-]+\/batch$/.test(req.path)) return next(); // parsed by jsonBatch on the route
   jsonSmall(req, res, next);
 });
-app.use(cookieParser());
 
-// ---------------------------------------------------------------------------
-// Session helpers
-// ---------------------------------------------------------------------------
-
-// The raw token lives only in the user's cookie. We store only its SHA-256
-// hash, so a leaked database can't be used to hijack live sessions.
-function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex');
-}
-
-// Part D — the request's client IP (trust-proxy-aware in prod; 'unknown' fallback, as the rate limiter)
-// and a length-capped user-agent. Used to stamp sessions + auth events so a stolen session leaves a trace.
-function reqIp(req) { return (req && req.ip) || 'unknown'; }
-function reqUa(req) { return String((req && req.get && req.get('user-agent')) || '').slice(0, 200) || null; }
-
-function createSession(userId, req) {
-  const token = crypto.randomBytes(32).toString('hex');
-  // expires_at set explicitly (NOT relying on the column default — a migrated DB's ADD COLUMN has
-  // none) from the shared constant, so it's absolute and never extended. Opportunistic sweep of
-  // expired rows here (login is low-frequency, unlike the per-request path) keeps the table bounded.
-  // Part D — record origin ip + user_agent for the active-sessions surface (record-and-surface).
-  cleanupExpiredSessions();
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, ip, user_agent) VALUES (?, ?, datetime('now', ?), ?, ?)")
-    .run(hashToken(token), userId, SESSION_EXPIRY_MODIFIER, reqIp(req), reqUa(req));
-  return token;
-}
-
-// ---------------------------------------------------------------------------
-// Part D — auth-event detection rings. Bounded (last 50) JSON arrays in settings (composite
-// (tenant_id,key)) — mirroring the Daily-Report attempt-ring. Each event carries an IST timestamp +
-// request IP. The attempted USERNAME is recorded on a failed login; the PASSWORD is NEVER stored, not
-// even hashed. Two rings:
-//   • PER-TENANT `auth_events` — a real account's own activity (login_success|login_failed|logout|
-//     password_change|lockout). Surfaced on Home, the Data page, and /api/health (tenant-scoped).
-//   • GLOBAL `auth_events_unknown` under the RESERVED tenant_id 0 (settings has no FK; 0 has no user
-//     row) — login attempts for usernames that DON'T EXIST. These have no owning account, so filing
-//     them under a real tenant would be wrong and would pollute that account's log. Kept in this global
-//     ring and DELIBERATELY excluded from every tenant's `auth_events` and from /api/health, so they
-//     can never leak into an account's own view. Username enumeration is exactly what an attacker does
-//     first, so the count is surfaced to the owner on Home + the Data page, beside the failed-attempts.
-// ---------------------------------------------------------------------------
-const AUTH_EVENTS_KEEP = 50;
-const GLOBAL_TENANT = 0;                          // reserved settings row — global (non-account) signals
-const UNKNOWN_KEY = 'auth_events_unknown';
-const getRingStmt = db.prepare('SELECT value FROM settings WHERE tenant_id = ? AND key = ?');
-const setRingStmt = db.prepare('INSERT INTO settings (tenant_id, key, value) VALUES (?, ?, ?) ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value');
-function readRing(tenantId, key) {
-  try { const r = getRingStmt.get(tenantId, key); if (r && r.value) { const v = JSON.parse(r.value); if (Array.isArray(v)) return v; } } catch { /* corrupt/absent → empty */ }
-  return [];
-}
-function pushRing(tenantId, key, rec) {
-  const arr = readRing(tenantId, key);
-  arr.push(rec);
-  while (arr.length > AUTH_EVENTS_KEEP) arr.shift(); // bounded like the others
-  setRingStmt.run(tenantId, key, JSON.stringify(arr));
-}
-function evRec(type, detail = {}) {
-  const now = new Date();
-  const rec = { at: now.toISOString(), atIST: istStampFull(now), type, ip: detail.ip || null };
-  if (detail.username != null) rec.username = String(detail.username).slice(0, 60); // NEVER the password
-  return rec;
-}
-function readAuthEvents(tenantId) { return readRing(tenantId, 'auth_events'); }
-// A real account's event. tenantId is the OWNING user id; a null tenant (unknown username) routes to
-// recordUnknownLoginFailure instead — never filed here.
-function recordAuthEvent(tenantId, type, detail = {}) {
-  if (!tenantId) return null;
-  const rec = evRec(type, detail);
-  pushRing(tenantId, 'auth_events', rec);
-  return rec;
-}
-// A login attempt for a username that does not exist → the GLOBAL ring only. No owning tenant, no
-// password. This is the username-enumeration signal.
-function recordUnknownLoginFailure(username, ip) { pushRing(GLOBAL_TENANT, UNKNOWN_KEY, evRec('login_failed_unknown', { username, ip })); }
-function readUnknownLoginFailures() { return readRing(GLOBAL_TENANT, UNKNOWN_KEY); }
-
-// The tenant's PREVIOUS successful login (the current session's is the last; this is the one before) —
-// the boundary shared by "failed attempts since" and "unknown attempts since".
-function prevLogin(tenantId) {
-  const successes = readAuthEvents(tenantId).filter((e) => e.type === 'login_success');
-  return successes.length >= 2 ? successes[successes.length - 2] : null;
-}
-// TENANT-scoped summary for Home + /api/health (NO global/unknown data — that must not leak here).
-function authSummary(tenantId) {
-  const events = readAuthEvents(tenantId);
-  const prev = prevLogin(tenantId);
-  const boundary = prev ? prev.at : '';
-  return { lastLogin: prev ? { atIST: prev.atIST, ip: prev.ip } : null, failedSinceLastLogin: events.filter((e) => e.type === 'login_failed' && e.at > boundary).length };
-}
-// GLOBAL unknown-username enumeration summary — surfaced to the owner on Home + the Data page ONLY
-// (never in a tenant's auth_events, never in /api/health). `sinceLastLogin` uses the caller's own
-// previous-login boundary so it reads alongside failedSinceLastLogin.
-function unknownEnumeration(tenantId) {
-  const prev = prevLogin(tenantId);
-  const boundary = prev ? prev.at : '';
-  const ring = readUnknownLoginFailures();
-  return { sinceLastLogin: ring.filter((e) => e.at > boundary).length, ringSize: ring.length, recent: ring.slice(-25).reverse() };
-}
-
-function currentUser(req) {
-  const token = req.cookies[COOKIE_NAME];
-  if (!token) return null;
-  return CURRENT_USER_STMT.get(hashToken(token)) || null;
-}
-
-function setSessionCookie(res, token) {
-  res.cookie(COOKIE_NAME, token, {
-    httpOnly: true,       // not readable from JS — mitigates XSS token theft
-    sameSite: 'lax',
-    secure: IS_PROD,      // require HTTPS in production
-    maxAge: SESSION_MAX_AGE_MS,
-    path: '/',
-  });
-}
+// Single-user offline app: every request resolves to the fixed local owner, no session lookup.
+function currentUser(req) { return getOwner(); }
 
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
-
-const USERNAME_RE = /^[a-zA-Z0-9._-]{3,30}$/;
-// Password strength (min length) lives in password.js (pw.passwordError) so the script and server agree.
 
 // Normalize a text field: coerce to string and trim. NOT for passwords — a
 // leading or trailing space is a legitimate password character.
 const str = (v) => String(v ?? '').trim();
 
 // ---------------------------------------------------------------------------
-// Rate limiting (auth endpoints only)
-// ---------------------------------------------------------------------------
-// Dependency-free fixed-window limiter: at most RL_MAX attempts per IP per
-// window. In-memory only, so it resets on restart — acceptable for this small
-// single-process app; its job is to blunt brute-force / credential-stuffing
-// bursts, not to be a durable quota. Kept lenient so real users never hit it.
-const RL_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-const RL_MAX = 10;                  // attempts per IP per window
-const rateBuckets = new Map();      // ip -> { count, resetAt }
-
-function rateLimit(req, res, next) {
-  const now = Date.now();
-  const ip = req.ip || 'unknown';
-  let bucket = rateBuckets.get(ip);
-  if (!bucket || now >= bucket.resetAt) {
-    bucket = { count: 0, resetAt: now + RL_WINDOW_MS };
-    rateBuckets.set(ip, bucket);
-  }
-  bucket.count += 1;
-  if (bucket.count > RL_MAX) {
-    return res.status(429).json({ error: 'Too many attempts. Please wait a minute and try again.' });
-  }
-  next();
-}
-
-// Periodically drop expired buckets so the Map can't grow without bound.
-// unref() so this timer never keeps the process alive on its own.
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, bucket] of rateBuckets) {
-    if (now >= bucket.resetAt) rateBuckets.delete(ip);
-  }
-}, RL_WINDOW_MS).unref();
-
-// ---------------------------------------------------------------------------
-// Login brute-force lockout (a strict second layer ON TOP of the per-IP
-// rateLimit above). Tracks failed logins per (IP + username) pair: after
-// LOGIN_MAX_FAILS failures the pair is refused for LOGIN_LOCK_MS — even with
-// the correct password — then auto-clears; a successful login clears the pair.
-// In-memory, lazy-expired (resets on restart). It is purely COUNT-based, so it
-// behaves identically for a real and a fake username and never reveals whether
-// an account exists. A different username from the same IP has its own budget.
-// ---------------------------------------------------------------------------
-const LOGIN_MAX_FAILS = 5;       // real users mistype once or twice; 5 gives clear headroom
-const LOGIN_LOCK_MS = 60 * 1000; // 60-second cooldown, then auto-clears (not a permanent lock)
-const loginFails = new Map();    // `${ip}::${username}` -> { count, expireAt }
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, rec] of loginFails) {
-    if (now >= rec.expireAt) loginFails.delete(key);
-  }
-}, LOGIN_LOCK_MS).unref();
-
-// ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
 
-// Phase 7C — Express 4 does NOT catch rejections from async route handlers: an async handler that
-// throws leaves the request hanging forever and never reaches the error handler. Wrap every async
-// handler so a rejection is forwarded to next() -> the global error handler -> a real response.
-const asyncH = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-app.post('/api/register', rateLimit, asyncH(async (req, res) => {
-  const username = str(req.body.username);
-  const displayName = str(req.body.displayName);
-  const password = String(req.body.password || '');            // never trim a password
-  const confirmPassword = String(req.body.confirmPassword || '');
-
-  if (!USERNAME_RE.test(username)) {
-    return res.status(400).json({
-      error: 'Username must be 3-30 characters: letters, numbers, dot, dash or underscore.',
-    });
-  }
-  if (!displayName || displayName.length > 60) {
-    return res.status(400).json({ error: 'Display name is required (max 60 characters).' });
-  }
-  { const e = pw.passwordError(password); if (e) return res.status(400).json({ error: e }); }
-  if (password !== confirmPassword) {
-    return res.status(400).json({ error: 'Passwords do not match.' });
-  }
-
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-  if (existing) {
-    return res.status(409).json({ error: 'That username is already taken.' });
-  }
-
-  const passwordHash = await pw.hash(password);
-  db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)').run(
-    username,
-    displayName,
-    passwordHash
-  );
-
-  res.status(201).json({ ok: true, message: 'Account created. You can now log in.' });
-}));
-
-app.post('/api/login', rateLimit, asyncH(async (req, res) => {
-  const username = str(req.body.username);
-  const password = String(req.body.password || '');            // never trim a password
-
-  // Brute-force lockout keyed by (IP + username), checked BEFORE the credential
-  // check and based purely on the failure count — so it behaves identically for
-  // a real and a fake username (no account-existence leak).
-  const now = Date.now();
-  const key = `${req.ip || 'unknown'}::${username}`;
-  const existing = loginFails.get(key);
-  if (existing && now >= existing.expireAt) loginFails.delete(key); // lock expired -> auto-clear
-  const rec = loginFails.get(key);
-  if (rec && rec.count >= LOGIN_MAX_FAILS) {
-    return res.status(429).json({ error: 'Too many failed sign-in attempts. For your security, sign-in is paused for about a minute — please wait and try again.' });
-  }
-
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  // Phase 7C — bcrypt is now ASYNC, so concurrent logins interleave and the old
-  // check-then-(after-await)-increment could let many attempts pass the check at a stale count.
-  // Increment the failure count NOW (synchronously, before the await) — the check above + this
-  // increment run in one tick, so concurrent attempts can't all read a low count. A SUCCESS
-  // clears it below; so this optimistically counts the attempt as a failure until proven otherwise.
-  loginFails.set(key, { count: (rec ? rec.count : 0) + 1, expireAt: now + LOGIN_LOCK_MS });
-  const passwordOk = await pw.verify(password, user ? user.password_hash : DUMMY_HASH);
-
-  if (!user || !passwordOk) {
-    // Failure: the count is already incremented (above). Same generic message + timing equalizer.
-    // Part D — record the failed attempt under the TARGETED account (if the username is real), so the
-    // owner can see "someone tried to log in as me". An unknown username has no account home → console
-    // only (never file a stranger's typo under a random tenant). Password is NEVER recorded.
-    const newCount = (rec ? rec.count : 0) + 1;
-    if (user) {
-      recordAuthEvent(user.id, 'login_failed', { ip: reqIp(req), username });
-      if (newCount === LOGIN_MAX_FAILS) recordAuthEvent(user.id, 'lockout', { ip: reqIp(req), username });
-    } else {
-      // Unknown username → the GLOBAL enumeration ring (no owning account). Username kept, password never.
-      recordUnknownLoginFailure(username, reqIp(req));
-      console.warn(`[auth] failed login for UNKNOWN username "${String(username).slice(0, 60)}" from ${reqIp(req)} — recorded to the global enumeration ring.`);
-    }
-    return res.status(401).json({ error: 'Invalid username or password.' });
-  }
-
-  loginFails.delete(key); // a successful login resets the pair's count to 0
-  recordAuthEvent(user.id, 'login_success', { ip: reqIp(req) });
-  const token = createSession(user.id, req);
-  setSessionCookie(res, token);
-  res.json({ ok: true, user: { id: user.id, username: user.username, displayName: user.display_name } });
-}));
-
-app.post('/api/logout', (req, res) => {
-  const u = currentUser(req); // resolve BEFORE deleting the row, so we can attribute the event
-  const token = req.cookies[COOKIE_NAME];
-  if (token) {
-    db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
-  }
-  if (u) recordAuthEvent(u.id, 'logout', { ip: reqIp(req) }); // Part D
-  res.clearCookie(COOKIE_NAME, { path: '/' });
-  res.json({ ok: true });
-});
-
-// Change password while logged in. Reuses the SAME session check (currentUser),
-// bcrypt rounds, validation messages, and cookie clearing as the existing
-// routes. On success every session row for this user is deleted (logged out
-// everywhere) and the caller's cookie is cleared, forcing a fresh login with
-// the new password. Rate-limited like the other credential endpoints.
-app.post('/api/change-password', rateLimit, asyncH(async (req, res) => {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Not logged in.' });
-
-  const currentPassword = String(req.body.currentPassword || ''); // never trim a password
-  const newPassword = String(req.body.newPassword || '');
-  const confirmPassword = String(req.body.confirmPassword || '');
-
-  const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id);
-  if (!row || !(await pw.verify(currentPassword, row.password_hash))) {
-    return res.status(400).json({ error: 'Current password is incorrect.' });
-  }
-  { const e = pw.passwordError(newPassword); if (e) return res.status(400).json({ error: e }); }
-  if (newPassword !== confirmPassword) {
-    return res.status(400).json({ error: 'Passwords do not match.' });
-  }
-  if (newPassword === currentPassword) {
-    return res.status(400).json({ error: 'New password must be different from the current one.' });
-  }
-
-  const passwordHash = await pw.hash(newPassword);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, user.id);
-  recordAuthEvent(user.id, 'password_change', { ip: reqIp(req) }); // Part D — the ring lives in settings, survives the session wipe
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id); // log out everywhere
-  res.clearCookie(COOKIE_NAME, { path: '/' });
-  res.json({ ok: true, message: 'Password changed. Please log in again.' });
-}));
-
-// Delete the logged-in user's OWN account (never anyone else's — always the
-// session user). Requires the current password (bcrypt-verified, same as
-// change-password). DATA-SAFETY GUARD: refuse if the account owns ANY ledger
-// entries — cash_in/cash_out rows with by_user_id = this user, live OR
-// soft-deleted — because deleting would orphan that data (and the by_user_id
-// foreign key has no cascade). The user must reassign/remove those first. On a
-// clean delete the user row is removed and its sessions cascade (schema
-// ON DELETE CASCADE); the caller's cookie is cleared so the client goes to login.
-// Rate-limited like the other credential endpoints.
-app.post('/api/delete-account', rateLimit, asyncH(async (req, res) => {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Not logged in.' });
-
-  const currentPassword = String(req.body.currentPassword || ''); // never trim a password
-  const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id);
-  if (!row || !(await pw.verify(currentPassword, row.password_hash))) {
-    return res.status(400).json({ error: 'Current password is incorrect.' });
-  }
-
-  // Rows the user authored, within their OWN tenant (one-account-per-household -> tenant_id = user.id).
-  const owned = repo.authoredCount(user.id, user.id);
-  if (owned > 0) {
-    return res.status(409).json({
-      error: `Your account is attached to ${owned} ledger entr${owned === 1 ? 'y' : 'ies'} recorded under your name. Deleting it would orphan that data, so it's blocked — reassign or remove those entries first, then delete your account.`,
-    });
-  }
-
-  db.prepare('DELETE FROM users WHERE id = ?').run(user.id); // sessions cascade (ON DELETE CASCADE)
-  res.clearCookie(COOKIE_NAME, { path: '/' });
-  res.json({ ok: true, message: 'Account deleted.' });
-}));
-
+// Keep: /api/me — 8 pages call it, 3 use the response to populate "By" dropdowns. Returns the
+// fixed local owner with no auth check.
 app.get('/api/me', (req, res) => {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Not logged in.' });
-  // Part D — lastLogin + failedSinceLastLogin (tenant), plus the GLOBAL unknown-username enumeration
-  // count (a separate field, never merged into the tenant's own log). Both feed the Home surface.
-  res.json({ user, ...authSummary(user.id), unknownLoginFailures: unknownEnumeration(user.id) });
-});
-
-// Part D — the caller's OWN active (non-expired) sessions + recent auth events, for the Data page's
-// security section. Account-scoped (sessions carry user_id). Never returns the token hash; flags THIS
-// session as `current`. events are the caller's own (own account) — no cross-tenant exposure.
-app.get('/api/sessions', (req, res) => {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Not logged in.' });
-  const cur = req.cookies[COOKIE_NAME] ? hashToken(req.cookies[COOKIE_NAME]) : null;
-  const rows = db.prepare("SELECT token_hash, created_at, ip, user_agent FROM sessions WHERE user_id = ? AND expires_at > datetime('now') ORDER BY created_at DESC").all(user.id);
-  res.json({
-    sessions: rows.map((r) => ({ createdAt: r.created_at, ip: r.ip || null, userAgent: r.user_agent || null, current: r.token_hash === cur })),
-    events: readAuthEvents(user.id).slice(-25).reverse(), // most-recent first, bounded
-    ...authSummary(user.id),
-    unknownLoginFailures: unknownEnumeration(user.id), // GLOBAL enumeration ring (separate from the tenant log)
-  });
-});
-
-// Part D — sign out on ALL devices (this one included). Reuses the same "delete all sessions for this
-// user" primitive as change-password, then clears the caller's cookie → a fresh login is needed
-// everywhere. One logout event is recorded (the ring lives in settings, so it survives the wipe).
-app.post('/api/sign-out-everywhere', (req, res) => {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Not logged in.' });
-  const info = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
-  recordAuthEvent(user.id, 'logout', { ip: reqIp(req) });
-  res.clearCookie(COOKIE_NAME, { path: '/' });
-  res.json({ ok: true, cleared: info.changes });
+  res.json({ user: getOwner() });
 });
 
 // User roster for the "By" attribution pickers. Auth-gated (requireApiAuth): a public
@@ -527,12 +137,10 @@ app.delete('/api/ledger-customs', requireApiAuth, (req, res) => {
 // returns paise out. Parameterized queries only; soft-delete (never hard).
 // ---------------------------------------------------------------------------
 
-// API auth guard: like requireAuth but returns 401 JSON instead of an HTML
-// redirect, so fetch() callers get a clean error (matches /api/me's convention).
+// Single-user offline app: no auth check. Sets req.user to the fixed local owner so every
+// downstream req.user.id call site (repo.js's tenant argument) keeps working unchanged.
 function requireApiAuth(req, res, next) {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Not logged in.' });
-  req.user = user;
+  req.user = getOwner();
   next();
 }
 
@@ -1984,33 +1592,18 @@ app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 2 — one-request health check for the windowless case. Auth-gated. Plus server start
-// time and recent auth activity.
+// Phase 2 — one-request health check for the windowless case. Server start time only now.
 app.get('/api/health', requireApiAuth, (req, res) => {
-  // Part D — auth-detection summary + recent events for the CALLER's tenant only (read by req.user.id).
-  // The events are the caller's own account activity; isolation-harness verified they don't leak.
-  const events = readAuthEvents(req.user.id);
-  const activeSessions = db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND expires_at > datetime('now')").get(req.user.id).n;
-  res.json({
-    serverStart: SERVER_START.toISOString(),
-    auth: {
-      ...authSummary(req.user.id),        // lastLogin { atIST, ip } + failedSinceLastLogin
-      activeSessions,
-      recentEvents: events.slice(-25).reverse(), // most-recent first
-    },
-  });
+  res.json({ serverStart: SERVER_START.toISOString() });
 });
 
 // ---------------------------------------------------------------------------
 // Static frontend (with a server-side auth guard on the protected pages)
 // ---------------------------------------------------------------------------
 
-// Server-side page guard: only a request carrying a valid session may receive a
-// protected page. Reuses the SAME currentUser() check as /api/me — no second
-// session logic. On failure it issues a plain 302 browser redirect to login.
+// Single-user offline app: pages are unguarded.
 function requireAuth(req, res, next) {
-  if (currentUser(req)) return next();
-  res.redirect('/login.html');
+  next();
 }
 
 // ---------------------------------------------------------------------------
@@ -2430,18 +2023,8 @@ function watchStopSentinel(sentinelPath, onStop, intervalMs = 1000) {
   return timer;
 }
 
-// Phase 8A/9 — sweep expired sessions at startup. INTERNAL boot work, kept ungated so an imported
-// test process runs it too (a no-op on a fresh test DB; clears stale rows on the live app).
-const swept = cleanupExpiredSessions();
-if (swept) console.log(`[sessions] removed ${swept} expired session(s) on boot.`);
-
 // Phase 9 — export the Express app so the test suite can start it on an ephemeral port WITHOUT any
 // of the external side effects below (no listener on :3000, no cron).
-// Test seam: clear the in-memory auth limiters (per-IP rate limit + per-(ip,user) lockout) so tests
-// sharing one process don't leak brute-force state between cases. No effect on production behaviour.
-app._resetAuthLimits = () => { rateBuckets.clear(); loginFails.clear(); };
-app._recordUnknownLoginFailure = recordUnknownLoginFailure; // Part D follow-up — fast bounded-ring test seam
-app._readUnknownLoginFailures = readUnknownLoginFailures;
 app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: exercised by schema tests
 app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview warm Playwright; teardown closes it
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?

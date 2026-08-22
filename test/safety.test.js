@@ -18,6 +18,4 @@ test('harness: seed user + session + authed request round-trips', async () => {
   const me = await H.get('/api/me', { cookie });
   assert.strictEqual(me.status, 200);
   assert.strictEqual(me.json.user.username, user.username);
-  const anon = await H.get('/api/me');
-  assert.strictEqual(anon.status, 401);
 });

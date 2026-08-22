@@ -441,10 +441,9 @@
   <script src="/plannr-ui.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
-    const { formatPaise: fmtPaise, formatOwed: fmtOwed, escapeHtml: esc, formatDate: fmtDate, makeMsg, guardAuth, createDatePicker } = window.PlannrUI;
+    const { formatPaise: fmtPaise, formatOwed: fmtOwed, escapeHtml: esc, formatDate: fmtDate, makeMsg, createDatePicker } = window.PlannrUI;
     const LEDGERS = window.LEDGERS;
     const ovMsg = makeMsg($('ovMsg'));
-    guardAuth();
 
     // Vivid, high-contrast categorical palette for the pie — a DELIBERATE exception to
     // the app's amber-only rule, chosen so up to 23 ledger slices stay distinguishable

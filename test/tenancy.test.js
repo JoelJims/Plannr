@@ -53,26 +53,17 @@ test('per-tenant index: one live contract per tenant; a second live for the SAME
   assert.throws(() => H.db.prepare('UPDATE contract SET deleted_at=NULL WHERE id=?').run(soft), /UNIQUE/, 'restoring a second live for the same tenant is refused');
 });
 
-test('two tenants can each hold a live contract simultaneously (impossible under the old db-wide index)', () => {
+// skipped: needs two users; tenancy is removed in Phase 2.
+test.skip('two tenants can each hold a live contract simultaneously (impossible under the old db-wide index)', () => {
   const b = H.seedUser();
   insContract(userId);
   assert.doesNotThrow(() => insContract(b.id), 'tenant B creates a live contract while tenant A has one');
   assert.strictEqual(H.db.prepare('SELECT COUNT(*) n FROM contract WHERE deleted_at IS NULL').get().n, 2, 'two live contracts, one per tenant');
 });
 
-// ── Part C — settings ─────────────────────────────────────────────────────────────────────────────
-test('per-tenant settings: writing tenant A budget leaves tenant B untouched', async () => {
-  const A = H.seedLoggedIn();
-  const B = H.seedLoggedIn();
-  assert.strictEqual((await H.put('/api/budget', { budgetRupees: '1000' }, { cookie: A.cookie })).status, 200);
-  assert.strictEqual((await H.put('/api/budget', { budgetRupees: '2000' }, { cookie: B.cookie })).status, 200);
-  const val = (uid) => { const r = H.db.prepare("SELECT value FROM settings WHERE key='budget_paise' AND tenant_id=?").get(uid); return r ? r.value : null; };
-  assert.strictEqual(val(A.user.id), '100000', "A's budget is its own row (₹1000)");
-  assert.strictEqual(val(B.user.id), '200000', "B's budget is its own row (₹2000)");
-  // re-writing B does not disturb A
-  await H.put('/api/budget', { budgetRupees: '9999' }, { cookie: B.cookie });
-  assert.strictEqual(val(A.user.id), '100000', "A's budget row is byte-identical after B writes again");
-});
+// Part C's "per-tenant settings: writing tenant A budget leaves tenant B untouched" test is removed:
+// under single-owner auth (Phase 1.6) every request resolves to the same fixed owner, so a second
+// "logged-in as B" HTTP identity no longer exists to exercise this with.
 
 // ── Part F — a pre-tenancy backup still imports ────────────────────────────────────────────────────
 test('a pre-tenancy backup (rows carry no tenant_id) still imports and is re-owned by the importer', async () => {

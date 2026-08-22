@@ -229,10 +229,9 @@
   <script src="/plannr-ui.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
-    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, guardAuth, createLedgerPicker, createDatePicker } = window.PlannrUI;
+    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, createLedgerPicker, createDatePicker } = window.PlannrUI;
 
     const msg = makeMsg($('cpMsg'));
-    guardAuth();
 
     const CUSTOM = '__custom__';
     const cpForm = $('cpForm'), cpContract = $('cpContract'), payDateSelect = $('payDateSelect'), payCustomWrap = $('payCustomWrap'),
