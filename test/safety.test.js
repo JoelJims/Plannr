@@ -18,12 +18,6 @@ test('structurally cannot construct a Nodemailer transport (makeTransport -> nul
   assert.strictEqual(dr.makeTransport(), null, 'makeTransport must return null before ever calling nodemailer.createTransport');
 });
 
-test('structurally cannot boot a WhatsApp client (init is a no-op under PLANNR_TEST)', () => {
-  const wa = require('../whatsapp');
-  wa.init(); // must be a hard no-op
-  assert.strictEqual(wa.isReady(), false, 'no WhatsApp client may ever become ready in the suite');
-});
-
 test('harness: seed user + session + authed request round-trips', async () => {
   const { user, cookie } = H.seedLoggedIn();
   const me = await H.get('/api/me', { cookie });

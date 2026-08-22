@@ -145,7 +145,6 @@ const row = (table, id) => db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get
   const health = await req('GET', '/api/health', { cookie: B.cookie });
   const ch = (health.json && health.json.channels) || {};
   check('health read', `health email recipientCount 0 for B (saw ${ch.email && ch.email.recipientCount})`, ch.email && ch.email.recipientCount === 0);
-  check('health read', `health whatsapp recipientCount 0 for B (saw ${ch.whatsapp && ch.whatsapp.recipientCount})`, ch.whatsapp && ch.whatsapp.recipientCount === 0);
 
   // ── Point 4: cross-tenant contract creation must be WRITABLE — run it now, WHILE A still has a
   // live contract (the mutation section below soft-deletes it via a leak), so it genuinely exercises

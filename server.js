@@ -13,8 +13,7 @@ const cookieParser = require('cookie-parser');
 const pw = require('./password'); // shared hashing + strength (bcrypt + cost factor live there)
 const { db, init, DB_PATH, SESSION_TTL_DAYS, cleanupExpiredSessions } = require('./db');
 const { LEDGERS } = require('./public/ledgers.js'); // fixed 23-ledger reference (single source, shared with the browser)
-const dailyReport = require('./daily-report');       // scheduled Overview-PDF delivery (email + WhatsApp)
-const whatsapp = require('./whatsapp');              // resident WhatsApp client (second delivery channel)
+const dailyReport = require('./daily-report');       // scheduled Overview-PDF delivery (email)
 const { makeCooldown } = require('./cooldown');      // per-session throttle for the manual test-send buttons
 const csp = require('./csp');                        // Phase 8C: per-page CSP (inline hashes computed at boot)
 
@@ -1906,8 +1905,7 @@ function getPdfBrowser() {
 // mobile user-activation window — and CLOSED again after PDF_IDLE_MS with no render, reclaiming that
 // memory between exports. A scheduled Daily Report (or any export) after a close just relaunches
 // lazily via getPdfBrowser(); the cold ~2-3s launch then only ever hits an automated/background
-// send, never an interactive export that was preceded by an Overview visit. WhatsApp residency is
-// deliberately left untouched (relinking/ban risk) — this reclaims Playwright's footprint only.
+// send, never an interactive export that was preceded by an Overview visit.
 const PDF_IDLE_MS = Number(process.env.PLANNR_PDF_IDLE_MS) || 5 * 60 * 1000; // env override: tests only
 let _pdfInFlight = 0;   // renders currently running (BOTH the HTTP export and the scheduled send)
 let _pdfIdleTimer = null;
@@ -2151,10 +2149,10 @@ app.get('/api/daily-report', requireApiAuth, (req, res) => {
   res.json({ ...dailyReport.getConfig(req.user.id), status: dailyReport.sendStatus(req.user.id) });
 });
 // Phase 2 — one-request health check for the windowless case. Auth-gated. Per channel: configured,
-// last attempt (outcome + reason), last success, next fire (IST), stale flag, and readiness (WhatsApp
-// isReady / email credentials present). Plus server start time + CSP mode. Deliberately returns NO
-// recipient addresses or phone numbers (Phase 8 stripped contacts from backups — they don't reappear
-// here): only COUNTS and HH:MM send times, never the values.
+// last attempt (outcome + reason), last success, next fire (IST), stale flag, and readiness (email
+// credentials present). Plus server start time + CSP mode. Deliberately returns NO recipient
+// addresses or phone numbers (Phase 8 stripped contacts from backups — they don't reappear here):
+// only COUNTS and HH:MM send times, never the values.
 app.get('/api/health', requireApiAuth, (req, res) => {
   // Tenancy Phase 3 (Part B.8) — per-channel config + status for the CALLER's tenant only.
   const cfg = dailyReport.getConfig(req.user.id);
@@ -2179,7 +2177,6 @@ app.get('/api/health', requireApiAuth, (req, res) => {
     csp: csp.REPORT_ONLY ? 'report-only' : 'enforcing',
     channels: {
       email: chan(cfg.recipients, cfg.sendTimes, st.email, emailReady),
-      whatsapp: chan(cfg.whatsappRecipients, cfg.whatsappSendTimes, st.whatsapp, whatsapp.isReady()),
     },
     auth: {
       ...authSummary(req.user.id),        // lastLogin { atIST, ip } + failedSinceLastLogin
@@ -2189,27 +2186,23 @@ app.get('/api/health', requireApiAuth, (req, res) => {
   });
 });
 app.put('/api/daily-report', requireApiAuth, (req, res) => {
-  // Partial update: only the fields present in the body are changed. Email and WhatsApp
-  // (recipients + their own send-time lists) can therefore be saved independently — an
-  // omitted field is left untouched, so saving one channel never resets the other.
+  // Partial update: only the fields present in the body are changed. An omitted field is left
+  // untouched, so saving recipients never resets send times (and vice versa).
   const r = dailyReport.saveConfig({
     recipients: req.body.recipients,
-    whatsappRecipients: req.body.whatsappRecipients,
     sendTimes: req.body.sendTimes,
-    whatsappSendTimes: req.body.whatsappSendTimes,
   }, req.user.id); // Tenancy Phase 2 — attribute the config write to the saving tenant
   if (r.error) return res.status(400).json({ error: r.error });
-  res.json({ ok: true, recipients: r.recipients, whatsappRecipients: r.whatsappRecipients, sendTimes: r.sendTimes, whatsappSendTimes: r.whatsappSendTimes });
+  res.json({ ok: true, recipients: r.recipients, sendTimes: r.sendTimes });
 });
 // Per-session cooldown (~45s, within the requested 30–60s) for the manual test-send
-// buttons — one send per session per window. Keyed by the session cookie. Armed on entry
+// button — one send per session per window. Keyed by the session cookie. Armed on entry
 // so a rapid second click (or a script) can't slip a second send through; a too-soon
 // retry gets a clear 429 telling the user how long to wait (never a silent drop). Cleared
 // when nothing was actually sent (no recipients), so a genuine first use isn't penalised.
-// Independent per channel. The auth rate limiter + login lockout are untouched by this.
+// The auth rate limiter + login lockout are untouched by this.
 const TEST_SEND_COOLDOWN_MS = 45 * 1000;
 const emailTestCooldown = makeCooldown(TEST_SEND_COOLDOWN_MS);
-const whatsappTestCooldown = makeCooldown(TEST_SEND_COOLDOWN_MS);
 const cooldownKey = (req) => req.cookies[COOKIE_NAME] || req.ip || 'anon'; // per session
 
 // Immediate manual EMAIL send to the currently-saved recipients — separate from the schedule.
@@ -2220,25 +2213,10 @@ app.post('/api/daily-report/test', requireApiAuth, async (req, res) => {
   emailTestCooldown.arm(key); // arm up front so a rapid repeat can't double-send
   const r = await dailyReport.sendEmail(req.user.id, 'Send Test Email Now (manual)'); // the caller's tenant config
   if (r.ok) return res.json({ ok: true, sent: r.sent });
-  // Nothing sent -> release the cooldown so a retry isn't falsely blocked (same fix as WhatsApp).
+  // Nothing sent -> release the cooldown so a retry isn't falsely blocked.
   emailTestCooldown.clear(key);
   if (r.skipped) return res.status(400).json({ error: 'Add at least one recipient and Save before sending a test email.' });
   res.status(502).json({ error: r.error || 'The test email could not be sent.' });
-});
-// Immediate manual WHATSAPP send — mirrors the email test, but to the saved numbers.
-app.post('/api/daily-report/test-whatsapp', requireApiAuth, async (req, res) => {
-  const key = cooldownKey(req);
-  const wait = whatsappTestCooldown.remaining(key);
-  if (wait > 0) return res.status(429).json({ error: `You just sent a test WhatsApp message. Please wait ${Math.ceil(wait / 1000)}s before sending another.` });
-  whatsappTestCooldown.arm(key);
-  // suppressAlert: a manual test the user is watching must NOT fire the cross-channel email alert or burn its daily slot.
-  const r = await dailyReport.sendWhatsapp(req.user.id, 'Send Test WhatsApp Now (manual)', undefined, undefined, { suppressAlert: true });
-  if (r.ok) return res.json({ ok: true, sent: r.sent, failed: r.failed });
-  // Nothing was actually sent (disconnected, no numbers, or a send error) — release the cooldown so
-  // the retry isn't blocked by a phantom "you just sent" 429, and surface the REAL reason instead.
-  whatsappTestCooldown.clear(key);
-  if (r.skipped) return res.status(400).json({ error: 'Add at least one WhatsApp number and Save before sending a test message.' });
-  res.status(502).json({ error: r.error || 'The test WhatsApp message could not be sent.' });
 });
 
 // ---------------------------------------------------------------------------
@@ -2634,27 +2612,17 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 // kill the handler won't run, but SQLite still recovers from the WAL on the
 // next open, so no data is lost either way.)
 // ---------------------------------------------------------------------------
-// Phase 7A — clean shutdown that reaps BOTH Chromium trees before exit (they used to orphan on
-// every Ctrl+C: puppeteer's re-parents and survives at ~1.2 GB/set). Async so the closes can be
-// awaited; a hard timeout force-exits if a Chromium hangs; a SECOND Ctrl+C exits immediately.
+// Phase 7A — clean shutdown that reaps the Playwright Chromium browser before exit. Async so the
+// close can be awaited; a hard timeout force-exits if Chromium hangs; a SECOND Ctrl+C exits immediately.
 let closing = false;
 async function shutdown() {
   if (closing) return;
   closing = true;
-  console.log('[shutdown] signal received — closing WhatsApp + Playwright browsers…');
-  // A hung Chromium must never leave the process unkillable — force-exit as a last resort. 35s to
-  // cover: whatsapp.destroy() WAITING (bounded) for a mid-init session to settle before closing, PLUS
-  // the Phase 11A complete session snapshot taken after the browser closes (a first-ever full mirror
-  // can copy a few hundred MB). Impatient? A second Ctrl+C exits immediately.
+  console.log('[shutdown] signal received — closing the PDF browser…');
+  // A hung Chromium must never leave the process unkillable — force-exit as a last resort. Impatient?
+  // A second Ctrl+C exits immediately.
   const hardKill = setTimeout(() => { console.error('[shutdown] timed out — forcing exit.'); process.exit(1); }, 35000);
-  // 1) WhatsApp: close its browser WITHOUT unlinking the session (destroy(), never logout()).
-  try { await whatsapp.destroy(); } catch (e) { console.error('WhatsApp shutdown error:', e); }
-  // 1b) Phase 11A — the WhatsApp browser is now CLOSED, so this is the ONE moment a COMPLETE session
-  //     snapshot is possible (no locked files). Refresh the recovery copy here, but only if we had a
-  //     good live session this run — so a never-connected boot can't overwrite a known-good snapshot
-  //     with an unlinked/partial one. Bounded by the hardKill below.
-  try { if (whatsapp.everReady()) await whatsapp.snapshotSession({ browserClosed: true }); } catch (e) { console.error('[shutdown] snapshot error (ignored):', e); }
-  // 2) Playwright: _pdfBrowserPromise may be PENDING or REJECTED (not a browser) — await defensively
+  // Playwright: _pdfBrowserPromise may be PENDING or REJECTED (not a browser) — await defensively
   //    and skip cleanly if it rejected.
   try {
     if (_pdfBrowserPromise) { const b = await _pdfBrowserPromise.catch(() => null); if (b) await b.close().catch(() => {}); }
@@ -2691,7 +2659,7 @@ const swept = cleanupExpiredSessions();
 if (swept) console.log(`[sessions] removed ${swept} expired session(s) on boot.`);
 
 // Phase 9 — export the Express app so the test suite can start it on an ephemeral port WITHOUT any
-// of the external side effects below (no listener on :3000, no WhatsApp Chromium, no cron).
+// of the external side effects below (no listener on :3000, no cron).
 // Test seam: clear the in-memory auth limiters (per-IP rate limit + per-(ip,user) lockout) so tests
 // sharing one process don't leak brute-force state between cases. No effect on production behaviour.
 app._resetAuthLimits = () => { rateBuckets.clear(); loginFails.clear(); };
@@ -2721,19 +2689,17 @@ repo.assertTenantScoped();
 
 module.exports = app;
 
-// EXTERNAL side effects — the LAN listener, the resident WhatsApp Chromium, cron scheduling, and the
-// process signal handlers — run ONLY when started directly (`node server.js`), NEVER when the app is
-// imported (node --test). This is what makes the suite structurally unable to boot a WhatsApp client
-// or schedule a real send. `npm start` is unchanged: there, require.main === module.
+// EXTERNAL side effects — the LAN listener, cron scheduling, and the process signal handlers — run
+// ONLY when started directly (`node server.js`), NEVER when the app is imported (node --test). This
+// is what makes the suite structurally unable to schedule a real send. `npm start` is unchanged:
+// there, require.main === module.
 if (require.main === module) {
   let sigints = 0;
   process.on('SIGINT', () => {
     if (++sigints >= 2) {
-      // Phase 9 (Part E): the force-exit bypasses shutdown()'s graceful close — Chromium is killed
-      // WITHOUT flushing the session store, reintroducing the original corruption risk. Warn loudly.
+      // Phase 9 (Part E): the force-exit bypasses shutdown()'s graceful close (WAL checkpoint, PDF
+      // browser cleanup). Warn loudly.
       console.error('[shutdown] second Ctrl+C — force-exiting NOW, bypassing the graceful close.');
-      console.error('[shutdown]   WhatsApp Chromium was killed WITHOUT flushing its session store.');
-      console.error('[shutdown]   If the NEXT boot asks for a QR, restore .wwebjs_auth from .wwebjs_auth_snapshot BEFORE scanning (see README).');
       process.exit(1);
     }
     shutdown();
@@ -2762,17 +2728,12 @@ if (require.main === module) {
     // (idle if no send time set), injecting the PDF generator so the automated send reuses the
     // exact same builder.
     dailyReport.init(generateOverviewPdf, buildReportExtras); // Part B — inject the "since last report" delta builder
-    // Phase 2 — one clear status line per boot (each channel's configured state, last success, and
-    // whether the last attempt failed), so the windowless case is answerable by opening the log once.
+    // Phase 2 — one clear status line per boot (configured state, last success, and whether the last
+    // attempt failed), so the windowless case is answerable by opening the log once.
     console.log(dailyReport.bootSummaryLine());
-    // Bound the WhatsApp web-version cache before connecting (keep newest 2), then bring up the
-    // resident WhatsApp client once, reconnecting from the saved session (.wwebjs_auth) with no QR.
-    whatsapp.pruneVersionCache();
-    whatsapp.init();
     // Phase 11A — after the scheduler is up and we're listening, catch up any send MISSED while the
-    // machine was off/asleep at its scheduled minute (per channel, once/day). Fire-and-forget: it never
-    // throws and must never block or crash boot. Waits (bounded) for the WhatsApp session only if the
-    // WhatsApp channel is actually due. PLANNR_NO_CATCHUP=1 disables it (set in the test harness).
-    dailyReport.runCatchUp(whatsapp.whenReady);
+    // machine was off/asleep at its scheduled minute (once/day). Fire-and-forget: it never throws and
+    // must never block or crash boot. PLANNR_NO_CATCHUP=1 disables it (set in the test harness).
+    dailyReport.runCatchUp();
   });
 }

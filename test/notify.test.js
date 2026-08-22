@@ -1,5 +1,5 @@
 // Notification config — pure config/validation/scheduling logic. NEVER sends: makeTransport is null
-// under PLANNR_TEST and no WhatsApp client is ever booted; cron jobs are counted then stopped.
+// under PLANNR_TEST; cron jobs are counted then stopped.
 const H = require('./helpers');
 const dr = require('../daily-report');
 const { test, before, after, beforeEach } = require('node:test');
@@ -9,16 +9,9 @@ before(() => { assert.strictEqual(dr.makeTransport(), null, 'guard: no transport
 after(() => { dr._stopAll(); });
 beforeEach(() => { H.clearLedger(); dr._stopAll(); });
 
-test('getConfig reads/writes both channels independently; saving one does not touch the other', () => {
+test('getConfig reads/writes email recipients', () => {
   dr.saveConfig({ recipients: ['keep@gmail.com'] });
   assert.deepStrictEqual(dr.getConfig().recipients, ['keep@gmail.com']);
-  assert.deepStrictEqual(dr.getConfig().whatsappRecipients, [], 'whatsapp untouched by an email-only save');
-  dr.saveConfig({ whatsappRecipients: ['+919999999999'] });
-  const c = dr.getConfig();
-  assert.deepStrictEqual(c.recipients, ['keep@gmail.com'], 'email recipients survived a whatsapp-only save');
-  assert.deepStrictEqual(c.whatsappRecipients, ['+919999999999']);
-  dr.saveConfig({ sendTimes: ['09:00'] });
-  assert.deepStrictEqual(dr.getConfig().whatsappSendTimes, [], 'whatsapp times untouched by an email-times save');
 });
 
 test('legacy daily_report_time fallback works when daily_report_times is absent', () => {
@@ -34,16 +27,10 @@ test('cleanTimeList rejects malformed times and enforces the five-time cap', () 
   assert.deepStrictEqual(dr.cleanTimeList(['09:00', '08:00', '09:00']).times, ['08:00', '09:00'], 'de-dupe + sort');
 });
 
-test('the phone validation regex accepts and rejects correctly', () => {
-  for (const ok of ['+919876543210', '919876543210', '12345678', '+12345678901234']) assert.ok(dr.PHONE_RE.test(ok), `should accept ${ok}`);
-  for (const bad of ['1234567', 'abc', '+', '12345678901234567', '+91 9876543210']) assert.ok(!dr.PHONE_RE.test(bad), `should reject ${bad}`);
-});
-
-test('reschedule creates one cron job per distinct minute across the union — and none fires / no transport', () => {
-  dr.saveConfig({ sendTimes: ['09:00', '10:00'], whatsappSendTimes: ['10:00', '11:00'] }); // union = 09:00,10:00,11:00
-  assert.strictEqual(dr._scheduledCount(), 3, 'one job per DISTINCT minute across both schedules');
-  dr.saveConfig({ sendTimes: [], whatsappSendTimes: [] });
-  assert.strictEqual(dr._scheduledCount(), 0, 'clearing both schedules leaves the scheduler idle');
+test('reschedule creates one cron job per distinct minute — and none fires / no transport', () => {
+  dr.saveConfig({ sendTimes: ['09:00', '10:00'] });
+  assert.strictEqual(dr._scheduledCount(), 2, 'one job per distinct minute');
+  dr.saveConfig({ sendTimes: [] });
+  assert.strictEqual(dr._scheduledCount(), 0, 'clearing the schedule leaves the scheduler idle');
   assert.strictEqual(dr.makeTransport(), null, 'still structurally unable to build a transport');
-  assert.strictEqual(require('../whatsapp').isReady(), false, 'no WhatsApp client was ever booted');
 });

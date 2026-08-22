@@ -40,11 +40,11 @@ test('bounded queue: 20 households never exceed concurrency 2, and all 20 comple
 
 test('reschedule schedules one job per (tenant, minute) across households', () => {
   dr.init(() => Promise.resolve(Buffer.from('%PDF'))); // stub; no sends
-  // Two households, each with an email time; one also has a WhatsApp time at a DISTINCT minute.
+  // Two households, each with a distinct email time.
   dr.saveConfig({ recipients: ['a@gmail.com'], sendTimes: ['09:00'] }, 101);
-  dr.saveConfig({ recipients: ['b@gmail.com'], sendTimes: ['09:00'], whatsappRecipients: ['+919999999999'], whatsappSendTimes: ['18:30'] }, 202);
-  // tenant 101: one minute (09:00). tenant 202: two distinct minutes (09:00, 18:30). Total = 3 jobs.
-  assert.strictEqual(dr._scheduledCount(), 3, 'one cron job per (tenant, distinct-minute)');
+  dr.saveConfig({ recipients: ['b@gmail.com'], sendTimes: ['18:30'] }, 202);
+  // tenant 101: one minute (09:00). tenant 202: one minute (18:30). Total = 2 jobs.
+  assert.strictEqual(dr._scheduledCount(), 2, 'one cron job per (tenant, distinct-minute)');
   dr._stopAll();
 });
 

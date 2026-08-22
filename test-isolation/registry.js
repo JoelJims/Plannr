@@ -56,7 +56,6 @@ const REGISTRY = [
   { method: 'PUT', path: '/api/budget', kind: 'mutate', tables: ['settings'] },
   { method: 'PUT', path: '/api/daily-report', kind: 'mutate', tables: ['settings'] },
   { method: 'POST', path: '/api/daily-report/test', kind: 'mutate', tables: ['settings'] },
-  { method: 'POST', path: '/api/daily-report/test-whatsapp', kind: 'mutate', tables: ['settings'] },
 ];
 
 // Tenant-NEUTRAL /api routes: auth + the caller's own session/account, no cross-tenant data surface.

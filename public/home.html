@@ -108,25 +108,6 @@
     #logoutConfirm { color: #17120a; background: var(--accent); border-color: var(--accent); }
     #logoutConfirm:hover { background: #ffb020; color: #17120a; }
 
-    /* ---- WhatsApp Daily Report section (right panel, where Change password used
-       to sit). Reuses the shared .dr-* controls; only the heading/desc need styling. */
-    .wa-panel {
-      margin-top: 22px;
-      padding-top: 20px;
-      border-top: 1px solid var(--line);
-    }
-    .wa-panel .wa-title {
-      font-family: var(--font-head);
-      font-weight: 600;
-      font-size: 18px;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--text);
-      margin: 12px 0 8px;
-      line-height: 1.2;
-    }
-    .wa-panel .wa-desc { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; }
-
     /* Brand column (the contained Prism box was removed): on desktop the shared
        style anchors the tagline to the bottom to fill space the box used to take —
        with the box gone, group the header content at the top so there's no empty
@@ -224,7 +205,7 @@
         <div class="daily-report">
           <span class="chip">Email</span>
           <p class="dr-heading">Daily Report</p>
-          <p class="dr-desc">Emails a PDF of the full Overview (light theme) to the recipients below, every day at the time(s) you set — in <b>IST</b>. WhatsApp has its own separate schedule on the right. Use <b>Send Test Email Now</b> to send immediately to the saved recipients and confirm it works, instead of waiting for the scheduled time.</p>
+          <p class="dr-desc">Emails a PDF of the full Overview (light theme) to the recipients below, every day at the time(s) you set — in <b>IST</b>. Use <b>Send Test Email Now</b> to send immediately to the saved recipients and confirm it works, instead of waiting for the scheduled time.</p>
 
           <div class="dr-summary" id="drSummary" aria-live="polite">
             <p class="dr-sum-title">Currently scheduled — Email</p>
@@ -294,67 +275,6 @@
         </div>
 
         <button type="button" class="btn ghost" id="logout">Log out</button>
-
-        <!-- WhatsApp Daily Report — its OWN recipient list AND its OWN send-time schedule,
-             fully independent of email's (separate Save persists only the WhatsApp side). -->
-        <div class="wa-panel">
-          <span class="chip">WhatsApp</span>
-          <p class="wa-title">Daily Report — WhatsApp</p>
-          <p class="wa-desc">Sends the same daily Overview PDF by WhatsApp to the numbers below, on <b>its own send times</b> (in <b>IST</b>) — completely separate from email's schedule. Set numbers and times here, then click <b>Save</b> in this section. Use <b>Send Test WhatsApp Now</b> to send immediately to the saved numbers.</p>
-
-          <div class="dr-summary" id="drWaSummary" aria-live="polite">
-            <p class="dr-sum-title">Currently scheduled — WhatsApp</p>
-            <p class="dr-sum-line" id="drWaSumRecipients">—</p>
-            <p class="dr-sum-line" id="drWaSumTimes">—</p>
-            <p class="dr-sum-line dr-sum-next" id="drWaSumNext" hidden>—</p>
-            <p class="dr-sum-line dr-sum-next" id="drWaSumLast" hidden>—</p>
-            <p class="dr-sum-attempt" id="drWaSumAttempt" hidden>—</p>
-            <p class="dr-sum-warn" id="drWaSumWarn" hidden></p>
-            <p class="dr-sum-warn" id="drWaSumCatchup" hidden></p>
-            <p class="dr-sum-warn" id="drWaSumStale" hidden></p>
-            <p class="dr-sum-note">Sends only while the Plannr server is running at that minute. If it's off or asleep then, the next startup sends one catch-up for that day (clearly labelled) — but a shut lid still misses it.</p>
-          </div>
-
-          <div id="drWaMsg" class="msg" role="status" aria-live="polite"></div>
-
-          <div class="field">
-            <label for="drWa">Recipient WhatsApp numbers</label>
-            <textarea id="drWa" class="dr-emails" rows="2" placeholder="+919876543210 — include the country code; paste several at once, separated by commas or new lines" autocomplete="off"></textarea>
-            <div class="dr-add"><button type="button" id="drWaAddBtn" class="btn ghost">Add</button></div>
-          </div>
-
-          <div class="dr-reveal">
-            <p id="drWaCount" class="dr-count">No numbers added</p>
-            <button type="button" id="drWaToggleList" class="dr-toggle" aria-controls="drWaList" aria-expanded="false" hidden>Show list</button>
-          </div>
-          <ul id="drWaList" class="dr-list" aria-label="WhatsApp numbers" hidden></ul>
-
-          <div class="field">
-            <label for="drWaHour">WhatsApp send times (IST) — up to 5</label>
-            <div class="dr-add dr-timepick">
-              <select id="drWaHour" class="dr-sel" aria-label="Hour"></select>
-              <span class="dr-colon" aria-hidden="true">:</span>
-              <select id="drWaMin" class="dr-sel" aria-label="Minute"></select>
-              <select id="drWaMeridiem" class="dr-sel" aria-label="AM or PM">
-                <option value="AM">AM</option>
-                <option value="PM">PM</option>
-              </select>
-              <button type="button" id="drWaAddTimeBtn" class="btn ghost">Add time</button>
-            </div>
-          </div>
-
-          <div class="dr-reveal">
-            <p id="drWaTimeCount" class="dr-count">No times set yet</p>
-            <button type="button" id="drWaToggleTimes" class="dr-toggle" aria-controls="drWaTimeList" aria-expanded="false" hidden>Show list</button>
-          </div>
-          <ul id="drWaTimeList" class="dr-list" aria-label="WhatsApp send times" hidden></ul>
-
-          <div class="dr-actions">
-            <button type="button" id="drWaSaveBtn" class="btn primary">Save</button>
-            <span class="dr-dirty" id="drWaDirty" hidden>⚠ Unsaved — click Save</span>
-            <button type="button" id="drWaTestBtn" class="btn ghost">Send Test WhatsApp Now</button>
-          </div>
-        </div>
       </section>
     </main>
   </div>
@@ -487,7 +407,6 @@
     // Snapshots of what is actually saved (updated on load + on a successful save), so the summary
     // shows what will really send — not unsaved edits in the working lists.
     let drSaved = { recipients: [], times: [] };
-    let waSaved = { recipients: [], times: [] };
     // Current IST wall-clock date (YYYY-MM-DD) + time (HH:MM), via the IANA zone (no hardcoded +5:30).
     function nowIst() {
       const now = new Date();
@@ -505,8 +424,8 @@
       if (!t) { t = sorted[0]; day = addDayIso(date); } // all today's times passed -> tomorrow's earliest
       return fmtIstDate(day) + ', ' + to12h(t) + ' IST';
     }
-    // prefix: 'dr' (email) or 'drWa' (whatsapp); noun: 'email recipient' / 'WhatsApp number'.
-    // status: { lastSuccess, lastCatchup } ISO dates (or null) — the last successful send per channel.
+    // prefix: 'dr' (email); noun: 'email recipient'.
+    // status: { lastSuccess, lastCatchup } ISO dates (or null) — the last successful send.
     function summarizeChannel(prefix, recipients, times, noun, status) {
       const box = document.getElementById(prefix + 'Summary');
       const nR = recipients.length, nT = times.length;
@@ -552,18 +471,16 @@
     }
     function renderSummary() {
       summarizeChannel('dr', drSaved.recipients, drSaved.times, 'email recipient', drSaved.status);
-      summarizeChannel('drWa', waSaved.recipients, waSaved.times, 'WhatsApp number', waSaved.status);
       recomputeDirty();
     }
     // Phase 4D — the two-step edit trap this phase fixes: adding/editing/removing a time or recipient
-    // only mutates the LOCAL list; it is NOT persisted until this panel's own Save (and email + WhatsApp
-    // have SEPARATE Save buttons). So a change to a time (e.g. 08:00 → 16:05) could look done — the list
-    // shows the new time — yet silently not save. Show an amber "Unsaved — click Save" cue per panel
-    // whenever the working lists differ from the last saved snapshot. classList/hidden only (CSP-safe).
+    // only mutates the LOCAL list; it is NOT persisted until this panel's own Save. So a change to a
+    // time (e.g. 08:00 → 16:05) could look done — the list shows the new time — yet silently not save.
+    // Show an amber "Unsaved — click Save" cue whenever the working lists differ from the last saved
+    // snapshot. classList/hidden only (CSP-safe).
     const eqList = (a, b) => JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
     function recomputeDirty() {
       document.getElementById('drDirty').hidden = eqList(drTimes, drSaved.times) && eqList(drRecipients, drSaved.recipients);
-      document.getElementById('drWaDirty').hidden = eqList(waTimes, waSaved.times) && eqList(waRecipients, waSaved.recipients);
     }
     for (let h = 1; h <= 12; h++) drHour.appendChild(new Option(String(h), String(h)));
     for (let m = 0; m < 60; m++) drMin.appendChild(new Option(pad2(m), pad2(m)));
@@ -619,80 +536,8 @@
       if (i != null) { drRecipients.splice(Number(i), 1); renderDrRecipients(); }
     });
 
-    // ---- WhatsApp numbers — mirrors the email recipient list exactly (textarea Add,
-    // de-dupe, live count, collapsed-by-default reveal toggle), with basic phone-format
-    // validation instead of the Gmail check. Numbers are canonicalised to "+digits".
-    const drWa = document.getElementById('drWa');
-    const drWaList = document.getElementById('drWaList');
-    const drWaCount = document.getElementById('drWaCount');
-    const drWaToggle = document.getElementById('drWaToggleList');
-    const drWaMsg = document.getElementById('drWaMsg'); // WhatsApp's own message area (right panel)
-    const drWaHour = document.getElementById('drWaHour');
-    const drWaMin = document.getElementById('drWaMin');
-    const drWaMeridiem = document.getElementById('drWaMeridiem');
-    const drWaTimeList = document.getElementById('drWaTimeList');
-    const drWaTimeCount = document.getElementById('drWaTimeCount');
-    const drWaTimeToggle = document.getElementById('drWaToggleTimes');
-    const DR_PHONE_RE = /^\+?\d{8,15}$/; // optional +, then 8–15 digits (mirrors the server)
-    const normPhone = (raw) => '+' + String(raw).replace(/[\s\-().]/g, '').replace(/^\+/, '');
-    const WA_DEFAULT_CC = '+91'; // editable default prefix so users only type the 10 digits
-    let waRecipients = [];
-    let waTimes = [];
-    // WhatsApp gets its OWN 12h picker, populated like email's (reuses pad2/to24h/to12h above).
-    for (let h = 1; h <= 12; h++) drWaHour.appendChild(new Option(String(h), String(h)));
-    for (let m = 0; m < 60; m++) drWaMin.appendChild(new Option(pad2(m), pad2(m)));
-    drWaHour.value = '9'; drWaMin.value = '00'; drWaMeridiem.value = 'AM';
-    if (!drWa.value) drWa.value = WA_DEFAULT_CC; // pre-fill +91 while the box is empty (editable)
-    function showWaMsg(text, type) { drWaMsg.textContent = text; drWaMsg.className = 'msg show ' + type; }
-    function renderWaCount() {
-      const n = waRecipients.length;
-      drWaCount.textContent = n === 0 ? 'No numbers added' : (n + ' number' + (n === 1 ? '' : 's') + ' added');
-    }
-    function updateWaToggle() {
-      const n = waRecipients.length;
-      drWaToggle.hidden = n === 0;
-      if (n === 0) drWaList.hidden = true;
-      const open = !drWaList.hidden;
-      drWaToggle.textContent = open ? 'Hide list' : 'Show list';
-      drWaToggle.setAttribute('aria-expanded', String(open));
-    }
-    drWaToggle.addEventListener('click', () => { drWaList.hidden = !drWaList.hidden; updateWaToggle(); });
-    function renderWaRecipients() {
-      drWaList.innerHTML = waRecipients.map((e, i) =>
-        `<li><span>${drEsc(e)}</span><button type="button" class="rm" data-i="${i}" aria-label="Remove ${drEsc(e)}">&times;</button></li>`).join('');
-      renderWaCount();
-      updateWaToggle();
-      recomputeDirty();
-    }
-    function addWaRecipients() {
-      // Split on commas/semicolons/newlines only (NOT spaces) so "+91 98765 43210"
-      // stays one number; internal spaces/dashes/parens are stripped per token.
-      const tokens = drWa.value.split(/[,;\n\r]+/).map((t) => t.replace(/[\s\-().]/g, '').trim()).filter(Boolean);
-      if (!tokens.length) { showWaMsg('Paste or type one or more phone numbers first.', 'error'); return; }
-      let added = 0, dup = 0; const invalid = [];
-      for (const t of tokens) {
-        if (!DR_PHONE_RE.test(t)) { invalid.push(t); continue; }
-        const v = normPhone(t);
-        if (waRecipients.includes(v)) { dup++; continue; }
-        waRecipients.push(v); added++;
-      }
-      renderWaRecipients();
-      const parts = [];
-      if (added) parts.push('Added ' + added + '.');
-      if (dup) parts.push(dup + ' already in the list.');
-      if (invalid.length) parts.push(invalid.length + ' skipped (use country code, e.g. +919876543210): ' + invalid.map(drEsc).join(', '));
-      // Keep rejected tokens so they can be fixed; otherwise re-seed the +91 default.
-      drWa.value = invalid.length ? invalid.join('\n') : WA_DEFAULT_CC;
-      showWaMsg(parts.join(' ') || 'Nothing to add.', invalid.length ? 'error' : 'success');
-    }
-    document.getElementById('drWaAddBtn').addEventListener('click', addWaRecipients);
-    drWaList.addEventListener('click', (ev) => {
-      const i = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-i');
-      if (i != null) { waRecipients.splice(Number(i), 1); renderWaRecipients(); }
-    });
-
-    // Shared helpers for BOTH time lists: load a stored "HH:MM" into a 12h picker, and
-    // render one list row with in-place Edit + Remove actions (row ringed while editing).
+    // Shared helper: load a stored "HH:MM" into a 12h picker, and render one list row with
+    // in-place Edit + Remove actions (row ringed while editing).
     function setPicker(hourSel, minSel, merSel, t) {
       const m = /^(\d{2}):(\d{2})$/.exec(t); if (!m) return;
       let h = Number(m[1]); const mer = h < 12 ? 'AM' : 'PM'; h = h % 12 || 12;
@@ -706,56 +551,6 @@
         + `<button type="button" class="rm" data-i="${i}" aria-label="Remove ${drEsc(label)}">&times;</button>`
         + `</span></li>`;
     }
-
-    // WhatsApp send times — its OWN independent list (separate from email's below): add /
-    // edit-in-place / remove / de-dupe / count / 5-cap. Feedback goes to drWaMsg.
-    const drWaAddTimeBtn = document.getElementById('drWaAddTimeBtn');
-    let waEditOrig = null; // the "HH:MM" currently being edited in place, or null
-    // Collapsed-by-default reveal for the WhatsApp time list — mirrors the recipient toggle
-    // exactly, independent of every other list.
-    function updateWaTimeToggle() {
-      const n = waTimes.length;
-      drWaTimeToggle.hidden = n === 0;
-      if (n === 0) drWaTimeList.hidden = true; // nothing to reveal -> stay collapsed
-      const open = !drWaTimeList.hidden;
-      drWaTimeToggle.textContent = open ? 'Hide list' : 'Show list';
-      drWaTimeToggle.setAttribute('aria-expanded', String(open));
-    }
-    drWaTimeToggle.addEventListener('click', () => { drWaTimeList.hidden = !drWaTimeList.hidden; updateWaTimeToggle(); });
-    function renderWaTimes() {
-      const n = waTimes.length;
-      drWaTimeCount.textContent = n === 0 ? 'No times set yet' : (n + ' time' + (n === 1 ? '' : 's') + ' set');
-      drWaTimeList.innerHTML = waTimes.map((t, i) => timeRow(t, i, waEditOrig)).join('');
-      updateWaTimeToggle();
-      recomputeDirty();
-    }
-    function waCancelEdit() { waEditOrig = null; drWaAddTimeBtn.textContent = 'Add time'; }
-    function waEnterEdit(i) {
-      const t = waTimes[i]; if (t == null) return;
-      waEditOrig = t; setPicker(drWaHour, drWaMin, drWaMeridiem, t); drWaAddTimeBtn.textContent = 'Update time';
-      showWaMsg('Editing ' + to12h(t) + ' — adjust the picker and click Update time.', 'success');
-      renderWaTimes();
-    }
-    function addWaTime() {
-      const t = to24h(drWaHour.value, drWaMin.value, drWaMeridiem.value);
-      if (!DR_TIME_RE.test(t)) { showWaMsg('Pick a valid time first.', 'error'); return; }
-      if (waEditOrig !== null) { // edit in place: swap the original value for t (no duplicate/no extra row)
-        const rest = waTimes.filter((x) => x !== waEditOrig);
-        if (rest.includes(t)) { showWaMsg('That time is already in the list.', 'error'); return; }
-        waTimes = [...rest, t].sort(); waCancelEdit(); drWaMsg.className = 'msg'; renderWaTimes(); return;
-      }
-      if (waTimes.includes(t)) { showWaMsg('That time is already in the list.', 'error'); return; }
-      if (waTimes.length >= DR_MAX_TIMES) { showWaMsg('You can schedule at most ' + DR_MAX_TIMES + ' send times per day.', 'error'); return; }
-      waTimes.push(t); waTimes.sort(); drWaMsg.className = 'msg'; renderWaTimes();
-    }
-    drWaAddTimeBtn.addEventListener('click', addWaTime);
-    drWaTimeList.addEventListener('click', (ev) => {
-      const btn = ev.target.closest && ev.target.closest('button'); if (!btn) return;
-      const e = btn.getAttribute('data-edit');
-      if (e != null) { waEnterEdit(Number(e)); return; }
-      const i = btn.getAttribute('data-i');
-      if (i != null) { const removed = waTimes[Number(i)]; waTimes.splice(Number(i), 1); if (waEditOrig === removed) waCancelEdit(); renderWaTimes(); }
-    });
 
     // Email send times — add / edit-in-place / remove / de-dupe / count / 5-cap. Stores
     // 24-hour "HH:MM" but displays each as 12-hour with explicit AM/PM. Reuses the helpers above.
@@ -812,22 +607,15 @@
         if (!r.ok) return;
         const d = await r.json();
         drRecipients = Array.isArray(d.recipients) ? d.recipients : [];
-        waRecipients = Array.isArray(d.whatsappRecipients) ? d.whatsappRecipients : [];
         drTimes = Array.isArray(d.sendTimes) ? d.sendTimes : [];
-        waTimes = Array.isArray(d.whatsappSendTimes) ? d.whatsappSendTimes : [];
         renderDrRecipients();
-        renderWaRecipients();
         renderDrTimes();
-        renderWaTimes();
         const st = d.status || {};
         drSaved = { recipients: drRecipients.slice(), times: drTimes.slice(), status: st.email || null };   // snapshot the SAVED state
-        waSaved = { recipients: waRecipients.slice(), times: waTimes.slice(), status: st.whatsapp || null };
         renderSummary();
       } catch { /* leave defaults */ }
     }
-    // EMAIL Save — persists ONLY email recipients + email send times (WhatsApp fields are
-    // omitted, so the server leaves the WhatsApp schedule untouched). Refreshes only the
-    // email-side local state so any unsaved WhatsApp edits are preserved.
+    // Save — persists recipients + send times.
     document.getElementById('drSaveBtn').addEventListener('click', async () => {
       drMsg.className = 'msg';
       try {
@@ -839,19 +627,6 @@
         showDrMsg(drTimes.length ? ('Saved. Daily email scheduled at ' + drTimes.map(to12h).join(', ') + ' (IST).') : 'Saved. No email send times set yet, so nothing is scheduled.', 'success');
       } catch { showDrMsg('Network error while saving.', 'error'); }
     });
-    // WHATSAPP Save — persists ONLY WhatsApp numbers + WhatsApp send times (email fields
-    // omitted, so the server leaves email untouched). Refreshes only the WhatsApp-side state.
-    document.getElementById('drWaSaveBtn').addEventListener('click', async () => {
-      drWaMsg.className = 'msg';
-      try {
-        const r = await fetch('/api/daily-report', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whatsappRecipients: waRecipients, whatsappSendTimes: waTimes }) });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { showWaMsg(d.error || 'Could not save the WhatsApp settings.', 'error'); return; }
-        waRecipients = Array.isArray(d.whatsappRecipients) ? d.whatsappRecipients : waRecipients; waTimes = Array.isArray(d.whatsappSendTimes) ? d.whatsappSendTimes : waTimes; renderWaRecipients(); renderWaTimes();
-        waSaved = { recipients: waRecipients.slice(), times: waTimes.slice(), status: waSaved.status }; renderSummary(); // reflect the newly-saved WhatsApp schedule
-        showWaMsg(waTimes.length ? ('Saved. Daily WhatsApp scheduled at ' + waTimes.map(to12h).join(', ') + ' (IST).') : 'Saved. No WhatsApp send times set yet, so nothing is scheduled.', 'success');
-      } catch { showWaMsg('Network error while saving.', 'error'); }
-    });
     document.getElementById('drTestBtn').addEventListener('click', async () => {
       drMsg.className = 'msg';
       const btn = document.getElementById('drTestBtn'); const old = btn.textContent; btn.disabled = true; btn.textContent = 'Sending…';
@@ -861,22 +636,6 @@
         if (r.ok) showDrMsg('Test email sent to ' + d.sent + ' recipient(s). Check the inbox to confirm it arrived.', 'success');
         else showDrMsg(d.error || 'The test email could not be sent.', 'error');
       } catch { showDrMsg('Network error while sending the test email.', 'error'); }
-      finally { btn.disabled = false; btn.textContent = old; }
-    });
-    // Send Test WhatsApp Now — mirrors the email test button exactly, hitting the WhatsApp route.
-    document.getElementById('drWaTestBtn').addEventListener('click', async () => {
-      drWaMsg.className = 'msg';
-      const btn = document.getElementById('drWaTestBtn'); const old = btn.textContent; btn.disabled = true; btn.textContent = 'Sending…';
-      try {
-        const r = await fetch('/api/daily-report/test-whatsapp', { method: 'POST' });
-        const d = await r.json().catch(() => ({}));
-        if (r.ok) {
-          const failed = Array.isArray(d.failed) ? d.failed : [];
-          let msg = 'Test WhatsApp sent to ' + d.sent + ' number(s). Check the phone to confirm it arrived and the PDF opens.';
-          if (failed.length) msg += ' ' + failed.length + ' failed: ' + failed.map((f) => f.number + ' (' + f.reason + ')').join(', ');
-          showWaMsg(msg, failed.length ? 'error' : 'success');
-        } else showWaMsg(d.error || 'The test WhatsApp message could not be sent.', 'error');
-      } catch { showWaMsg('Network error while sending the test WhatsApp message.', 'error'); }
       finally { btn.disabled = false; btn.textContent = old; }
     });
     loadDailyReport();
