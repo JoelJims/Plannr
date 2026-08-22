@@ -284,17 +284,6 @@ function init() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- 7. edit_locks: single-editor lock for the Overview editable table. One row
-    --    per scope ('overview'). A lock is auto-releasable once last_heartbeat_at
-    --    is older than the staleness window (see server.js). IF NOT EXISTS-safe.
-    CREATE TABLE IF NOT EXISTS edit_locks (
-      scope               TEXT PRIMARY KEY,
-      holder_user_id      INTEGER,
-      holder_display_name TEXT,
-      acquired_at         TEXT,
-      last_heartbeat_at   TEXT
-    );
-
     -- Indexes later phases will need (minimal + sensible).
     CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code);
     CREATE INDEX IF NOT EXISTS idx_cash_in_by_user_id           ON cash_in(by_user_id);

@@ -74,19 +74,6 @@ test('per-tenant settings: writing tenant A budget leaves tenant B untouched', a
   assert.strictEqual(val(A.user.id), '100000', "A's budget row is byte-identical after B writes again");
 });
 
-// ── Part C — edit locks ────────────────────────────────────────────────────────────────────────────
-test('per-tenant edit locks: tenant A holding the lock does NOT block tenant B', async () => {
-  const A = H.seedLoggedIn();
-  const B = H.seedLoggedIn();
-  assert.strictEqual((await H.post('/api/overview/lock', undefined, { cookie: A.cookie })).status, 200, 'A acquires its lock');
-  const b = await H.post('/api/overview/lock', undefined, { cookie: B.cookie });
-  assert.strictEqual(b.status, 200, 'B acquires ITS OWN lock while A still holds theirs (would be 409 under a global lock)');
-  assert.strictEqual(b.json.lock.byMe, true, "B holds B's lock");
-  // both locks coexist as distinct per-tenant scopes
-  const scopes = H.db.prepare("SELECT scope FROM edit_locks ORDER BY scope").all().map((r) => r.scope);
-  assert.deepStrictEqual(scopes, [`overview:${A.user.id}`, `overview:${B.user.id}`], 'two independent per-tenant lock rows');
-});
-
 // ── Part F — a pre-tenancy backup still imports ────────────────────────────────────────────────────
 test('a pre-tenancy backup (rows carry no tenant_id) still imports and is re-owned by the importer', async () => {
   const { cookie, user } = H.seedLoggedIn();

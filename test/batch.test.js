@@ -1,4 +1,4 @@
-// Batch save (Phase 6B) — per-row hold-back, the X-Overview-Edit lock asymmetry, and both 413s.
+// Batch save (Phase 6B) — per-row hold-back, and both 413s.
 const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
@@ -23,22 +23,6 @@ test('N-1 rows persist while one invalid row is held back; the others are unaffe
   assert.match(bad.error, /does not exist/i);
   assert.strictEqual(amountOf(ids[2]), 10000, 'held-back row unchanged');
   for (const i of [0, 1, 3, 4]) assert.strictEqual(amountOf(ids[i]), 50000, `row ${i} saved`);
-});
-
-test('X-Overview-Edit:1 without holding the lock returns 409', async () => {
-  const id = H.seedCashOut({ amountPaise: 10000, byUserId: userId });
-  const r = await H.post('/api/cash-out/batch', { rows: [editBody(id, '500.00')] }, { cookie, headers: { 'X-Overview-Edit': '1' } });
-  assert.strictEqual(r.status, 409);
-  assert.match(r.json.error, /edit lock is not held|editing right now/i);
-  assert.strictEqual(amountOf(id), 10000, 'gated batch changed nothing');
-});
-
-test('the same request WITHOUT the header passes through (Money Debited asymmetry)', async () => {
-  const id = H.seedCashOut({ amountPaise: 10000, byUserId: userId });
-  const r = await H.post('/api/cash-out/batch', { rows: [editBody(id, '500.00')] }, { cookie }); // no X-Overview-Edit
-  assert.strictEqual(r.status, 200);
-  assert.strictEqual(r.json.saved, 1);
-  assert.strictEqual(amountOf(id), 50000);
 });
 
 test('over BATCH_MAX_ROWS (501) returns 413 with the row-cap message', async () => {

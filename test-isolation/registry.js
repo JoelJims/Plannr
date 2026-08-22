@@ -2,8 +2,7 @@
 //
 // The registry lists every /api endpoint that reads or mutates a tenant table (cash_out, cash_in,
 // loans, contract, contract_payment_dates, contractor_payments) or a currently-global tenant surface
-// (settings, edit_locks, the users roster). Each entry: method, path, read|mutate, and the tables it
-// touches.
+// (settings, the users roster). Each entry: method, path, read|mutate, and the tables it touches.
 //
 // assertRegistryComplete(app) is modelled on server.js's assertImportOwnershipComplete(): it derives
 // the truth from the RUNNING app (app._router.stack), not a maintained list, and FAILS if any
@@ -19,7 +18,6 @@ const REGISTRY = [
   { method: 'GET', path: '/api/contractor-payments', kind: 'read', tables: ['contractor_payments', 'contract'] },
   { method: 'GET', path: '/api/overview', kind: 'read', tables: ['cash_out', 'contractor_payments', 'contract', 'contract_payment_dates', 'loans', 'settings'] },
   { method: 'GET', path: '/api/overview/pdf', kind: 'read', tables: ['cash_out', 'contractor_payments', 'contract', 'loans'] },
-  { method: 'GET', path: '/api/overview/lock', kind: 'read', tables: ['edit_locks'] },
   { method: 'GET', path: '/api/trash', kind: 'read', tables: ['cash_in', 'cash_out', 'loans', 'contract', 'contractor_payments'] },
   { method: 'GET', path: '/api/backup/export', kind: 'read', tables: ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'] },
   { method: 'GET', path: '/api/users', kind: 'read', tables: ['users'] },
@@ -46,9 +44,6 @@ const REGISTRY = [
   { method: 'POST', path: '/api/contractor-payments', kind: 'mutate', tables: ['contractor_payments', 'contract'] },
   { method: 'PUT', path: '/api/contractor-payments/:id', kind: 'mutate', tables: ['contractor_payments'] },
   { method: 'DELETE', path: '/api/contractor-payments/:id', kind: 'mutate', tables: ['contractor_payments'] },
-  { method: 'POST', path: '/api/overview/lock', kind: 'mutate', tables: ['edit_locks'] },
-  { method: 'POST', path: '/api/overview/lock/heartbeat', kind: 'mutate', tables: ['edit_locks'] },
-  { method: 'DELETE', path: '/api/overview/lock', kind: 'mutate', tables: ['edit_locks'] },
   { method: 'POST', path: '/api/trash/:table/:id/restore', kind: 'mutate', tables: ['cash_in', 'cash_out', 'loans', 'contract', 'contractor_payments'] },
   { method: 'DELETE', path: '/api/trash/:table/:id', kind: 'mutate', tables: ['cash_in', 'cash_out', 'loans', 'contract', 'contractor_payments'] },
   { method: 'POST', path: '/api/backup/import', kind: 'mutate', tables: ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'] },

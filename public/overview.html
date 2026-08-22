@@ -198,7 +198,7 @@
     .ov-legend-total .lg-label { flex: 1 1 auto; color: var(--text); font-family: var(--font-head); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
     .ov-legend-total .lg-val { color: var(--accent); font-family: var(--font-head); font-weight: 600; white-space: nowrap; }
 
-    /* ---- Editable outflow table (kept — with the single-editor lock) ---- */
+    /* ---- Editable outflow table ---- */
     .ov-table-bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     .ov-table-bar label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
     .ov-table-bar input { width: 16px; height: 16px; accent-color: var(--accent); }
@@ -218,9 +218,6 @@
     .et-btn.del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
     .et-empty { color: var(--text-dim); text-align: center; padding: 18px 10px; }
     .et-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
-    /* Lock banners: teal = someone else editing (view-only); amber = you hold it. */
-    .msg.lock-view { display: block; border-left-color: var(--ov-neg); background: rgba(45,212,191,0.10); color: #a7f3e6; }
-    .msg.lock-mine { display: block; border-left-color: var(--accent); background: var(--accent-soft); color: #f8dca6; }
     @media (max-width: 620px) {
       .ov-etable thead { display: none; }
       .ov-etable tbody tr { display: block; border: 1px solid var(--line-strong); margin-bottom: 10px; padding: 4px 12px; }
@@ -408,10 +405,9 @@
         <div id="ovUpcoming" class="ov-up-list"></div>
       </div>
 
-      <!-- 5. Editable outflow entries — bulk edit mode + Save All (single-editor lock). -->
+      <!-- 5. Editable outflow entries — bulk edit mode + Save All. -->
       <div class="ov-section">
         <p class="ov-section-title">Outflow entries — editable</p>
-        <div id="ovLockBanner" class="msg" role="status" hidden></div>
         <div id="ovEditMsg" class="msg" role="alert"></div>
         <div class="tx-bar">
           <button type="button" class="btn primary" id="ovEditBtn">Edit</button>
@@ -761,17 +757,11 @@
 
     // ===================== Editable outflow table (bulk edit + Save All) =====================
     // ONE shared table (PlannrUI.createEditableCashOutTable) — same component as the
-    // Money Debited log. Editing is guarded by the single-editor lock: entering edit
-    // mode acquires it (heartbeat while held), Save All / Cancel release it. Save All
-    // asks the "Are you sure?" confirm modal (editing EXISTING rows); per-row validation
-    // flags + holds back bad rows while the rest save.
+    // Money Debited log. Save All asks the "Are you sure?" confirm modal (editing EXISTING
+    // rows); per-row validation flags + holds back bad rows while the rest save.
     const tableMsg = makeMsg($('ovEditMsg'));
     let outflows = [];
     let dirty = false;
-    let lockStatus = { locked: false, holder: null, byMe: false, stale: false };
-    let heartbeatTimer = null, pollTimer = null;
-    const readOnlyForMe = () => lockStatus.locked && !lockStatus.byMe;
-    const OVERVIEW_EDIT_HEADER = { 'X-Overview-Edit': '1' }; // marks lock-protected writes
 
     const txTable = window.PlannrUI.createEditableCashOutTable({
       tbody: $('ovEntries'),
@@ -933,18 +923,14 @@
 
     // ---- Edit-mode toolbar ----
     function toggleEditUI(on) { $('ovEditBtn').hidden = on; $('ovSaveAllBtn').hidden = !on; $('ovCancelBtn').hidden = !on; filterBar.setEnabled(!on); }
-    $('ovEditBtn').addEventListener('click', async () => {
+    $('ovEditBtn').addEventListener('click', () => {
       tableMsg.clear();
-      if (readOnlyForMe()) { tableMsg.show(lockBusyText(), 'error'); return; }
-      if (!(await acquireLock())) { tableMsg.show(lockBusyText(), 'error'); return; }
-      if (!txTable.enterEdit()) { tableMsg.show('No entries to edit in this range.', 'error'); await releaseLock(); pollLock(); return; }
-      startHeartbeat();
+      if (!txTable.enterEdit()) { tableMsg.show('No entries to edit in this range.', 'error'); return; }
       toggleEditUI(true);
     });
-    $('ovCancelBtn').addEventListener('click', async () => {
-      txTable.cancelEdit(); toggleEditUI(false); stopHeartbeat(); dirty = false; $('ovEditStatus').textContent = '';
+    $('ovCancelBtn').addEventListener('click', () => {
+      txTable.cancelEdit(); toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
       tableMsg.clear();
-      await releaseLock(); pollLock();
     });
     $('ovSaveAllBtn').addEventListener('click', saveAll);
 
@@ -960,14 +946,12 @@
       });
       if (!ok) return;
       $('ovSaveAllBtn').disabled = true;
-      // Phase 6B: one batched request (was one PUT per row). Overview sends X-Overview-Edit so the
-      // server checks the single-editor lock once; per-row hold-back comes back in the results.
-      const { saved, held } = await window.PlannrUI.saveAllBatch(c, { table: txTable, headers: OVERVIEW_EDIT_HEADER });
+      // Phase 6B: one batched request (was one PUT per row); per-row hold-back comes back in the results.
+      const { saved, held } = await window.PlannrUI.saveAllBatch(c, { table: txTable });
       $('ovSaveAllBtn').disabled = false;
       if (held === 0) {
-        stopHeartbeat(); toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
-        await releaseLock();
-        await refreshOverview(); await loadOutflows(); pollLock();
+        toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
+        await refreshOverview(); await loadOutflows();
         tableMsg.show(`Saved ${saved} change${saved === 1 ? '' : 's'} — totals recomputed.`, 'success');
       } else {
         await refreshOverview(); // saved rows already persisted; keep editing the held ones
@@ -976,16 +960,16 @@
     }
 
     async function deleteRow(id) {
-      // Delete lives in edit mode only now (button hidden otherwise), so the single-editor
-      // lock is already held. Reloading resets any OTHER in-progress row edits, so warn
-      // when there are unsaved changes. Stays in edit mode afterwards (lock/heartbeat kept).
+      // Delete lives in edit mode only now (button hidden otherwise). Reloading resets any
+      // OTHER in-progress row edits, so warn when there are unsaved changes. Stays in edit
+      // mode afterwards.
       const warn = dirty
         ? 'Delete this entry? Your other unsaved changes will be reset. The entry is soft-deleted and recoverable.'
         : 'Delete this entry? It can be recovered later (soft-deleted).';
       if (!window.confirm(warn)) return;
       tableMsg.clear();
       try {
-        const res = await fetch('/api/cash-out/' + id, { method: 'DELETE', headers: OVERVIEW_EDIT_HEADER });
+        const res = await fetch('/api/cash-out/' + id, { method: 'DELETE' });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) { tableMsg.show(d.error || 'Could not delete the entry.', 'error'); return; }
         tableMsg.show('Entry deleted — totals recomputed.', 'success');
@@ -993,50 +977,14 @@
       await refreshOverview();
       await loadOutflows();               // setEntries -> read render; component leaves edit
       if (!txTable.enterEdit()) {          // no rows left in range -> fully exit edit mode
-        toggleEditUI(false); stopHeartbeat(); dirty = false; $('ovEditStatus').textContent = '';
-        await releaseLock(); pollLock();
+        toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
       }
     }
 
-    // ---- Single-editor lock (server-authoritative; heartbeat; stale takeover) ----
-    const lockBusyText = () => (lockStatus.holder ? lockStatus.holder.displayName : 'Someone') + ' is editing right now — you can view but not edit.';
-    function applyLock(ls) {
-      if (!ls) return;
-      lockStatus = ls;
-      const b = $('ovLockBanner');
-      if (readOnlyForMe()) { b.textContent = lockBusyText(); b.className = 'msg show lock-view'; b.hidden = false; $('ovEditBtn').disabled = true; }
-      else if (lockStatus.byMe) { b.textContent = 'You are editing (lock held). Save or Cancel to free it for others.'; b.className = 'msg show lock-mine'; b.hidden = false; $('ovEditBtn').disabled = false; }
-      else { b.hidden = true; b.className = 'msg'; $('ovEditBtn').disabled = false; }
-    }
-    async function pollLock() { try { const r = await fetch('/api/overview/lock'); if (r.ok) applyLock((await r.json()).lock); } catch {} }
-    async function acquireLock() { const res = await fetch('/api/overview/lock', { method: 'POST' }); const d = await res.json().catch(() => ({})); if (d.lock) applyLock(d.lock); return res.ok; }
-    async function releaseLock() { try { await fetch('/api/overview/lock', { method: 'DELETE', keepalive: true }); } catch {} }
-    function stopHeartbeat() { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } }
-    function startHeartbeat() {
-      stopHeartbeat();
-      heartbeatTimer = setInterval(async () => {
-        try {
-          const res = await fetch('/api/overview/lock/heartbeat', { method: 'POST' });
-          const d = await res.json().catch(() => ({}));
-          if (d.lock) applyLock(d.lock);
-          if (!res.ok) { // lock taken over after going stale — discard unsaved edits, refresh
-            stopHeartbeat(); txTable.cancelEdit(); toggleEditUI(false); dirty = false; $('ovEditStatus').textContent = '';
-            tableMsg.show('Your edit lock was taken over — unsaved changes were discarded. Showing the latest.', 'error');
-            await refreshOverview(); await loadOutflows(); await pollLock();
-          }
-        } catch {}
-      }, 30000);
-    }
-
-    // Warn before navigating away with unsaved edits; free the lock on real unload.
+    // Warn before navigating away with unsaved edits.
     window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
-    window.addEventListener('pagehide', () => { clearInterval(pollTimer); if (lockStatus.byMe) releaseLock(); });
-    // Returning to a backgrounded tab refreshes lock state immediately so it's never stale.
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLock(); });
 
-    // Poll every 15s ONLY while the tab is visible AND the lock isn't held here: a background
-    // tab makes zero lock requests, and while editing the 30s heartbeat already refreshes state.
-    load().then(() => { pollLock(); pollTimer = setInterval(() => { if (!document.hidden && !lockStatus.byMe) pollLock(); }, 15000); });
+    load();
   </script>
 </body>
 </html>

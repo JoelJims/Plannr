@@ -59,7 +59,7 @@ const repo = require('./repo');
 // each binds to the final schema. node:sqlite compiles each SQL once here instead of on
 // every call. These sit on the hottest paths: currentUser() runs on every authenticated
 // request and guarded page load; computeOverview()'s four queries + getBudgetPaise() back
-// the Overview screen and every PDF export; lockRow() backs the single-editor lock/heartbeat.
+// the Overview screen and every PDF export.
 // (Order matters — declaring these before init() would prepare against a pre-migration or
 // dropped table. Keep them here.)
 // currentUser enforces the ABSOLUTE expiry here: a session past expires_at is treated as if it did
@@ -73,10 +73,6 @@ const CURRENT_USER_STMT = db.prepare(
      JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ?
       AND s.expires_at > datetime('now')`
-);
-const LOCK_ROW_STMT = db.prepare(
-  "SELECT holder_user_id, holder_display_name, acquired_at, last_heartbeat_at, " +
-  "(strftime('%s','now') - strftime('%s', last_heartbeat_at)) AS age FROM edit_locks WHERE scope = ?"
 );
 // Tenancy Phase 3 (Part B.6) — the budget read is now tenant-scoped (settings has a composite
 // (tenant_id, key) key). B can no longer read A's budget.
@@ -635,10 +631,9 @@ function makeLedgerCrud(opts) {
   // Phase 6B — batch edit (Save All in ONE round trip). Only registered for resources that opt in
   // (cash_out). Validates EVERY row FIRST, then writes only the valid rows in a SINGLE transaction,
   // and returns a per-row result array — so per-row hold-back survives exactly ("saved 19, held
-  // back 1"): invalid/not-found rows are left untouched and individually reported. Same lock
-  // asymmetry as the by-id routes — editGate runs ONCE per request (X-Overview-Edit gates Overview;
-  // Money Debited sends no header and passes through). Phase 2.1 preserved: the attribution audit
-  // line logs per changed by_user_id, and a stored-NULL by_user_id round-trips via validate(oldVal).
+  // back 1"): invalid/not-found rows are left untouched and individually reported. Phase 2.1
+  // preserved: the attribution audit line logs per changed by_user_id, and a stored-NULL
+  // by_user_id round-trips via validate(oldVal).
   if (opts.batch) {
     app.post(`${basePath}/batch`, jsonBatch, ...byIdChain, (req, res) => {
       const rows = req.body && Array.isArray(req.body.rows) ? req.body.rows : null;
@@ -961,80 +956,6 @@ function cashOutRow(r) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Single-editor lock for the Overview editable table (Part B). Scope: OVERVIEW
-// ONLY — the cash-outflow page never acquires it and is never gated (its writes
-// carry no marker). Authoritative + atomic; auto-releasable when stale.
-// ---------------------------------------------------------------------------
-const OVERVIEW_LOCK = 'overview';
-const LOCK_STALE_SECONDS = 180; // 3 min without a heartbeat → takeover allowed
-// Tenancy Phase 2 (Part C) — the Overview edit-lock is now PER TENANT. Previously one global
-// scope='overview' row meant one household editing froze EVERYONE; namespacing the scope
-// ('overview:<tenant>') gives each tenant an independent lock. No schema change (scope is already the
-// TEXT primary key); the heartbeat + 3-minute stale-takeover behaviour are unchanged, just keyed per
-// tenant. (ponytail: namespaced scope, not a tenant_id column — the scope key already encodes it.)
-const overviewLockScope = (userId) => `${OVERVIEW_LOCK}:${userId}`;
-
-// Current lock row for a scope with a computed `age` (seconds since last heartbeat), or null.
-function lockRow(scope) {
-  return LOCK_ROW_STMT.get(scope) || null;
-}
-function lockState(req) {
-  const row = lockRow(overviewLockScope(req.user.id));
-  const fresh = !!row && row.age <= LOCK_STALE_SECONDS;
-  return {
-    locked: fresh,
-    holder: row ? { userId: row.holder_user_id, displayName: row.holder_display_name } : null,
-    byMe: !!row && !!req.user && row.holder_user_id === req.user.id,
-    stale: !!row && !fresh,
-  };
-}
-
-app.get('/api/overview/lock', requireApiAuth, (req, res) => res.json({ lock: lockState(req) }));
-
-// Acquire (atomic upsert): take the lock if free, held by me already, or STALE.
-// A fresh lock held by someone else → no-op → we detect it and return 409.
-app.post('/api/overview/lock', requireApiAuth, (req, res) => {
-  db.prepare(
-    "INSERT INTO edit_locks (scope, holder_user_id, holder_display_name, acquired_at, last_heartbeat_at) " +
-    "VALUES (?, ?, ?, datetime('now'), datetime('now')) " +
-    "ON CONFLICT(scope) DO UPDATE SET " +
-    "  holder_user_id = excluded.holder_user_id, holder_display_name = excluded.holder_display_name, " +
-    "  acquired_at = datetime('now'), last_heartbeat_at = datetime('now') " +
-    "WHERE edit_locks.holder_user_id = excluded.holder_user_id " +
-    `   OR (strftime('%s','now') - strftime('%s', edit_locks.last_heartbeat_at)) > ${LOCK_STALE_SECONDS}`
-  ).run(overviewLockScope(req.user.id), req.user.id, req.user.displayName);
-  const row = lockRow(overviewLockScope(req.user.id));
-  if (row && row.holder_user_id === req.user.id) return res.json({ ok: true, lock: lockState(req) });
-  return res.status(409).json({ error: (row ? row.holder_display_name : 'Someone') + ' is editing right now — you can view but not edit.', lock: lockState(req) });
-});
-
-// Heartbeat: only the current holder can refresh (keeps the lock fresh while editing).
-app.post('/api/overview/lock/heartbeat', requireApiAuth, (req, res) => {
-  const info = db.prepare("UPDATE edit_locks SET last_heartbeat_at = datetime('now') WHERE scope = ? AND holder_user_id = ?").run(overviewLockScope(req.user.id), req.user.id);
-  if (info.changes === 0) return res.status(409).json({ error: 'You no longer hold the edit lock.', lock: lockState(req) });
-  res.json({ ok: true, lock: lockState(req) });
-});
-
-// Release: idempotent, only clears the row if this user holds it.
-app.delete('/api/overview/lock', requireApiAuth, (req, res) => {
-  db.prepare('DELETE FROM edit_locks WHERE scope = ? AND holder_user_id = ?').run(overviewLockScope(req.user.id), req.user.id);
-  res.json({ ok: true });
-});
-
-// Marker gate: ONLY requests that declare themselves an Overview edit
-// (X-Overview-Edit: 1) are lock-checked. The caller must currently hold the lock,
-// else 409 (covers a stale client whose lock was taken over). Requests without the
-// header — i.e. the cash-outflow page — fall straight through, unaffected.
-function overviewEditGate(req, res, next) {
-  if (req.get('X-Overview-Edit') !== '1') return next();
-  const row = lockRow(overviewLockScope(req.user.id));
-  if (!row || row.holder_user_id !== req.user.id) {
-    return res.status(409).json({ error: row ? (row.holder_display_name + ' is editing right now — refresh to see the latest.') : 'The edit lock is not held — click Edit to acquire it, then try again.' });
-  }
-  next();
-}
-
 // Services phase (Part E) — remember a typed custom LEDGER name in the caller's per-user list, so it is
 // selectable next time. INSERT OR IGNORE keys on idx_ledger_customs_tenant_name (no duplicates). Called
 // via afterWrite only when the row actually uses a custom ledger; a built-in ledger saves nothing.
@@ -1072,12 +993,9 @@ function cashOutServiceFinalize(values, { req, existing }) {
   values.contract_service_id = sid;
 }
 
-// The Overview edit-lock gate is applied to cash-out's by-id writes via makeLedgerCrud's
-// editGate option below (one chain: requireApiAuth, overviewEditGate, handler).
 makeLedgerCrud({
   basePath: '/api/cash-out',
   alias: 'c', // the table alias used in CASH_OUT_SELECT — repo.crud scopes on c.tenant_id
-  editGate: overviewEditGate,
   batch: true, // Phase 6B: POST /api/cash-out/batch — Save All in one round trip (both pages)
   auditField: 'by_user_id', // Phase 2: log who-paid changes on edit
   finalize: cashOutServiceFinalize,                    // Services phase (Part C/D): service link + guard

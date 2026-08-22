@@ -439,7 +439,7 @@
 
     // ---- Delete (Item 2: an EDIT-MODE row action now — the button only renders while
     // editing). Mirrors Overview's edit-mode delete: reload then stay in edit if rows
-    // remain. (No single-editor lock on this page, so it's the simpler variant.) ----
+    // remain. ----
     listBody.addEventListener('click', (ev) => {
       const del = ev.target.getAttribute && ev.target.getAttribute('data-del');
       if (del) doDelete(Number(del));
@@ -481,8 +481,7 @@
       });
       if (!ok) return;
       $('coSaveAllBtn').disabled = true;
-      // Phase 6B: one batched request (was one PUT per row). Money Debited sends NO X-Overview-Edit
-      // header, so the server's editGate passes through (its edits bypass the Overview lock).
+      // Phase 6B: one batched request (was one PUT per row).
       const { saved, held } = await window.PlannrUI.saveAllBatch(c, { table: txTable });
       $('coSaveAllBtn').disabled = false;
       if (held === 0) {

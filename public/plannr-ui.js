@@ -744,7 +744,7 @@
   // independently). Client-invalid rows in c.invalid were already flagged by collect(). Both pages
   // call this — the batch call lives here so a third consumer can't diverge (Phase 2.1's lesson).
   //   c    — a collect() result { valid:[{id,body}], invalid:[{id,msg}], ... }
-  //   opts — { table (for markSaved/flag), headers (e.g. {'X-Overview-Edit':'1'} for Overview) }
+  //   opts — { table (for markSaved/flag), headers (extra request headers) }
   // Returns { saved, held } (held includes the client-invalid rows).
   async function saveAllBatch(c, opts) {
     opts = opts || {};
@@ -760,7 +760,7 @@
         body: JSON.stringify({ rows: rows }),
       });
       data = await res.json().catch(() => ({}));
-      if (!res.ok) { // whole-request failure (lock 409 / too-many 413 / rollback 500): flag every row
+      if (!res.ok) { // whole-request failure (too-many 413 / rollback 500): flag every row
         const msg = data.error || 'Could not save.';
         c.valid.forEach((v) => table && table.flag(v.id, msg));
         return { saved: 0, held: held + c.valid.length, requestError: msg };

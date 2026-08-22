@@ -127,7 +127,6 @@ function seedCashIn(opts = {}) {
 // from a clean slate without a fresh DB per test.
 function clearLedger() {
   for (const t of ['cash_out', 'cash_in', 'contractor_payments', 'contract', 'loans']) { try { db.exec(`DELETE FROM ${t}`); } catch { /* table may not exist */ } }
-  try { db.exec('DELETE FROM edit_locks'); } catch { /* ignore */ }
   try { db.prepare("DELETE FROM settings WHERE key IN ('budget_paise','daily_report_recipients','daily_report_whatsapp','daily_report_times','daily_report_time','daily_report_whatsapp_times','daily_report_email_last_success','daily_report_email_last_catchup','daily_report_whatsapp_last_success','daily_report_whatsapp_last_catchup','daily_report_email_attempts','daily_report_whatsapp_attempts','daily_report_whatsapp_alert_last','daily_report_email_last_snapshot','daily_report_whatsapp_last_snapshot','auth_events','auth_events_unknown')").run(); } catch { /* ignore */ }
 }
 
