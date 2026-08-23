@@ -13,7 +13,11 @@ const DB_PATH = process.env.PLANNR_DB || path.join(DATA_DIR, 'plannr.db');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL'); // better concurrency / durability
+// Phase 4a (WASM SQLite port prep): DELETE, not WAL. A WAL-stamped file cannot be opened at all by
+// the WASM SQLite build this app is moving to (confirmed empirically in Spike A2 — SQLITE_CANTOPEN;
+// no shared-memory/multi-process primitives in that sandbox). Single-process, single-user desktop/
+// mobile app has no concurrency need WAL was buying us anyway.
+db.exec('PRAGMA journal_mode = DELETE');
 db.exec('PRAGMA foreign_keys = ON');  // enforce foreign keys
 
 // Schema-version marker: stamped at the END of init() once all migrations succeed. It lets a
@@ -958,4 +962,17 @@ function init() {
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
-module.exports = { db, init, DB_PATH };
+// Phase 4a (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which SQLite
+// binding raised it — node:sqlite exposes the raw result code as `err.errcode`; the WASM build
+// (Spike A2) exposes it as `err.sqlite3Rc`. Both use SQLite's own result-code numbering, where every
+// IOERR subcode (SQLITE_IOERR_WRITE, _SHORT_READ, etc.) shares base code 10 in its low byte. This is
+// the failure mode confirmed in the kvvfs storage-ceiling spike: exceeding the quota surfaces as a
+// clean, atomically-rolled-back SQLITE_IOERR, never silent corruption — so a write path seeing this
+// can safely tell the user "storage is full" instead of a raw SQLite message.
+function isStorageFullError(err) {
+  const code = err && (err.errcode ?? err.sqlite3Rc);
+  if (typeof code === 'number' && (code & 0xff) === 10) return true;
+  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error/i.test(err.message));
+}
+
+module.exports = { db, init, DB_PATH, isStorageFullError };

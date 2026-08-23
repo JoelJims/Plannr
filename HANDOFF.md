@@ -17,7 +17,7 @@ household; the tenant data-access model (`repo.js`) is documented in `README.md`
 
 **Stack (no build step, no framework):**
 - Node.js + Express 4.21.2; server-rendered static HTML in `public/` + vanilla JS (no SPA).
-- `node:sqlite` (`DatabaseSync`) — the built-in SQLite, WAL mode; DB at `data/plannr.db`.
+- `node:sqlite` (`DatabaseSync`) — the built-in SQLite, DELETE journal mode (Phase 4a — changed from WAL to prepare for the WASM SQLite port; a WAL-stamped file can't be opened by that build); DB at `data/plannr.db`.
 - `bcrypt` (native) for password hashing; SHA-256 session-cookie tokens.
 - Playwright (headless Chromium) renders the Overview PDF server-side.
 - `whatsapp-web.js` (unofficial) for the WhatsApp channel; `nodemailer` (Gmail SMTP) for email.
@@ -259,14 +259,12 @@ in a browser while logged in — those endpoints require an authenticated sessio
   machine that stayed off *through* the send time and was never restarted that day still sends nothing.
 
 ### A save "succeeded" but the value isn't in the database
-- **Symptom:** the save returned no error, but a copy of `data/plannr.db` you opened elsewhere is missing
-  the row — or looks almost empty.
-- **First check:** `Get-ChildItem data\plannr.db*` — a non-trivial `plannr.db-wal` means the write is
-  real but still sitting in the WAL, not yet folded into the main file.
-- **Fix:** the save *did* persist; you copied `plannr.db` alone, without its `-wal`/`-shm` sidecars.
-  Either copy all three files together, or stop cleanly with `stop-plannr.cmd` first — shutdown runs
-  `PRAGMA wal_checkpoint(TRUNCATE)`, folding the WAL into `plannr.db` so it is self-contained to copy.
-  (A hard kill loses nothing either way — SQLite replays the WAL on the next open.)
+Phase 4a (WASM SQLite port prep) changed `journal_mode` from WAL to DELETE, so this failure mode is
+retired going forward: every commit lands directly in `data/plannr.db`, with no `-wal`/`-shm` sidecar
+that a naive copy could leave behind. **If you're troubleshooting an install that predates that
+change** (still shows a non-trivial `data\plannr.db-wal` via `Get-ChildItem data\plannr.db*`), a copy
+of `plannr.db` alone without its sidecars was the cause — copy all three files together, or stop
+cleanly with `stop-plannr.cmd` first, then copy just `plannr.db`.
 
 ### The three WhatsApp states — linked / authenticated / ready
 
@@ -292,8 +290,8 @@ re-link:**
 1. Confirm the snapshot is restorable: `.wwebjs_auth_snapshot.state.json` must read `"complete": true`.
    An incomplete snapshot (one taken while the browser was live — robocopy silently skipped the locked
    LevelDB session state) will **not** restore.
-2. Stop cleanly: `stop-plannr.cmd`. Never a force-kill / second Ctrl+C — that skips the WAL checkpoint
-   *and* the complete-snapshot refresh, and can re-corrupt the store.
+2. Stop cleanly: `stop-plannr.cmd`. Never a force-kill / second Ctrl+C — that skips the
+   complete-snapshot refresh and can re-corrupt the store.
 3. Move the live store aside (don't delete): rename `.wwebjs_auth` → `.wwebjs_auth_old`.
 4. Restore, with the server stopped: `robocopy .wwebjs_auth_snapshot .wwebjs_auth /MIR`.
 5. Reboot the server and confirm `[whatsapp] connected — reusing saved session (no QR needed).`. Only
