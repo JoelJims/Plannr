@@ -22,7 +22,8 @@ db.exec('PRAGMA foreign_keys = ON');  // enforce foreign keys
 // on "does column X exist?" wrongly re-runs after some later, unrelated change recreates column X, and
 // a re-run of a create-copy-swap rebuild risks data. Bump this + gate the new step on
 // `userVersion < N` when a future migration needs the same protection.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2; // v2 = Phase 2 Step 2a: the tenant_id dimension is dropped back off (see the
+                          // `userVersion < 2` migration near the end of init()).
 
 function init() {
   db.exec(`
@@ -657,6 +658,264 @@ function init() {
   // service ids (a NULL link — the common case — is unconstrained). Created here at init end so the
   // cash_out rebuilds above can't drop it and contract_service_id is guaranteed to exist by now.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
+
+  // ===========================================================================
+  // Tenancy Phase 2, Step 2a — SCHEMA-ONLY collapse back to a single tenant. The app is becoming a
+  // single-user offline Android install: exactly one users row will ever exist, so tenant_id (added
+  // above for a household-sharing feature) is being removed entirely, not frozen. repo.js and
+  // server.js still pass/require req.user.id as a tenant argument today — updating THOSE is a later,
+  // separate step; this migration only reshapes storage.
+  //
+  // Version-gated (userVersion < 2, read at the top of init() before any migration touches the
+  // marker — same convention as the phase_custom_name/cash_out rebuild above) rather than
+  // presence-keyed: "tenant_id is absent" is not a safe trigger here (a database that has ALREADY run
+  // this migration also has no tenant_id, so a presence check would re-fire it forever). NEEDS
+  // TENANT_TABLES/rebuildAddingTenant() ABOVE to still exist and run first: a genuinely pre-Tenancy
+  // database has no tenant_id at all, and this migration's DELETEs below assume the column is there.
+  // That add-then-immediately-remove round trip is redundant work for such a database but produces
+  // the correct end state, using the already-proven backfill/rebuild logic instead of a second
+  // special case here.
+  if (userVersion < 2) {
+    // Row-count guard (see Part 6 below): snapshot every table's count BEFORE this migration
+    // touches anything, and track exactly how many rows each deliberate delete/dedupe step removes.
+    const GUARD_TABLES = ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs', 'settings'];
+    const countsBefore = {};
+    const deliberatelyRemoved = {};
+    for (const t of GUARD_TABLES) { countsBefore[t] = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n; deliberatelyRemoved[t] = 0; }
+
+    // The one real tenant: the lowest users.id (same "household head" convention Tenancy Phase 2
+    // used above; `chosenTenant` is that same computed value, still in scope). Any OTHER tenant_id
+    // surviving in these tables at this point is a test artifact, not a second real household.
+    if (chosenTenant != null) {
+      // Before touching any column: drop every row belonging to a tenant other than the real one,
+      // across all 8 tenant-bearing tables, so each table's rebuild below has nothing left to lose.
+      for (const t of ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs']) {
+        const info = db.prepare(`DELETE FROM ${t} WHERE tenant_id <> ?`).run(chosenTenant);
+        deliberatelyRemoved[t] += info.changes;
+      }
+    }
+
+    // Part 1 — settings: composite (tenant_id, key) PK back to a plain key PK. Where the same key
+    // still exists under more than one tenant (shouldn't happen after the delete above unless a row
+    // for that key never belonged to chosenTenant to begin with), keep the lowest tenant_id's row.
+    {
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`settings de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting.`);
+      db.exec('BEGIN');
+      try {
+        db.exec('CREATE TABLE settings__detenant_rebuild (key TEXT NOT NULL PRIMARY KEY, value TEXT)');
+        const insInfo = db.prepare(`
+          INSERT INTO settings__detenant_rebuild (key, value)
+          SELECT s.key, s.value FROM settings s
+          WHERE s.tenant_id = (SELECT MIN(tenant_id) FROM settings WHERE key = s.key)
+        `).run();
+        deliberatelyRemoved.settings = countsBefore.settings - insInfo.changes;
+        db.exec('DROP TABLE settings');
+        db.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+
+    // Part 2 — contract: collapse the per-tenant single-live invariant to a database-wide one. If
+    // more than one live contract still exists across tenants (shouldn't happen after the delete
+    // above, since idx_contract_single_live_tenant already capped each tenant at one), keep the
+    // lowest users.id's and soft-delete the rest — never a silent hard-delete of a live row.
+    db.exec(`
+      UPDATE contract SET deleted_at = datetime('now')
+      WHERE deleted_at IS NULL
+        AND tenant_id <> (SELECT MIN(tenant_id) FROM contract WHERE deleted_at IS NULL)
+    `);
+
+    // Part 3 — ledger_customs: dedupe by NAME, keeping the lowest id (lowest id, not lowest
+    // tenant_id — this becomes a flat pick-list once the tenant dimension is gone, so ties break on
+    // row age, not on ownership).
+    {
+      const dedupInfo = db.prepare('DELETE FROM ledger_customs WHERE id NOT IN (SELECT MIN(id) FROM ledger_customs GROUP BY name)').run();
+      deliberatelyRemoved.ledger_customs += dedupInfo.changes;
+    }
+
+    // Part 4 — drop tenant_id from all 8 tenant-bearing tables via create-copy-swap, preserving the
+    // AUTOINCREMENT high-water mark exactly as rebuildAddingTenant() does above (so no id is ever
+    // reused), and replaying each table's OWN indexes afterward — skipping any that reference
+    // tenant_id (the two that do, idx_contract_single_live_tenant and idx_ledger_customs_tenant_name,
+    // are replaced with their tenant-free equivalents in Part 5, not replayed here).
+    const rebuildDroppingTenant = (table, bodySql, keptCols) => {
+      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+      const oldSeq = seqRow ? seqRow.seq : null;
+      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table);
+      const tmp = `${table}__detenant_rebuild`;
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`${table} de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
+      db.exec('BEGIN');
+      try {
+        db.exec(`CREATE TABLE ${tmp} (${bodySql})`);
+        const colList = keptCols.join(', ');
+        db.exec(`INSERT INTO ${tmp} (${colList}) SELECT ${colList} FROM ${table}`);
+        db.exec(`DROP TABLE ${table}`);
+        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
+        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
+      db.exec('PRAGMA foreign_keys = ON');
+      for (const idx of idxDdls) { if (!/tenant_id/i.test(idx.sql)) db.exec(idx.sql); }
+    };
+
+    rebuildDroppingTenant('contract', `
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_name         TEXT,
+      area_of_work            TEXT,
+      ledger_code             TEXT,
+      subledger_code          TEXT,
+      ledger_custom_name      TEXT,
+      subledger_custom_name   TEXT,
+      amount_paise            INTEGER,
+      price_of_contract_paise INTEGER,
+      contract_end_date       TEXT,
+      date_signed             TEXT,
+      created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at              TEXT,
+      company                 TEXT
+    `, ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name',
+        'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date',
+        'date_signed', 'created_at', 'updated_at', 'deleted_at', 'company']);
+
+    rebuildDroppingTenant('contract_payment_dates', `
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      pay_date    TEXT    NOT NULL,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    `, ['id', 'contract_id', 'pay_date', 'created_at']);
+
+    rebuildDroppingTenant('contractor_payments', `
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id           INTEGER NOT NULL REFERENCES contract(id),
+      pay_date              TEXT    NOT NULL,
+      amount_paise          INTEGER NOT NULL,
+      ledger_code           TEXT,
+      subledger_code        TEXT,
+      ledger_custom_name    TEXT,
+      subledger_custom_name TEXT,
+      phase                 INTEGER,
+      subpart               TEXT,
+      remarks               TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at            TEXT
+    `, ['id', 'contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code',
+        'ledger_custom_name', 'subledger_custom_name', 'phase', 'subpart', 'remarks',
+        'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('contract_services', `
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      name        TEXT    NOT NULL,
+      price_paise INTEGER,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at  TEXT
+    `, ['id', 'contract_id', 'name', 'price_paise', 'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('cash_in', `
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise INTEGER NOT NULL,
+      tx_date      TEXT,
+      by_type      TEXT    NOT NULL,
+      by_user_id   INTEGER REFERENCES users(id),
+      by_label     TEXT,
+      reason       TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at   TEXT
+    `, ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason',
+        'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('cash_out', `
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise          INTEGER NOT NULL,
+      tx_date               TEXT,
+      by_type               TEXT    NOT NULL,
+      by_user_id            INTEGER REFERENCES users(id),
+      by_label              TEXT,
+      ledger_code           TEXT    NOT NULL,
+      subledger_code        TEXT,
+      ledger_custom_name    TEXT,
+      subledger_custom_name TEXT,
+      reason                TEXT,
+      contract_scope        TEXT    NOT NULL,
+      contract_stated_paise INTEGER,
+      phase                 INTEGER,
+      subpart               TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at            TEXT,
+      contract_service_id   INTEGER REFERENCES contract_services(id)
+    `, ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code',
+        'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope',
+        'contract_stated_paise', 'phase', 'subpart', 'created_at', 'updated_at', 'deleted_at',
+        'contract_service_id']);
+
+    rebuildDroppingTenant('loans', `
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise  INTEGER,
+      bank_name     TEXT,
+      interest_rate REAL,
+      tenure        TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at    TEXT
+    `, ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('ledger_customs', `
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT    NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    `, ['id', 'name', 'created_at']);
+
+    // Part 5 — retire the tenant-scoped indexes. idx_contract_single_live_tenant is dropped with NO
+    // replacement: SQLite cannot index a constant expression, so there is no database-wide
+    // equivalent to create, and app-level enforcement (a 409 on a second live contract — see
+    // test/contract.test.js) is sufficient on a single-user app. idx_ledger_customs_tenant_name IS
+    // replaced, by a plain unique index on name. (The table rebuilds above already dropped both
+    // along with their tables via DROP TABLE; the explicit DROP INDEX here is just defensive in case
+    // either survives on an unusual DB.)
+    db.exec('DROP INDEX IF EXISTS idx_contract_single_live_tenant');
+    db.exec('DROP INDEX IF EXISTS idx_ledger_customs_tenant_name');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_name ON ledger_customs(name)');
+
+    // Part 6 — row-count guard. A create-copy-swap that silently drops (or duplicates) a row is the
+    // failure mode this migration most needs to catch. `deliberatelyRemoved` tracks, per table, only
+    // the rows THIS migration intentionally removes (the non-chosen-tenant purge above, plus
+    // ledger_customs' own name-dedupe and settings' own key-dedupe); every other step here is a
+    // column-drop or soft-delete that must never change a row count. Checked with exact equality —
+    // stricter than "no more than expected", so it also catches an unexpected UNDER-removal, not
+    // only silent loss during the rebuilds.
+    for (const t of GUARD_TABLES) {
+      const after = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+      const expected = countsBefore[t] - deliberatelyRemoved[t];
+      if (after !== expected) {
+        throw new Error(`Tenancy collapse (Step 2a): row-count guard failed for ${t} — before=${countsBefore[t]}, deliberately removed=${deliberatelyRemoved[t]}, expected after=${expected}, found ${after}. Refusing to stamp the migration as complete.`);
+      }
+    }
+
+    // Part 7 — integrity check before this migration is allowed to be marked done (user_version is
+    // stamped unconditionally at the end of init(), so a throw here leaves it at 0 and the whole
+    // chain retries next boot).
+    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
+  }
 
   // Schema-version marker (Phase 11B) — stamped ONLY here, after every migration above has succeeded,
   // so a mid-migration throw leaves it at 0 and the next boot retries the whole chain. Disambiguates
