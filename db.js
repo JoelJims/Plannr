@@ -88,6 +88,16 @@ export function init() {
     );
   `);
 
+  // Phase 8d: a fresh local/offline database has this table just-created and otherwise empty.
+  // getOwner() (server.js and local-api.js both) assumes a row already exists — every server.js
+  // deployment has had one since some now-removed registration step, long before this check existed,
+  // so this is a no-op there. A brand-new Capacitor install has no such history, so seed exactly one
+  // default owner the first time the table is empty.
+  if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
+    db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)')
+      .run('owner', 'Owner', 'local-single-user-no-auth');
+  }
+
   // Services phase — contract_services RETURNS (dropped in Phase 5C). If a PRE-Phase-5 database still
   // carries the OLD-shaped contract_services (detected by the absence of the new tenant_id column),
   // drop it HERE, BEFORE the ledger CREATE block below recreates it in the new shape — otherwise the
