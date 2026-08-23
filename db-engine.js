@@ -118,4 +118,13 @@ export class DatabaseSync {
   close() {
     if (this._raw.isOpen()) this._raw.close();
   }
+  /**
+   * Escape hatch onto the underlying sqlite3.oo1.JsStorageDb instance, for tooling that needs the
+   * real connection object — e.g. sqlite3.capi.sqlite3_js_db_export(db.nativeHandle()) for a full
+   * database snapshot (Phase 7). Not part of the DatabaseSync-compatible contract; pairs with
+   * getSqlite3() above.
+   */
+  nativeHandle() {
+    return this._raw;
+  }
 }

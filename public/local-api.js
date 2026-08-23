@@ -16,9 +16,15 @@
 // Not ported: GET /api/health (never called by any page) and everything in server.js that only
 // exists to serve the Overview PDF via Playwright (buildOverviewPdfHtml, pdfPieSvg, fmtRs, the PDF
 // concurrency guard, warmPdfBrowser) — none of it is reachable once /api/overview/pdf is a stub.
+//
+// Phase 7 adds the encrypted full-snapshot backup path (export-encrypted/import-encrypted) alongside
+// the plain-JSON ledger export/import above — a separate concern (raw database bytes, not the
+// ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
 import { db, isStorageFullError } from './db.js';
 import { LEDGERS } from './ledgers.js';
+import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
+import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 
 export function installFetchShim(repo) {
   const originalFetch = window.fetch.bind(window);
@@ -1225,6 +1231,60 @@ export function installFetchShim(repo) {
     res.json({ ok: true, imported, remappedUsers, snapshot });
   });
 
+  // ---------------------------------------------------------------------------
+  // Phase 7 — encrypted full-snapshot backup. A different thing from the plain-JSON export/import
+  // above: this is the WHOLE database (every table, users/sessions included), byte-for-byte, the
+  // local-mode equivalent of backup-db.js's VACUUM INTO + backup-crypto.js encryption. The body carries
+  // the encrypted bytes as base64 (this is an in-process call through the fetch shim, not a real HTTP
+  // request, so there's no size pressure that would justify anything fancier than JSON + base64).
+  // ---------------------------------------------------------------------------
+  localApp.post('/api/backup/export-encrypted', async (req, res) => {
+    const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
+    if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
+    try {
+      const plain = exportSnapshotBytes();
+      const enc = await encrypt(plain, passphrase);
+      res.send(enc);
+    } catch (e) {
+      console.error('Encrypted export failed:', e);
+      res.status(500).json({ error: 'Could not build the encrypted backup: ' + e.message });
+    }
+  });
+
+  localApp.post('/api/backup/import-encrypted', async (req, res) => {
+    const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
+    const dataBase64 = typeof req.body.dataBase64 === 'string' ? req.body.dataBase64 : '';
+    if (!passphrase) return res.status(400).json({ error: 'Enter the passphrase this backup was encrypted with.' });
+    if (!dataBase64) return res.status(400).json({ error: 'Choose an encrypted backup file first.' });
+
+    let encBytes;
+    try {
+      const binary = atob(dataBase64);
+      encBytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) encBytes[i] = binary.charCodeAt(i);
+    } catch {
+      return res.status(400).json({ error: 'That file could not be read — choose a Plannr encrypted backup (.db.enc).' });
+    }
+
+    let plain;
+    try {
+      plain = await decrypt(encBytes, passphrase);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (!looksLikeSqlite(plain)) {
+      return res.status(400).json({ error: 'Decryption succeeded but the result does not look like a SQLite database — the file may be corrupt.' });
+    }
+
+    try {
+      await restoreSnapshotBytes(plain);
+    } catch (e) {
+      console.error('Encrypted import failed:', e);
+      return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.' });
+    }
+    res.json({ ok: true });
+  });
+
   repo.configure({ contractCols: CONTRACT_COLS, backupTables: BACKUP_TABLES, backupCols: BACKUP_COLS });
 
   // ---------------------------------------------------------------------------
@@ -1264,7 +1324,7 @@ export function installFetchShim(repo) {
       const req = { params, query, body };
       const res = new Res();
       try {
-        r.handler(req, res);
+        await r.handler(req, res); // handlers may be sync or async (Phase 7's encrypted backup routes are async)
       } catch (e) {
         console.error('local-api handler error:', e);
         res.status(500).json({ error: 'Something went wrong.' });
