@@ -2,6 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Phase 5: local-only mode — no server, no network requests for /api/*. See local-bootstrap.js. -->
+  <script type="importmap">
+  { "imports": {
+      "@sqlite.org/sqlite-wasm": "/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs",
+      "node:fs": "/node-builtins-browser-stub.js",
+      "node:path": "/node-builtins-browser-stub.js",
+      "node:sqlite": "/node-builtins-browser-stub.js"
+  } }
+  </script>
+  <script type="module" src="/local-bootstrap.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0a0a0b">
   <title>Cash Flow · Plannr</title>

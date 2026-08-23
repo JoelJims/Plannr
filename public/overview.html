@@ -2,6 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Phase 5: local-only mode — no server, no network requests for /api/*. See local-bootstrap.js. -->
+  <script type="importmap">
+  { "imports": {
+      "@sqlite.org/sqlite-wasm": "/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs",
+      "node:fs": "/node-builtins-browser-stub.js",
+      "node:path": "/node-builtins-browser-stub.js",
+      "node:sqlite": "/node-builtins-browser-stub.js"
+  } }
+  </script>
+  <script type="module" src="/local-bootstrap.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0a0a0b">
   <title>Overview · Plannr</title>
@@ -445,7 +455,11 @@
   // (classic scripts run immediately, in document order, before any deferred/module script). Wrapping
   // this whole block in DOMContentLoaded (which fires only after every deferred/module script has
   // run) restores the ordering this page already relied on: window.LEDGERS set before it's read below.
-  document.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('DOMContentLoaded', async () => {
+    // Phase 5: DOMContentLoaded does NOT wait for a deferred module's top-level await to settle
+    // (verified empirically). This explicit await is what actually guarantees the fetch shim is
+    // installed before the fetch() calls below run; the module tag above just starts it early.
+    await import('/local-bootstrap.js');
     const $ = (id) => document.getElementById(id);
     const { formatPaise: fmtPaise, formatOwed: fmtOwed, escapeHtml: esc, formatDate: fmtDate, makeMsg, createDatePicker } = window.PlannrUI;
     const LEDGERS = window.LEDGERS;
