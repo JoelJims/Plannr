@@ -23,10 +23,11 @@ const userVersion = () => db.prepare('PRAGMA user_version').get().user_version;
 init();
 const SCHEMA_VERSION = userVersion();
 assert.ok(SCHEMA_VERSION > 0, 'init() stamps the schema-version marker (user_version > 0)');
-db.prepare("INSERT INTO users(id,username,display_name,password_hash) VALUES (1,'owner','Owner','h')").run();
+// Phase 8d: init() now auto-seeds one owner row on an empty users table, so there's already one here.
+const ownerId = db.prepare('SELECT id FROM users ORDER BY id ASC LIMIT 1').get().id;
 for (let i = 1; i <= 3; i++) {
   db.prepare('INSERT INTO cash_out(amount_paise,tx_date,by_type,by_user_id,ledger_code,contract_scope) VALUES (?,?,?,?,?,?)')
-    .run(1000 * i, '2025-04-0' + i, 'user', 1, '4.0', 'extra');
+    .run(1000 * i, '2025-04-0' + i, 'user', ownerId, '4.0', 'extra');
 }
 const base = fp();
 assert.strictEqual(base.n, 3, 'seed: 3 rows'); assert.strictEqual(base.s, 6000, 'seed: sum 6000');

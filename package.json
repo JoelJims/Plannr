@@ -13,6 +13,7 @@
     "test:slow": "node --test --test-concurrency=1 \"test/slow/**/*.test.js\"",
     "test:ui": "node test-ui/run.js",
     "test:backup-crypto": "node test-ui/backup-crypto.js",
+    "test:static-hosting": "node test-ui/static-hosting.js",
     "sync:public-modules": "node sync-public-modules.js",
     "android:sync": "node sync-public-modules.js && npx cap sync android"
   },
