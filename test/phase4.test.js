@@ -5,8 +5,8 @@ const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
-let cookie, TENANT;
-before(async () => { await H.startApp(); const s = H.seedLoggedIn(); cookie = s.cookie; TENANT = s.user.id; });
+let cookie;
+before(async () => { await H.startApp(); const s = H.seedLoggedIn(); cookie = s.cookie; });
 after(async () => { await H.stopApp(); });
 beforeEach(() => { H.clearLedger(); });
 
@@ -17,7 +17,7 @@ test('Part C1 — owed stays NEGATIVE in computeOverview; the PDF prints "Overpa
   const ov = await H.get('/api/overview', { cookie });
   assert.ok(ov.json.money.owedToContractorsPaise < 0, 'underlying owed is signed (negative), never clamped');
   assert.strictEqual(ov.json.money.owedToContractorsPaise, -1000000);
-  const html = H.app._overviewPdfHtml({ tenantId: TENANT, part: 'summary', theme: 'light', range: { start: null, end: null } });
+  const html = H.app._overviewPdfHtml({ part: 'summary', theme: 'light', range: { start: null, end: null } });
   assert.match(html, /Overpaid by ₹10,000/, 'PDF owed section shows "Overpaid by ₹X"');
   assert.doesNotMatch(html, /-₹10,000/, 'no negative "-₹" owed figure in the PDF');
 });
@@ -26,8 +26,8 @@ test('Part C1 — owed stays NEGATIVE in computeOverview; the PDF prints "Overpa
 test('Part C2 — summary PDF omits the transactions table but keeps the ledger rollup; full keeps it', () => {
   H.seedContract({ pricePaise: 2500000 });
   for (let i = 0; i < 5; i++) H.seedCashOut({ amountPaise: 100000, ledgerCode: '4.0', subledgerCode: '4.2' });
-  const summary = H.app._overviewPdfHtml({ tenantId: TENANT, part: 'summary', theme: 'light', range: { start: null, end: null } });
-  const full = H.app._overviewPdfHtml({ tenantId: TENANT, part: 'full', theme: 'light', range: { start: null, end: null } });
+  const summary = H.app._overviewPdfHtml({ part: 'summary', theme: 'light', range: { start: null, end: null } });
+  const full = H.app._overviewPdfHtml({ part: 'full', theme: 'light', range: { start: null, end: null } });
   assert.doesNotMatch(summary, /<h2>Transactions<\/h2>/, 'summary has NO transactions table');
   assert.match(summary, /Spending by Ledger/, 'summary keeps the ledger rollup + pie');
   assert.match(full, /<h2>Transactions<\/h2>/, 'the manual full export keeps the transactions table');
@@ -36,7 +36,7 @@ test('Part C2 — summary PDF omits the transactions table but keeps the ledger 
 // ---- Part C3 — cash_in.tx_date ----
 test('Part C3 — cash_in has tx_date; migration idempotent; backfill from created_at', () => {
   assert.ok(H.db.prepare('PRAGMA table_info(cash_in)').all().map((c) => c.name).includes('tx_date'), 'fresh CREATE has tx_date');
-  const id = Number(H.db.prepare("INSERT INTO cash_in (amount_paise, tx_date, by_type, created_at, tenant_id) VALUES (100000, NULL, 'user', '2025-06-15 10:00:00', (SELECT MIN(id) FROM users))").run().lastInsertRowid);
+  const id = Number(H.db.prepare("INSERT INTO cash_in (amount_paise, tx_date, by_type, created_at) VALUES (100000, NULL, 'user', '2025-06-15 10:00:00')").run().lastInsertRowid);
   H.db.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL"); // the migration's backfill
   assert.strictEqual(H.db.prepare('SELECT tx_date FROM cash_in WHERE id=?').get(id).tx_date, '2025-06-15');
   assert.doesNotThrow(() => require('../db').init(), 're-running init() is idempotent');

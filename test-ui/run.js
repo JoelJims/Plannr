@@ -18,7 +18,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   const token = cookie.split('=')[1];
   for (const code of LEDGERS) H.seedCashOut({ amountPaise: 250000 + (code.length * 1234) % 90000, byUserId: user.id, ledgerCode: code });
   H.seedCashOut({ amountPaise: BIG_PAISE, byUserId: user.id, ledgerCode: '1.0' }); // merges into ledger 1.0
-  H.db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, 'budget_paise','2000000') ON CONFLICT(tenant_id, key) DO UPDATE SET value=excluded.value").run(user.id);
+  H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise','2000000') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
 
   const browser = await chromium.launch({ args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 1700 } });

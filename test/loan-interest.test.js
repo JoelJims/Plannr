@@ -29,9 +29,9 @@ test('the create route accepts ledger 20.0 + sub-ledger 20.3 (Loan interest)', a
 });
 
 test('interest counts in total spend + the 20.0 finance slice, kept separate from build ledgers, and NEVER in owed (F)', async () => {
-  const cid = H.seedContract({ tenantId: A.user.id, pricePaise: 10000000 }); // stated ₹1,00,000
-  H.seedPayment({ contractId: cid, amountPaise: 4000000, tenantId: A.user.id }); // paid ₹40,000
-  H.seedCashOut({ amountPaise: 3200000, byUserId: A.user.id, tenantId: A.user.id, ledgerCode: '4.0', subledgerCode: '4.2', contractScope: 'extra' }); // ₹32,000 cement (build)
+  const cid = H.seedContract({ pricePaise: 10000000 }); // stated ₹1,00,000
+  H.seedPayment({ contractId: cid, amountPaise: 4000000 }); // paid ₹40,000
+  H.seedCashOut({ amountPaise: 3200000, byUserId: A.user.id, ledgerCode: '4.0', subledgerCode: '4.2', contractScope: 'extra' }); // ₹32,000 cement (build)
   await addInterest(); // ₹5,000 interest under 20.0/20.3
 
   const o = await overview();
@@ -49,7 +49,7 @@ test('interest counts in total spend + the 20.0 finance slice, kept separate fro
 });
 
 test('interest does not touch loanReceived (E) or contract total (A) — interest_rate stays informational', async () => {
-  H.seedContract({ tenantId: A.user.id, pricePaise: 10000000 });
+  H.seedContract({ pricePaise: 10000000 });
   await addInterest();
   const o = await overview();
   assert.strictEqual(o.money.loanReceivedPaise, 0, 'interest is a spend, not a loan received');

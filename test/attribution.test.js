@@ -7,11 +7,10 @@ const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
-let owner, cookie, TENANT;
+let owner, cookie;
 before(async () => {
   await H.startApp();
   ({ user: owner, cookie } = H.seedLoggedIn());
-  TENANT = owner.id;
 });
 after(async () => { await H.stopApp(); });
 beforeEach(() => H.clearLedger());
@@ -22,8 +21,8 @@ const byRow = (id) => H.db.prepare('SELECT by_type, by_user_id, by_label FROM ca
 const editBody = (id, amountRupees, byUId, extra) => Object.assign({ id, amountRupees, txDate: '2026-07-12', byType: 'user', byUserId: byUId, ledgerCode: '1.0', subledgerCode: '', contractScope: 'extra' }, extra || {});
 
 test('batch editing rows with a stored custom by_label changes ZERO attributions', async () => {
-  const id1 = H.seedCashOut({ amountPaise: 10000, byType: 'custom', byLabel: 'Neighbour', tenantId: TENANT });
-  const id2 = H.seedCashOut({ amountPaise: 20000, byType: 'custom', byLabel: 'Neighbour', tenantId: TENANT });
+  const id1 = H.seedCashOut({ amountPaise: 10000, byType: 'custom', byLabel: 'Neighbour' });
+  const id2 = H.seedCashOut({ amountPaise: 20000, byType: 'custom', byLabel: 'Neighbour' });
   const r = await H.post('/api/cash-out/batch', { rows: [
     editBody(id1, '500.00', null, { byType: 'custom', byLabel: 'Neighbour' }),
     editBody(id2, '600.00', null, { byType: 'custom', byLabel: 'Neighbour' }),
@@ -35,7 +34,7 @@ test('batch editing rows with a stored custom by_label changes ZERO attributions
 });
 
 test('a non-existent byUserId returns 400', async () => {
-  const id = H.seedCashOut({ amountPaise: 10000, byUserId: owner.id, tenantId: TENANT });
+  const id = H.seedCashOut({ amountPaise: 10000, byUserId: owner.id });
   const r = await H.put('/api/cash-out/' + id, editBody(id, '500.00', 99999), { cookie });
   assert.strictEqual(r.status, 400);
   assert.match(r.json.error, /does not exist/i);
@@ -43,7 +42,7 @@ test('a non-existent byUserId returns 400', async () => {
 });
 
 test('a stored-NULL by_user_id round-trips when another field is edited', async () => {
-  const id = H.seedCashOut({ amountPaise: 10000, byType: 'user', byUserId: null, tenantId: TENANT }); // import-remapped unknown
+  const id = H.seedCashOut({ amountPaise: 10000, byType: 'user', byUserId: null }); // import-remapped unknown
   const r = await H.put('/api/cash-out/' + id, editBody(id, '777.00', null), { cookie });
   assert.strictEqual(r.status, 200, JSON.stringify(r.json));
   assert.strictEqual(byUserId(id), null, 'already-NULL attribution round-trips as NULL');
@@ -51,7 +50,7 @@ test('a stored-NULL by_user_id round-trips when another field is edited', async 
 });
 
 test('a deliberate reassignment (custom payer -> the real owner) persists and emits the audit line', async () => {
-  const id = H.seedCashOut({ amountPaise: 10000, byType: 'custom', byLabel: 'Neighbour', tenantId: TENANT });
+  const id = H.seedCashOut({ amountPaise: 10000, byType: 'custom', byLabel: 'Neighbour' });
   const orig = console.warn; const warns = [];
   console.warn = (...a) => warns.push(a.map(String).join(' '));
   let r;

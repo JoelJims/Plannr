@@ -15,12 +15,6 @@ const files = fs.readdirSync(path.join(__dirname, 'test'))
   .filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join('test', f));
 const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', cwd: __dirname });
 
-// Tenancy Phase 3 (Part D) — the cross-tenant ISOLATION HARNESS is now a permanent part of `npm test`.
-// It was excluded while red (it MEASURED the leak); green (0 leaks) makes it a permanent regression net:
-// any future unfiltered query re-opens a leak and fails the whole suite. Its own isolated temp DB.
-console.log('\n[run-tests] running the cross-tenant isolation harness (must reach 0 leaks)…');
-const iso = spawnSync(process.execPath, [path.join('test-isolation', 'run.js')], { stdio: 'inherit', cwd: __dirname });
-
 const after = stamp();
 console.log(`[run-tests] data/plannr.db mtime AFTER:  ${after === null ? '(absent)' : new Date(after).toISOString()}`);
 
@@ -29,9 +23,4 @@ if (before !== after) {
   process.exit(1);
 }
 console.log('[run-tests] ✓ data/plannr.db mtime unchanged — the live database was never opened.');
-if (iso.status !== 0) {
-  console.error('[run-tests] ✖ FAIL: the isolation harness reported cross-tenant leaks (exit ' + iso.status + '). A tenant filter regressed.');
-  process.exit(1);
-}
-console.log('[run-tests] ✓ isolation harness: 0 cross-tenant leaks.');
 process.exit(r.status == null ? 1 : r.status);

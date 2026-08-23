@@ -42,9 +42,19 @@ function init() {
   // old table would shadow the new CREATE (IF NOT EXISTS). foreign_keys OFF because an ancient cash_out
   // may still carry the old contract_service_id FK into it (that FK is dropped by the Phase 5B rebuild
   // further down). No-op on the live/fresh DBs (contract_services absent, or already the new shape).
+  //
+  // BUG FIX: also version-gated (userVersion0 < 2, read fresh here since this runs before init()'s
+  // main userVersion read further down). Absence of tenant_id alone is NOT a safe signal any more:
+  // Step 2a (further below) deliberately drops tenant_id from contract_services once collapsed, and
+  // without this gate, every boot after the first would misread that as "pre-Phase-5 shape", DROP the
+  // table outright (losing every row), and recreate it empty WITH tenant_id — which then never gets
+  // stripped again because Step 2a itself is version-gated and won't re-fire. Caught by booting the
+  // real db.js against one persistent file across two separate processes (not a fresh temp DB each
+  // time) — a second `contract_services` row silently vanished and tenant_id came back.
   {
+    const userVersion0 = db.prepare('PRAGMA user_version').get().user_version;
     const cs = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'").get();
-    if (cs) {
+    if (cs && userVersion0 < 2) {
       const hasTenant = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'tenant_id');
       if (!hasTenant) {
         db.exec('PRAGMA foreign_keys = OFF');
@@ -257,7 +267,9 @@ function init() {
     -- Services phase: FK lookup for a contract's services, and a per-user uniqueness guard so the
     -- saved custom-name list never stores a duplicate for the same user.
     CREATE INDEX IF NOT EXISTS idx_contract_services_cid         ON contract_services(contract_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_tenant_name ON ledger_customs(tenant_id, name);
+    -- idx_ledger_customs_name (name-only, post-collapse) is created unconditionally inside the
+    -- Step 2a migration below — never here, so a second boot never tries to recreate the OLD
+    -- (tenant_id, name) index against a column that Step 2a has already dropped.
     -- Phase 6C partial date indexes (idx_cash_out_txdate_live / _paydate_live) and the Services-phase
     -- idx_cash_out_service_live are created at the END of init() (after the cash_out rebuild + the
     -- contract_service_id ADD COLUMN), so a rebuild can't drop them and the column always exists first.
@@ -496,118 +508,127 @@ function init() {
   // cash_out is non-empty (11 rows, sqlite_sequence=17 with max id 11 — a naive rebuild would reset
   // it to 11 and let new rows REUSE deleted ids 12..17), so exactly one table takes the rebuild path.
   // ---------------------------------------------------------------------------
-  const TENANT_TABLES = ['cash_out', 'cash_in', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments'];
-
-  // Part D — the tenant every existing row is assigned to. A populated MULTI-USER install cannot be
-  // split (there is no record of who owned which row), so the WHOLE database is assigned to ONE
-  // tenant: the lowest user id (the first-registered — the household head). Warn LOUDLY when more than
-  // one user exists so the operator knows the shared ledger was collapsed onto one of them.
+  // Part D — the tenant every existing row would be assigned to, IF this migration runs at all.
+  // Computed unconditionally (cheap, read-only) because Step 2a further below also needs it.
   const tenantUsers = db.prepare('SELECT id FROM users ORDER BY id ASC').all().map((u) => u.id);
   const chosenTenant = tenantUsers.length ? tenantUsers[0] : null;
-  const rowsNeedingTenant = TENANT_TABLES.filter((t) => {
-    const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
-    return !cols.includes('tenant_id') && db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n > 0;
-  });
-  if (rowsNeedingTenant.length && chosenTenant == null) {
-    throw new Error(`Tenancy Phase 2: tables [${rowsNeedingTenant.join(', ')}] hold rows but there are NO users to own them — refusing to backfill tenant_id to a non-existent user (the FK would fail). Register the household user first, then reboot.`);
-  }
-  if (rowsNeedingTenant.length && tenantUsers.length > 1) {
-    console.warn(`[db] Tenancy Phase 2: ${tenantUsers.length} users share this ledger and it cannot be split — assigning the ENTIRE database to tenant_id=${chosenTenant} (the lowest/first user id). Other users (${tenantUsers.slice(1).join(', ')}) keep their logins but own no ledger rows. This is the documented single-tenant collapse; see README "Tenancy".`);
-  }
 
-  // create-copy-swap: rebuild `table` with a trailing NOT NULL tenant_id, backfilling every row to
-  // `tenant`. Preserves ids, sqlite_sequence, the table's own indexes, and FK integrity. Reuses the
-  // table's CURRENT DDL (comments stripped) so there is no second copy of each schema to drift.
-  const rebuildAddingTenant = (table, oldCols, tenant) => {
-    const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
-    const oldSeq = seqRow ? seqRow.seq : null;                        // AUTOINCREMENT high-water mark
-    const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table); // DROP TABLE takes indexes with it
-    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(table).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
-    const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
-    const tmp = `${table}__tenant_rebuild`;
-    // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, read it back to
-    // PROVE enforcement is off (this project's twice-hit trap), restore AFTER COMMIT.
-    db.exec('PRAGMA foreign_keys = OFF');
-    const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
-    if (fkOff !== 0) throw new Error(`${table} tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-    db.exec('BEGIN');
-    try {
-      db.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
-      const colList = oldCols.join(', ');
-      db.prepare(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`).run(tenant);
-      db.exec(`DROP TABLE ${table}`);
-      db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
-      // RENAME set sqlite_sequence for the table to the copied max id; restore the true high-water
-      // mark so the next insert lands strictly PAST the highest id ever used (never reuses 12..17).
-      db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
-      if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
+  // BUG FIX: this whole block (Parts A/B/C — add tenant_id, the per-tenant settings PK, the
+  // per-tenant contract index) used to be gated ONLY on column presence ("tenant_id is absent ->
+  // add it"). That is unsafe now that Step 2a (further below) deliberately DROPS tenant_id: on the
+  // very next boot, presence-gating can't tell "genuinely pre-tenancy" apart from "already
+  // collapsed" — it saw the column missing, decided the DB was pre-tenancy, and tried to add it
+  // back (and/or recreate an index against it), which is wrong at best and throws at worst. Traced
+  // both paths: a pre-tenancy DB is at user_version 0 (< 2) — this block runs, exactly as before,
+  // and Step 2a's block immediately after collapses it back down in the SAME boot. A collapsed DB
+  // is at user_version 2 (>= 2) — this block is now skipped ENTIRELY, so nothing re-adds tenant_id
+  // and nothing tries to build an index against a column that no longer exists.
+  if (userVersion < 2) {
+    const TENANT_TABLES = ['cash_out', 'cash_in', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments'];
+    const rowsNeedingTenant = TENANT_TABLES.filter((t) => {
+      const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+      return !cols.includes('tenant_id') && db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n > 0;
+    });
+    if (rowsNeedingTenant.length && chosenTenant == null) {
+      throw new Error(`Tenancy Phase 2: tables [${rowsNeedingTenant.join(', ')}] hold rows but there are NO users to own them — refusing to backfill tenant_id to a non-existent user (the FK would fail). Register the household user first, then reboot.`);
+    }
+    if (rowsNeedingTenant.length && tenantUsers.length > 1) {
+      console.warn(`[db] Tenancy Phase 2: ${tenantUsers.length} users share this ledger and it cannot be split — assigning the ENTIRE database to tenant_id=${chosenTenant} (the lowest/first user id). Other users (${tenantUsers.slice(1).join(', ')}) keep their logins but own no ledger rows. This is the documented single-tenant collapse; see README "Tenancy".`);
+    }
+
+    // create-copy-swap: rebuild `table` with a trailing NOT NULL tenant_id, backfilling every row to
+    // `tenant`. Preserves ids, sqlite_sequence, the table's own indexes, and FK integrity. Reuses the
+    // table's CURRENT DDL (comments stripped) so there is no second copy of each schema to drift.
+    const rebuildAddingTenant = (table, oldCols, tenant) => {
+      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+      const oldSeq = seqRow ? seqRow.seq : null;                        // AUTOINCREMENT high-water mark
+      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table); // DROP TABLE takes indexes with it
+      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(table).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
+      const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
+      const tmp = `${table}__tenant_rebuild`;
+      // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, read it back to
+      // PROVE enforcement is off (this project's twice-hit trap), restore AFTER COMMIT.
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`${table} tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
+      db.exec('BEGIN');
+      try {
+        db.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
+        const colList = oldCols.join(', ');
+        db.prepare(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`).run(tenant);
+        db.exec(`DROP TABLE ${table}`);
+        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        // RENAME set sqlite_sequence for the table to the copied max id; restore the true high-water
+        // mark so the next insert lands strictly PAST the highest id ever used (never reuses 12..17).
+        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
+        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
       db.exec('PRAGMA foreign_keys = ON');
-      throw e;
-    }
-    db.exec('PRAGMA foreign_keys = ON');
-    // Replay the table's own indexes (DROP TABLE removed them). Skip the old database-wide
-    // single-live-contract index — the per-tenant block below creates the correct replacement.
-    for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') db.exec(idx.sql); }
-    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
-    if (fkViol.length) throw new Error(`${table} tenant rebuild: foreign_key_check found ${JSON.stringify(fkViol)}`);
-  };
+      // Replay the table's own indexes (DROP TABLE removed them). Skip the old database-wide
+      // single-live-contract index — the per-tenant block below creates the correct replacement.
+      for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') db.exec(idx.sql); }
+      const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+      if (fkViol.length) throw new Error(`${table} tenant rebuild: foreign_key_check found ${JSON.stringify(fkViol)}`);
+    };
 
-  // Add tenant_id to one table: no-op if present (idempotent / fresh install), ADD COLUMN if empty,
-  // forced rebuild if it holds rows.
-  const addTenantId = (table) => {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
-    if (cols.includes('tenant_id')) return;
-    const n = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
-    if (n === 0) { db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
-    rebuildAddingTenant(table, cols, chosenTenant);
-  };
-  for (const t of TENANT_TABLES) addTenantId(t);
+    // Add tenant_id to one table: no-op if present (idempotent / fresh install), ADD COLUMN if empty,
+    // forced rebuild if it holds rows.
+    const addTenantId = (table) => {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+      if (cols.includes('tenant_id')) return;
+      const n = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+      if (n === 0) { db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
+      rebuildAddingTenant(table, cols, chosenTenant);
+    };
+    for (const t of TENANT_TABLES) addTenantId(t);
 
-  // Part C — settings becomes PER-TENANT via a composite (tenant_id, key) primary key. The PK change
-  // forces a create-copy-swap rebuild (SQLite can't add a column to a PK in place). Backfill every
-  // existing row to the tenant: no CURRENT settings key is genuinely global — budget, recipients,
-  // schedule times, and the last-success/attempt/alert bookkeeping are all per-household. (The one
-  // genuinely-global piece of state, the shared WhatsApp client session, lives in .wwebjs_auth on
-  // disk, not here; a future infra key would use the reserved tenant_id = 0.)
-  const settingsCols = db.prepare('PRAGMA table_info(settings)').all().map((c) => c.name);
-  if (!settingsCols.includes('tenant_id')) {
-    const settingsRows = db.prepare('SELECT COUNT(*) AS n FROM settings').get().n;
-    if (settingsRows > 0 && chosenTenant == null) {
-      throw new Error('Tenancy Phase 2: settings holds rows but there are NO users to own them — register the household user first, then reboot.');
-    }
-    db.exec('PRAGMA foreign_keys = OFF');
-    const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
-    if (fkOff !== 0) throw new Error(`settings tenant rebuild: foreign_keys still ${fkOff} after OFF.`);
-    db.exec('BEGIN');
-    try {
-      // No FK on tenant_id (see the CREATE note). backfill = chosenTenant for every existing row.
-      db.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
-      db.prepare('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings').run(chosenTenant);
-      db.exec('DROP TABLE settings');
-      db.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
+    // Part C — settings becomes PER-TENANT via a composite (tenant_id, key) primary key. The PK change
+    // forces a create-copy-swap rebuild (SQLite can't add a column to a PK in place). Backfill every
+    // existing row to the tenant: no CURRENT settings key is genuinely global — budget, recipients,
+    // schedule times, and the last-success/attempt/alert bookkeeping are all per-household. (The one
+    // genuinely-global piece of state, the shared WhatsApp client session, lives in .wwebjs_auth on
+    // disk, not here; a future infra key would use the reserved tenant_id = 0.)
+    const settingsCols = db.prepare('PRAGMA table_info(settings)').all().map((c) => c.name);
+    if (!settingsCols.includes('tenant_id')) {
+      const settingsRows = db.prepare('SELECT COUNT(*) AS n FROM settings').get().n;
+      if (settingsRows > 0 && chosenTenant == null) {
+        throw new Error('Tenancy Phase 2: settings holds rows but there are NO users to own them — register the household user first, then reboot.');
+      }
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`settings tenant rebuild: foreign_keys still ${fkOff} after OFF.`);
+      db.exec('BEGIN');
+      try {
+        // No FK on tenant_id (see the CREATE note). backfill = chosenTenant for every existing row.
+        db.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
+        db.prepare('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings').run(chosenTenant);
+        db.exec('DROP TABLE settings');
+        db.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
       db.exec('PRAGMA foreign_keys = ON');
-      throw e;
     }
-    db.exec('PRAGMA foreign_keys = ON');
-  }
 
-  // -------------------------------------------------------------------------
-  // Tenancy Phase 2 (Part B) — the single-live-contract invariant becomes PER-TENANT. The old
-  // database-wide idx_contract_single_live made a SECOND user unable to create ANY contract (the
-  // INSERT failed); replace it so each tenant gets exactly one live contract. Fail LOUDLY first if any
-  // tenant already holds more than one live contract — never silently pick a winner.
-  const dupLiveTenants = db.prepare('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1').all();
-  if (dupLiveTenants.length) {
-    throw new Error(`Tenancy Phase 2 (Part B): tenant(s) ${dupLiveTenants.map((d) => `${d.tenant_id} (${d.n} live)`).join(', ')} already hold more than one live contract; the per-tenant invariant allows one each. Soft-delete the extras, then reboot — refusing to pick a winner automatically.`);
+    // Part B — the single-live-contract invariant becomes PER-TENANT. The old database-wide
+    // idx_contract_single_live made a SECOND user unable to create ANY contract (the INSERT
+    // failed); replace it so each tenant gets exactly one live contract. Fail LOUDLY first if any
+    // tenant already holds more than one live contract — never silently pick a winner.
+    const dupLiveTenants = db.prepare('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1').all();
+    if (dupLiveTenants.length) {
+      throw new Error(`Tenancy Phase 2 (Part B): tenant(s) ${dupLiveTenants.map((d) => `${d.tenant_id} (${d.n} live)`).join(', ')} already hold more than one live contract; the per-tenant invariant allows one each. Soft-delete the extras, then reboot — refusing to pick a winner automatically.`);
+    }
+    db.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
   }
-  db.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
 
   // ===========================================================================
   // Services phase — contract line-item services + per-user customs. contract_services and
@@ -625,7 +646,14 @@ function init() {
   // orphaned: they still display from their own cash_out.ledger_custom_name (unchanged), AND become
   // selectable. Seed the distinct live custom names to the PRIMARY tenant (chosenTenant, from Phase 2
   // above). Gated on an EMPTY list so a user who later deletes a saved name isn't re-seeded on reboot.
-  if (chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
+  // ALSO gated on userVersion < 2 AND ledger_customs actually having a tenant_id column. Version alone
+  // is not enough here: unlike the 6 TENANT_TABLES above (which Part A actively retrofits whenever
+  // userVersion < 2, regardless of current shape), ledger_customs/contract_services only ever get
+  // tenant_id at table-CREATION time — there is no ALTER/rebuild path that adds it back. So a boot
+  // where userVersion reads < 2 but the column is already gone (e.g. user_version was reset without
+  // the schema being reset to match) must not attempt this INSERT.
+  const ledgerCustomsColsE = db.prepare('PRAGMA table_info(ledger_customs)').all().map((c) => c.name);
+  if (userVersion < 2 && ledgerCustomsColsE.includes('tenant_id') && chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
     db.prepare(
       "INSERT OR IGNORE INTO ledger_customs (tenant_id, name) " +
       "SELECT DISTINCT ?, ledger_custom_name FROM cash_out " +
@@ -689,7 +717,12 @@ function init() {
     if (chosenTenant != null) {
       // Before touching any column: drop every row belonging to a tenant other than the real one,
       // across all 8 tenant-bearing tables, so each table's rebuild below has nothing left to lose.
+      // contract_services/ledger_customs are NOT in TENANT_TABLES above, so — unlike the other 6 —
+      // nothing retrofits tenant_id onto them if it's already absent; skip a table here if it
+      // doesn't currently have the column, rather than assume every gated table always does.
       for (const t of ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs']) {
+        const hasTenantCol = db.prepare(`PRAGMA table_info(${t})`).all().some((c) => c.name === 'tenant_id');
+        if (!hasTenantCol) continue;
         const info = db.prepare(`DELETE FROM ${t} WHERE tenant_id <> ?`).run(chosenTenant);
         deliberatelyRemoved[t] += info.changes;
       }

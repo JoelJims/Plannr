@@ -28,18 +28,20 @@ test('a default export contains NEITHER contact key (but keeps budget)', async (
 test('an invalid import rolls back completely with the snapshot written', async () => {
   const before = (await H.get('/api/cash-out', { cookie })).json.entries.length;
   const good = (await H.get('/api/backup/export?includeContacts=1', { cookie })).json;
-  // Passes row-level validation but violates the one-live-contract DB index on insert -> transaction
-  // throws -> full rollback. Two live contracts:
+  // Passes row-level validation (validateBackup checks each row in isolation, never cross-row
+  // uniqueness) but violates the id PRIMARY KEY on the second INSERT -> transaction throws -> full
+  // rollback. Two cash_out rows sharing the same id:
   const bad = JSON.parse(JSON.stringify(good));
-  bad.tables.contract = [
-    { id: 1, contractor_name: 'A', area_of_work: 'x', ledger_code: '5.0', price_of_contract_paise: 100, date_signed: '2026-07-01', deleted_at: null, created_at: '2026-07-01 00:00:00', updated_at: '2026-07-01 00:00:00' },
-    { id: 2, contractor_name: 'B', area_of_work: 'y', ledger_code: '5.0', price_of_contract_paise: 100, date_signed: '2026-07-01', deleted_at: null, created_at: '2026-07-01 00:00:00', updated_at: '2026-07-01 00:00:00' },
-  ];
+  const dupeRow = (id) => ({
+    id, amount_paise: 100, tx_date: '2026-07-01', by_type: 'user', by_user_id: null, by_label: null,
+    ledger_code: '1.0', subledger_code: null, ledger_custom_name: null, subledger_custom_name: null,
+    reason: null, contract_scope: 'extra', contract_stated_paise: null, contract_service_id: null,
+    created_at: '2026-07-01 00:00:00', updated_at: '2026-07-01 00:00:00', deleted_at: null,
+  });
+  bad.tables.cash_out = [dupeRow(1), dupeRow(1)]; // duplicate id -> PRIMARY KEY violation on insert
   const imp = await H.post('/api/backup/import', bad, { cookie });
   assert.notStrictEqual(imp.status, 200, 'a constraint-violating import must not succeed');
   assert.ok(imp.json.snapshot, 'a safety snapshot path is reported');
-  const liveContracts = H.db.prepare('SELECT COUNT(*) n FROM contract WHERE deleted_at IS NULL').get().n;
-  assert.ok(liveContracts <= 1, 'the one-live invariant survived the rolled-back import');
   const after = (await H.get('/api/cash-out', { cookie })).json.entries.length;
   assert.strictEqual(after, before, 'original data unchanged after rollback');
 });

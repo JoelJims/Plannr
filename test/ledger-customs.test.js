@@ -7,12 +7,12 @@ const assert = require('node:assert');
 const H = require('./helpers');
 
 let A;
-const add = (tenantId, name) => H.db.prepare('INSERT INTO ledger_customs (tenant_id, name) VALUES (?, ?)').run(tenantId, name);
+const add = (name) => H.db.prepare('INSERT INTO ledger_customs (name) VALUES (?)').run(name);
 
 before(async () => {
   await H.startApp();
   A = H.seedLoggedIn({ username: 'lc_alice', displayName: 'Alice' });
-  add(A.user.id, 'Cement'); add(A.user.id, 'Cemnt'); add(A.user.id, 'Steel'); // 'Cemnt' is the typo to prune
+  add('Cement'); add('Cemnt'); add('Steel'); // 'Cemnt' is the typo to prune
 });
 after(async () => { await H.stopApp(); });
 
@@ -35,12 +35,12 @@ test('DELETE removes the caller’s name and returns the updated list; it persis
 // no second live identity left to request as.
 
 test('removing a name leaves the historical debits that used it untouched', async () => {
-  H.db.prepare(`INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, ledger_custom_name, contract_scope, tenant_id)
-                VALUES (500, '2026-07-20', 'user', 'CUSTOM', 'Steel', 'extra', ?)`).run(A.user.id);
+  H.db.prepare(`INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, ledger_custom_name, contract_scope)
+                VALUES (500, '2026-07-20', 'user', 'CUSTOM', 'Steel', 'extra')`).run();
   const r = await H.del('/api/ledger-customs?name=' + encodeURIComponent('Steel'), { cookie: A.cookie });
   assert.strictEqual(r.status, 200);
   assert.ok(!r.json.customs.includes('Steel'), 'Steel pruned from the pick-list');
-  const row = H.db.prepare("SELECT ledger_custom_name FROM cash_out WHERE tenant_id=? AND ledger_code='CUSTOM'").get(A.user.id);
+  const row = H.db.prepare("SELECT ledger_custom_name FROM cash_out WHERE ledger_code='CUSTOM'").get();
   assert.strictEqual(row.ledger_custom_name, 'Steel', 'the past debit keeps its stored name — history not rewritten');
 });
 

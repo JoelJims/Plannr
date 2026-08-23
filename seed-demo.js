@@ -85,21 +85,21 @@ db.exec('BEGIN');
 try {
   // ---- contract ~₹25,00,000 ----
   const contractId = Number(db.prepare(
-    `INSERT INTO contract (contractor_name, area_of_work, ledger_code, subledger_code, price_of_contract_paise, date_signed, contract_end_date, created_at, updated_at, tenant_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`
-  ).run('Rajan & Sons Builders', '2,400 sqft — G+1 residential, Thrissur', '5.0', '5.2', rupees(2500000), '2025-01-15', '2026-06-30', nowIso, nowIso, ownerId).lastInsertRowid);
+    `INSERT INTO contract (contractor_name, area_of_work, ledger_code, subledger_code, price_of_contract_paise, date_signed, contract_end_date, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`
+  ).run('Rajan & Sons Builders', '2,400 sqft — G+1 residential, Thrissur', '5.0', '5.2', rupees(2500000), '2025-01-15', '2026-06-30', nowIso, nowIso).lastInsertRowid);
 
   // ---- 7 contractor payments across ~12 months (partial — leaves genuine dues) ----
   const payDates = ['2025-02-10', '2025-04-05', '2025-06-12', '2025-08-20', '2025-10-15', '2025-12-18', '2026-02-25'];
   const payAmts = [300000, 250000, 300000, 250000, 300000, 200000, 150000]; // ₹ — sums to ₹17,50,000 of the ₹25,00,000
-  const insPayDate = db.prepare('INSERT INTO contract_payment_dates (contract_id, pay_date, tenant_id) VALUES (?,?,?)');
-  const insPay = db.prepare(`INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, ledger_code, subledger_code, remarks, created_at, updated_at, tenant_id) VALUES (?,?,?,?,?,?,?,?,?)`);
-  payDates.forEach((d, i) => { insPayDate.run(contractId, d, ownerId); insPay.run(contractId, d, rupees(payAmts[i]), '5.0', '5.2', i === 0 ? 'Mobilisation advance on signing' : null, nowIso, nowIso, ownerId); });
+  const insPayDate = db.prepare('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?,?)');
+  const insPay = db.prepare(`INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, ledger_code, subledger_code, remarks, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`);
+  payDates.forEach((d, i) => { insPayDate.run(contractId, d); insPay.run(contractId, d, rupees(payAmts[i]), '5.0', '5.2', i === 0 ? 'Mobilisation advance on signing' : null, nowIso, nowIso); });
 
   // ---- cash_out: clustered, gappy, repeated combos ----
   const insOut = db.prepare(
-    `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, reason, contract_scope, contract_stated_paise, created_at, updated_at, tenant_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, reason, contract_scope, contract_stated_paise, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   let day = new Date(START);
   const END = new Date(Date.UTC(2026, 5, 28));
@@ -125,7 +125,7 @@ try {
       else if (chance(0.06)) reason = nameFor(p.code).split('(')[0].trim();
       const custom = chance(0.08);
       insOut.run(amt, iso(day), custom ? 'custom' : 'user', custom ? null : ownerId, custom ? wpick([{ w: 1, code: 'Site supervisor' }, { w: 1, code: 'Mestri (cash)' }, { w: 1, code: 'Relative on site' }]).code : null,
-        t + '.0', p.code, reason, isInc ? 'included' : 'extra', stated, nowIso, nowIso, ownerId);
+        t + '.0', p.code, reason, isInc ? 'included' : 'extra', stated, nowIso, nowIso);
       if (isInc) included++;
       byLedger[t] = (byLedger[t] || 0) + 1;
       n++;
@@ -133,26 +133,26 @@ try {
   }
 
   // ---- inflow: owner funding + a relative's contribution ----
-  const insIn = db.prepare('INSERT INTO cash_in (amount_paise, tx_date, by_type, by_user_id, by_label, reason, created_at, updated_at, tenant_id) VALUES (?,?,?,?,?,?,?,?,?)');
+  const insIn = db.prepare('INSERT INTO cash_in (amount_paise, tx_date, by_type, by_user_id, by_label, reason, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)');
   const inflows = [
     [1500000, '2025-01-08', 'user', ownerId, null, 'Own savings — initial'], [500000, '2025-02-14', 'relative', null, 'Father', 'Family contribution'],
     [800000, '2025-03-20', 'user', ownerId, null, 'Salary top-up'], [1200000, '2025-05-05', 'user', ownerId, null, 'FD closed for the build'],
     [300000, '2025-07-11', 'relative', null, 'Brother-in-law', 'Loan from family'], [600000, '2025-09-02', 'custom', null, 'Land sale (small plot)', 'Sold ancestral plot share'],
     [400000, '2025-11-18', 'user', ownerId, null, 'Bonus'], [250000, '2026-01-09', 'relative', null, 'Mother', 'Gift'],
   ];
-  inflows.forEach(([a, d, bt, uid, lbl, r]) => insIn.run(rupees(a), d, bt, uid, lbl, r, nowIso, nowIso, ownerId));
+  inflows.forEach(([a, d, bt, uid, lbl, r]) => insIn.run(rupees(a), d, bt, uid, lbl, r, nowIso, nowIso));
 
   // ---- two loans ----
-  const insLoan = db.prepare('INSERT INTO loans (amount_paise, bank_name, interest_rate, tenure, created_at, updated_at, tenant_id) VALUES (?,?,?,?,?,?,?)');
-  insLoan.run(rupees(1500000), 'SBI Home Loan', 8.5, '20 years', nowIso, nowIso, ownerId);
-  insLoan.run(rupees(500000), 'Federal Bank top-up', 10.25, '7 years', nowIso, nowIso, ownerId);
+  const insLoan = db.prepare('INSERT INTO loans (amount_paise, bank_name, interest_rate, tenure, created_at, updated_at) VALUES (?,?,?,?,?,?)');
+  insLoan.run(rupees(1500000), 'SBI Home Loan', 8.5, '20 years', nowIso, nowIso);
+  insLoan.run(rupees(500000), 'Federal Bank top-up', 10.25, '7 years', nowIso, nowIso);
 
   // ---- budget: ~8% above total spent (debits + contractor payments), rounded to the nearest lakh, so
   //      the bar sits "near" by default. Part E adjusts it up/down for the under/over screenshots. ----
   const spentSoFar = db.prepare('SELECT COALESCE(SUM(amount_paise),0) s FROM cash_out').get().s
     + db.prepare('SELECT COALESCE(SUM(amount_paise),0) s FROM contractor_payments').get().s;
   const budgetPaise = Math.round((spentSoFar * 1.08) / 10000000) * 10000000; // round to ₹1,00,000
-  db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, 'budget_paise', ?) ON CONFLICT(tenant_id, key) DO UPDATE SET value=excluded.value").run(ownerId, String(budgetPaise));
+  db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(budgetPaise));
 
   db.exec('COMMIT');
 

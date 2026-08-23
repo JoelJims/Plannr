@@ -9,7 +9,7 @@ after(async () => { await H.stopApp(); });
 beforeEach(() => H.clearLedger());
 
 const deletedAt = (table, id) => H.db.prepare(`SELECT deleted_at FROM ${table} WHERE id = ?`).get(id).deleted_at;
-const seedLoan = () => Number(H.db.prepare('INSERT INTO loans (amount_paise, bank_name, tenant_id) VALUES (?, ?, (SELECT MIN(id) FROM users))').run(500000, 'Bank').lastInsertRowid);
+const seedLoan = () => Number(H.db.prepare('INSERT INTO loans (amount_paise, bank_name) VALUES (?, ?)').run(500000, 'Bank').lastInsertRowid);
 
 test('five-table delete-and-restore cycle', async () => {
   const cases = [

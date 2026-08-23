@@ -35,10 +35,8 @@ init();
 const OWNER_STMT = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
 const getOwner = () => OWNER_STMT.get();
 
-// Tenancy Phase 3 — the tenant data-access layer. Required AFTER init() so it can prepare its
-// tenant-scoped statements against the migrated schema. Every read/write touching one of the eight
-// tenant tables goes through repo.*; the boot assertion (below, after the definitions it needs) is
-// the backstop that fails boot on an unscoped statement.
+// The data-access layer. Required AFTER init() so it can prepare its statements against the
+// migrated schema. Every read/write touching one of the ledger tables goes through repo.*.
 const repo = require('./repo');
 
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
@@ -48,22 +46,18 @@ const repo = require('./repo');
 // back the Overview screen and every PDF export.
 // (Order matters — declaring these before init() would prepare against a pre-migration or
 // dropped table. Keep them here.)
-// Tenancy Phase 3 (Part B.6) — the budget read is now tenant-scoped (settings has a composite
-// (tenant_id, key) key). B can no longer read A's budget.
-const BUDGET_STMT = db.prepare("SELECT value FROM settings WHERE tenant_id = ? AND key = 'budget_paise'");
+const BUDGET_STMT = db.prepare("SELECT value FROM settings WHERE key = 'budget_paise'");
 // Phase 6C — computeOverview reads each ledger table BOTH cumulatively (a balance) and
 // range-scoped (a period figure), so the two are split into separate queries:
 //
-//  Tenancy Phase 3 — these eight statements MOVED into repo.overview.* (tenant-scoped). computeOverview
-//  now calls repo.overview.<x>(tenantId): cashoutCumulative, contracts, paidByContract, outsAll/outsRange,
-//  paymentsAll/paymentsRange, loansSum. The cumulative aggregates are still never range-filtered (the
-//  offset stays cumulative); the range forms still use the open sentinels + partial indexes.
+//  These eight statements live in repo.overview.*. computeOverview calls repo.overview.<x>():
+//  cashoutCumulative, contracts, paidByContract, outsAll/outsRange, paymentsAll/paymentsRange,
+//  loansSum. The cumulative aggregates are never range-filtered (the offset stays cumulative); the
+//  range forms use the open sentinels + partial indexes.
 // Phase 2: the user roster for the "By" attribution pickers (id + display name ONLY — never
-// username/hash), and an existence check for validating a chosen by_user_id.
-// Tenancy Phase 3 (Part B.7) — the "By" roster is scoped to the tenant. Under one-account-per-household
-// the tenant IS a user, so this is that one account (id = tenant). B can no longer enumerate A's users.
-// (users has no tenant_id — the tenant id IS the account id in the current model.)
-const USERS_ROSTER_STMT = db.prepare('SELECT id, display_name AS displayName FROM users WHERE id = ? ORDER BY id ASC');
+// username/hash), and an existence check for validating a chosen by_user_id. Single-user app: the
+// roster is just the one owner account.
+const USERS_ROSTER_STMT = db.prepare('SELECT id, display_name AS displayName FROM users ORDER BY id ASC');
 const USER_EXISTS_STMT = db.prepare('SELECT 1 FROM users WHERE id = ?');
 const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
 
@@ -109,7 +103,7 @@ app.get('/api/me', (req, res) => {
 // roster would be a user-enumeration vector on the login page. Returns ONLY id +
 // displayName, ordered by id — never username, password_hash, or created_at.
 app.get('/api/users', requireApiAuth, (req, res) => {
-  res.json({ users: USERS_ROSTER_STMT.all(req.user.id) });
+  res.json({ users: USERS_ROSTER_STMT.all() });
 });
 
 // Services phase (Part E) — the caller's saved custom LEDGER names, for the debit form's pick-list.
@@ -117,7 +111,7 @@ app.get('/api/users', requireApiAuth, (req, res) => {
 // one user's private category names are never visible to another. Names are auto-saved on first use
 // (see saveLedgerCustom / afterWrite on cash_out). The 23 built-ins stay in ledgers.js, not here.
 app.get('/api/ledger-customs', requireApiAuth, (req, res) => {
-  res.json({ customs: repo.ledgerCustoms.list(req.user.id) });
+  res.json({ customs: repo.ledgerCustoms.list() });
 });
 // Part 4 (Phase 11B): remove a saved custom LEDGER name from the caller's pick-list — the delete path
 // that was missing (a typo like "Cemnt" used to be stuck in the dropdown forever, and the Recycle Bin
@@ -127,8 +121,8 @@ app.get('/api/ledger-customs', requireApiAuth, (req, res) => {
 app.delete('/api/ledger-customs', requireApiAuth, (req, res) => {
   const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
   if (!name) return res.status(400).json({ error: 'Which name? Pass it as ?name=…' });
-  repo.ledgerCustoms.remove(req.user.id, name);
-  res.json({ ok: true, customs: repo.ledgerCustoms.list(req.user.id) });
+  repo.ledgerCustoms.remove(name);
+  res.json({ ok: true, customs: repo.ledgerCustoms.list() });
 });
 
 // ---------------------------------------------------------------------------
@@ -137,8 +131,9 @@ app.delete('/api/ledger-customs', requireApiAuth, (req, res) => {
 // returns paise out. Parameterized queries only; soft-delete (never hard).
 // ---------------------------------------------------------------------------
 
-// Single-user offline app: no auth check. Sets req.user to the fixed local owner so every
-// downstream req.user.id call site (repo.js's tenant argument) keeps working unchanged.
+// Single-user offline app: no auth check. Sets req.user to the fixed local owner (kept for any
+// future per-request use; repo.js calls no longer take a tenant argument, so nothing currently
+// reads req.user outside this assignment).
 function requireApiAuth(req, res, next) {
   req.user = getOwner();
   next();
@@ -153,9 +148,7 @@ function requireApiAuth(req, res, next) {
 const LEDGER_CRUDS = {}; // table -> its repo.crud runners (populated as each resource registers below)
 function makeLedgerCrud(opts) {
   const { basePath, table, select, listWhere, byIdWhere, shape, columns, validate, listKey, itemKey, notFoundMsg, invalidIdMsg, editGate, auditField, finalize, afterWrite, alias } = opts;
-  // Tenancy Phase 3 — ALL SQL for this resource is built + tenant-scoped by repo.crud. Handlers never
-  // touch the raw table; they pass req.user.id (the tenant) as the first argument. A row belonging to
-  // another tenant simply isn't found — reads return nothing, mutations report 404 (never 403).
+  // ALL SQL for this resource is built by repo.crud. Handlers never touch the raw table.
   //  · finalize(values, { req, id, existing }) — after validate, before the write; may MUTATE values
   //    and/or return { error, status } to reject (e.g. the one-service-one-offset 409 guard).
   //  · afterWrite(values, { req, id }) — after a successful create/edit (e.g. save a custom name).
@@ -167,46 +160,45 @@ function makeLedgerCrud(opts) {
 
   app.get(basePath, requireApiAuth, (req, res) => {
     // Part A — when a resource opts into search (cash_out), any of ?q/start/end/min/max/ledger/subledger
-    // filters the list IN SQL (tenant-scoped in repo). Absent params → unchanged "all live rows" behaviour,
-    // so every other resource and the no-filter fetch are untouched. `total` is the unfiltered live count
-    // (for "N of M" + the add-form's next Sl.No, which must not shrink when a filter hides rows).
+    // filters the list IN SQL. Absent params → unchanged "all live rows" behaviour, so every other
+    // resource and the no-filter fetch are untouched. `total` is the unfiltered live count (for
+    // "N of M" + the add-form's next Sl.No, which must not shrink when a filter hides rows).
     if (opts.searchCols) {
       const f = parseLedgerFilters(req);
       if (f.error) return res.status(400).json({ error: f.error });
-      return res.json({ [listKey]: rc.search(req.user.id, f.filters).map(shape), total: rc.liveCount(req.user.id), filtered: f.active });
+      return res.json({ [listKey]: rc.search(f.filters).map(shape), total: rc.liveCount(), filtered: f.active });
     }
-    res.json({ [listKey]: rc.list(req.user.id).map(shape) });
+    res.json({ [listKey]: rc.list().map(shape) });
   });
 
   app.post(basePath, requireApiAuth, (req, res) => {
     const v = validate(req);
     if (v.error) return res.status(400).json({ error: v.error });
     if (finalize) { const f = finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-    const info = rc.insert(req.user.id, orderedVals(v.values));
+    const info = rc.insert(orderedVals(v.values));
     if (afterWrite) afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
-    res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(req.user.id, info.lastInsertRowid)) });
+    res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(info.lastInsertRowid)) });
   });
 
   app.put(`${basePath}/:id`, ...byIdChain, (req, res) => {
     const id = Number(req.params.id);
-    // existsLive is tenant-scoped: another tenant's row (or a stranger's id) is NOT found -> 404.
-    if (!Number.isInteger(id) || !rc.existsLive(req.user.id, id)) return res.status(404).json({ error: notFoundMsg });
-    // Fetch the existing (tenant-scoped) row for the audit old-value + finalize's `existing`.
-    const existing = (finalize || afterWrite || auditField) ? rc.fullRow(req.user.id, id) : null;
+    if (!Number.isInteger(id) || !rc.existsLive(id)) return res.status(404).json({ error: notFoundMsg });
+    // Fetch the existing row for the audit old-value + finalize's `existing`.
+    const existing = (finalize || afterWrite || auditField) ? rc.fullRow(id) : null;
     const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
     const v = validate(req, oldVal);
     if (v.error) return res.status(400).json({ error: v.error });
     if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
     if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
-    rc.update(req.user.id, id, orderedVals(v.values));
+    rc.update(id, orderedVals(v.values));
     if (afterWrite) afterWrite(v.values, { req, id });
-    res.json({ ok: true, [itemKey]: shape(rc.getById(req.user.id, id)) });
+    res.json({ ok: true, [itemKey]: shape(rc.getById(id)) });
   });
 
   app.delete(`${basePath}/:id`, ...byIdChain, (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: invalidIdMsg });
-    const info = rc.softDelete(req.user.id, id); // scoped: nothing changes for another tenant's id -> 404
+    const info = rc.softDelete(id);
     if (info.changes === 0) return res.status(404).json({ error: notFoundMsg });
     res.json({ ok: true });
   });
@@ -222,17 +214,15 @@ function makeLedgerCrud(opts) {
       const rows = req.body && Array.isArray(req.body.rows) ? req.body.rows : null;
       if (!rows) return res.status(400).json({ error: 'Expected a { rows: [...] } array.' });
       if (rows.length > BATCH_MAX_ROWS) return res.status(413).json({ error: `Too many rows in one save (${rows.length}); the maximum is ${BATCH_MAX_ROWS}. Save in smaller batches.` });
-      const t = req.user.id;
 
-      // 1) VALIDATE every row before any write. Not-found (or another tenant's id) / invalid rows are
-      // recorded, not written — existsLive / fullRow are tenant-scoped, so a stranger's row is "not found".
+      // 1) VALIDATE every row before any write. Not-found / invalid rows are recorded, not written.
       const results = new Array(rows.length);
       const toWrite = []; // { i, id, values, oldVal } for the rows that passed
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const id = Number(row && row.id);
-        if (!Number.isInteger(id) || !rc.existsLive(t, id)) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
-        const existing = (finalize || auditField) ? rc.fullRow(t, id) : null;
+        if (!Number.isInteger(id) || !rc.existsLive(id)) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
+        const existing = (finalize || auditField) ? rc.fullRow(id) : null;
         const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
         const v = validate({ body: row }, oldVal);
         if (v.error) { results[i] = { id, ok: false, error: v.error }; continue; }
@@ -240,10 +230,10 @@ function makeLedgerCrud(opts) {
         toWrite.push({ i, id, values: v.values, oldVal });
       }
 
-      // 2) WRITE only the valid rows, in one transaction (each update tenant-scoped).
+      // 2) WRITE only the valid rows, in one transaction.
       db.exec('BEGIN');
       try {
-        for (const w of toWrite) rc.update(t, w.id, orderedVals(w.values));
+        for (const w of toWrite) rc.update(w.id, orderedVals(w.values));
         db.exec('COMMIT');
       } catch (e) {
         db.exec('ROLLBACK');
@@ -255,7 +245,7 @@ function makeLedgerCrud(opts) {
       for (const w of toWrite) {
         if (auditField && w.oldVal !== w.values[auditField]) console.warn(`[audit] ${table} id=${w.id}: ${auditField} ${w.oldVal} -> ${w.values[auditField]} (attribution changed on edit)`);
         if (afterWrite) afterWrite(w.values, { req, id: w.id });
-        results[w.i] = { id: w.id, ok: true, [itemKey]: shape(rc.getById(t, w.id)) };
+        results[w.i] = { id: w.id, ok: true, [itemKey]: shape(rc.getById(w.id)) };
       }
       res.json({ results, saved: toWrite.length, failed: rows.length - toWrite.length });
     });
@@ -331,7 +321,7 @@ makeLedgerCrud({
   basePath: '/api/cash-in',
   auditField: 'by_user_id', // Phase 2: log who-paid changes on edit
   table: 'cash_in',
-  alias: 'c', // the table alias used in CASH_IN_SELECT — repo.crud scopes on c.tenant_id
+  alias: 'c', // the table alias used in CASH_IN_SELECT
   select: CASH_IN_SELECT,
   listWhere: 'WHERE c.deleted_at IS NULL ORDER BY c.id ASC',
   byIdWhere: 'WHERE c.id = ?',
@@ -400,7 +390,7 @@ function readLoanBody(body) {
 makeLedgerCrud({
   basePath: '/api/loans',
   table: 'loans',
-  alias: '', // LOANS_SELECT has no table alias — repo.crud scopes on tenant_id
+  alias: '', // LOANS_SELECT has no table alias
   select: LOANS_SELECT,
   listWhere: 'WHERE deleted_at IS NULL ORDER BY id ASC',
   byIdWhere: 'WHERE id = ?',
@@ -542,9 +532,9 @@ function cashOutRow(r) {
 // Services phase (Part E) — remember a typed custom LEDGER name in the caller's per-user list, so it is
 // selectable next time. INSERT OR IGNORE keys on idx_ledger_customs_tenant_name (no duplicates). Called
 // via afterWrite only when the row actually uses a custom ledger; a built-in ledger saves nothing.
-const saveLedgerCustom = (tenantId, values) => {
+const saveLedgerCustom = (values) => {
   if (values.ledger_code === CUSTOM_CODE && values.ledger_custom_name && values.ledger_custom_name.trim()) {
-    repo.ledgerCustoms.save(tenantId, values.ledger_custom_name.trim());
+    repo.ledgerCustoms.save(values.ledger_custom_name.trim());
   }
 };
 
@@ -553,11 +543,8 @@ const saveLedgerCustom = (tenantId, values) => {
 // may source at most one LIVE debit, so a single substitution can never offset the contractor's dues
 // twice. (The partial-unique index idx_cash_out_service_live is the DB backstop; this gives the clean,
 // naming 409.)
-// Tenancy Phase 3 — the service resolution + one-offset guard are tenant-scoped via repo, so a debit
-// can only ever link a service in ITS OWN household, and the "already claimed" check only sees this
-// tenant's live debits. finalize runs with ctx.req present (single POST/PUT + the batch loop pass req).
-function cashOutServiceFinalize(values, { req, existing }) {
-  const t = req.user.id;
+// finalize runs with ctx.req present (single POST/PUT + the batch loop pass req).
+function cashOutServiceFinalize(values, { existing }) {
   // Only an 'included' debit may carry a service link; 'extra' forces NULL (mirrors contract_stated_paise
   // so a stale link can't keep counting if the scope flips back).
   if (values.contract_scope !== 'included') { values.contract_service_id = null; return; }
@@ -566,10 +553,10 @@ function cashOutServiceFinalize(values, { req, existing }) {
   let sid = values.contract_service_id;
   if (sid === undefined) sid = existing ? existing.contract_service_id : null;
   if (sid == null) { values.contract_service_id = null; return; }
-  const svc = repo.contract.serviceLivePriced(t, sid);
+  const svc = repo.contract.serviceLivePriced(sid);
   if (!svc) return { status: 400, error: 'That contract service was not found — pick a listed service, or type the amount directly.' };
   if (svc.price_paise == null) return { status: 400, error: 'That service has no price set, so it cannot be linked — add a price to it, or type the amount directly.' };
-  const other = repo.contract.serviceClaimedByOther(t, sid, existing ? existing.id : -1);
+  const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
   if (other) {
     return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can offset only one debit — unlink it there first, or pick another service.` };
   }
@@ -578,11 +565,11 @@ function cashOutServiceFinalize(values, { req, existing }) {
 
 makeLedgerCrud({
   basePath: '/api/cash-out',
-  alias: 'c', // the table alias used in CASH_OUT_SELECT — repo.crud scopes on c.tenant_id
+  alias: 'c', // the table alias used in CASH_OUT_SELECT
   batch: true, // Phase 6B: POST /api/cash-out/batch — Save All in one round trip (both pages)
   auditField: 'by_user_id', // Phase 2: log who-paid changes on edit
   finalize: cashOutServiceFinalize,                    // Services phase (Part C/D): service link + guard
-  afterWrite: (values, { req }) => saveLedgerCustom(req.user.id, values), // Part E: remember a custom ledger name
+  afterWrite: (values) => saveLedgerCustom(values), // Part E: remember a custom ledger name
   table: 'cash_out',
   select: CASH_OUT_SELECT,
   listWhere: 'WHERE c.deleted_at IS NULL ORDER BY c.id ASC',
@@ -732,9 +719,7 @@ const serviceRow = (s) => ({ id: s.id, name: s.name, pricePaise: s.price_paise }
 // wording, never a bare minus, mirroring Phase 4's overpaid figure. Services never drive dues:
 // price_of_contract_paise stays the single source of truth for owed.
 const contractRow = (r) => {
-  // Child fetches are scoped by the parent row's OWN tenant (r.tenant_id) — contractRow is only ever
-  // handed a row already fetched via a tenant-scoped query (list/getLive/trash), so this stays isolated.
-  const services = repo.contract.servicesFor(r.tenant_id, r.id);
+  const services = repo.contract.servicesFor(r.id);
   const servicesPricedTotalPaise = services.reduce((sum, s) => sum + (s.price_paise || 0), 0);
   return {
     id: r.id,
@@ -750,7 +735,7 @@ const contractRow = (r) => {
     statedAmountPaise: r.price_of_contract_paise, // REQUIRED stated amount (single source of truth for owed)
     dateSigned: r.date_signed || '',
     dateEnds: r.contract_end_date || '',
-    paymentDates: repo.contract.payDatesFor(r.tenant_id, r.id),
+    paymentDates: repo.contract.payDatesFor(r.id),
     services: services.map(serviceRow),           // Part A: live line-item services
     servicesPricedTotalPaise,                     // Σ of PRICED services (informational)
     remainderPaise: (r.price_of_contract_paise || 0) - servicesPricedTotalPaise, // Part B: SIGNED remainder
@@ -759,7 +744,7 @@ const contractRow = (r) => {
   };
 };
 
-const getContractRow = (tenantId, id) => repo.contract.getLive(tenantId, id);
+const getContractRow = (id) => repo.contract.getLive(id);
 
 // Columns written on contract create/update (id/timestamps/deleted_at excluded).
 const CONTRACT_COLS = ['contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company'];
@@ -818,8 +803,8 @@ function readContractBody(req) {
   };
 }
 
-// Replace a contract's scheduled payment-date children with a fresh list (tenant-scoped via repo).
-const writePaymentDates = (tenantId, contractId, dates) => repo.contract.writePayDates(tenantId, contractId, dates);
+// Replace a contract's scheduled payment-date children with a fresh list.
+const writePaymentDates = (contractId, dates) => repo.contract.writePayDates(contractId, dates);
 
 // Contracts CRUD. Phase 5D: AT MOST ONE live contract (enforced by the idx_contract_single_live
 // partial unique index). The path + the { contracts: [...] } response shape are UNCHANGED so the
@@ -827,31 +812,30 @@ const writePaymentDates = (tenantId, contractId, dates) => repo.contract.writePa
 // called once per returned row (contractRow); with the invariant that N+1 is now bounded at one
 // contract, so it needs no batching/restructuring.
 app.get('/api/contracts', requireApiAuth, (req, res) => {
-  res.json({ contracts: repo.contract.list(req.user.id).map(contractRow) });
+  res.json({ contracts: repo.contract.list().map(contractRow) });
 });
 
 app.post('/api/contracts', requireApiAuth, (req, res) => {
   const v = readContractBody(req);
   if (v.error) return res.status(400).json({ error: v.error });
-  // Tenancy Phase 3 (Part B.3) — the single-contract guard is now PER-TENANT: it only blocks a SECOND
-  // contract in THE CALLER'S household. A second tenant creating their first contract is a clean 201,
-  // not the old "a contract already exists" existence leak. (idx_contract_single_live_tenant backstops it.)
-  if (repo.contract.liveCount(req.user.id) > 0) {
+  // Phase 5D: the single-contract guard — a second contract is a clean 409, never a silent overwrite.
+  // (idx_contract_single_live backstops it in the database.)
+  if (repo.contract.liveCount() > 0) {
     return res.status(409).json({ error: 'A contract already exists — Plannr tracks a single contract. Edit the existing one instead of adding another (or delete it first).' });
   }
-  const info = repo.contract.insert(req.user.id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
-  writePaymentDates(req.user.id, info.lastInsertRowid, v.paymentDates);
-  res.status(201).json({ ok: true, contract: contractRow(getContractRow(req.user.id, info.lastInsertRowid)) });
+  const info = repo.contract.insert(CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
+  writePaymentDates(info.lastInsertRowid, v.paymentDates);
+  res.status(201).json({ ok: true, contract: contractRow(getContractRow(info.lastInsertRowid)) });
 });
 
 app.put('/api/contracts/:id', requireApiAuth, (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id) || !getContractRow(req.user.id, id)) return res.status(404).json({ error: 'Contract not found.' });
+  if (!Number.isInteger(id) || !getContractRow(id)) return res.status(404).json({ error: 'Contract not found.' });
   const v = readContractBody(req);
   if (v.error) return res.status(400).json({ error: v.error });
-  repo.contract.update(req.user.id, id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
-  writePaymentDates(req.user.id, id, v.paymentDates);
-  res.json({ ok: true, contract: contractRow(getContractRow(req.user.id, id)) });
+  repo.contract.update(id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
+  writePaymentDates(id, v.paymentDates);
+  res.json({ ok: true, contract: contractRow(getContractRow(id)) });
 });
 
 // ---------------------------------------------------------------------------
@@ -861,8 +845,8 @@ app.put('/api/contracts/:id', requireApiAuth, (req, res) => {
 // it is NOT a second offset mechanism and never enters the dues maths itself.
 // ---------------------------------------------------------------------------
 const SERVICE_NAME_MAX = 120;
-const getServiceRow = (tenantId, id) => repo.contract.serviceLive(tenantId, id);
-const getLiveServiceForContract = (tenantId, cid, sid) => repo.contract.serviceForContract(tenantId, cid, sid);
+const getServiceRow = (id) => repo.contract.serviceLive(id);
+const getLiveServiceForContract = (cid, sid) => repo.contract.serviceForContract(cid, sid);
 
 function readServiceBody(req) {
   const name = str(req.body.name).slice(0, SERVICE_NAME_MAX);
@@ -874,28 +858,28 @@ function readServiceBody(req) {
 
 app.post('/api/contracts/:id/services', requireApiAuth, (req, res) => {
   const cid = Number(req.params.id);
-  if (!Number.isInteger(cid) || !getContractRow(req.user.id, cid)) return res.status(404).json({ error: 'Contract not found.' });
+  if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
   const v = readServiceBody(req);
   if (v.error) return res.status(400).json({ error: v.error });
-  const info = repo.contract.insertService(req.user.id, cid, v.values.name, v.values.price_paise);
-  res.status(201).json({ ok: true, service: serviceRow(getServiceRow(req.user.id, info.lastInsertRowid)) });
+  const info = repo.contract.insertService(cid, v.values.name, v.values.price_paise);
+  res.status(201).json({ ok: true, service: serviceRow(getServiceRow(info.lastInsertRowid)) });
 });
 
 app.put('/api/contracts/:id/services/:sid', requireApiAuth, (req, res) => {
   const cid = Number(req.params.id), sid = Number(req.params.sid);
-  if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(req.user.id, cid, sid)) return res.status(404).json({ error: 'Service not found.' });
+  if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
   const v = readServiceBody(req);
   if (v.error) return res.status(400).json({ error: v.error });
-  repo.contract.updateService(req.user.id, sid, v.values.name, v.values.price_paise);
-  res.json({ ok: true, service: serviceRow(getServiceRow(req.user.id, sid)) });
+  repo.contract.updateService(sid, v.values.name, v.values.price_paise);
+  res.json({ ok: true, service: serviceRow(getServiceRow(sid)) });
 });
 
 app.delete('/api/contracts/:id/services/:sid', requireApiAuth, (req, res) => {
   const cid = Number(req.params.id), sid = Number(req.params.sid);
-  if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(req.user.id, cid, sid)) return res.status(404).json({ error: 'Service not found.' });
+  if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
   // Soft-delete. A LIVE debit may still reference this now-deleted service (keeps its offset + the
   // provenance link); it simply stops being offered by the picker. No block — services are informational.
-  repo.contract.softDeleteService(req.user.id, sid);
+  repo.contract.softDeleteService(sid);
   res.json({ ok: true });
 });
 
@@ -904,15 +888,15 @@ app.delete('/api/contracts/:id/services/:sid', requireApiAuth, (req, res) => {
 app.delete('/api/contracts/:id', requireApiAuth, (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid contract id.' });
-  // Guard (Phase 4D): refuse while any LIVE contractor payment (in this tenant) references this contract.
-  // Otherwise A/F (which iterate live contracts) drop the contract while B/D/pie (which iterate
-  // live payments) keep its ₹ — you end up having paid toward a contract totalling ₹0, and the
-  // Overview stops reconciling. Same shape as the two Recycle-Bin guards and /api/delete-account.
-  const live = repo.contract.livePaymentsFor(req.user.id, id);
+  // Guard (Phase 4D): refuse while any LIVE contractor payment references this contract. Otherwise
+  // A/F (which iterate live contracts) drop the contract while B/D/pie (which iterate live payments)
+  // keep its ₹ — you end up having paid toward a contract totalling ₹0, and the Overview stops
+  // reconciling. Same shape as the two Recycle-Bin guards and /api/delete-account.
+  const live = repo.contract.livePaymentsFor(id);
   if (live > 0) {
     return res.status(409).json({ error: `This contract has ${live} live contractor payment${live === 1 ? '' : 's'} recorded against it. Deleting it would leave ${live === 1 ? 'that payment' : 'those payments'} attributed to a contract that is gone (and unbalance the Overview), so it's blocked — delete or reassign ${live === 1 ? 'that payment' : 'those payments'} first, then delete the contract.` });
   }
-  const info = repo.contract.softDelete(req.user.id, id); // tenant-scoped -> another tenant's id -> 404
+  const info = repo.contract.softDelete(id);
   if (info.changes === 0) return res.status(404).json({ error: 'Contract not found.' });
   res.json({ ok: true });
 });
@@ -958,7 +942,7 @@ const paymentRow = (r) => ({
 
 makeLedgerCrud({
   basePath: '/api/contractor-payments',
-  alias: 'cp', // the table alias used in CONTRACTOR_PAYMENTS_SELECT — repo.crud scopes on cp.tenant_id
+  alias: 'cp', // the table alias used in CONTRACTOR_PAYMENTS_SELECT
   table: 'contractor_payments',
   select: CONTRACTOR_PAYMENTS_SELECT,
   listWhere: 'WHERE cp.deleted_at IS NULL ORDER BY cp.id ASC',
@@ -966,10 +950,9 @@ makeLedgerCrud({
   shape: paymentRow,
   columns: ['contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'remarks'],
   validate: (req) => {
-    // Contract required + must be a live contract IN THE CALLER'S tenant (repo scopes the check, so a
-    // payment can never be pinned to another household's contract). No batch route here, so req.user exists.
+    // Contract required + must be a live contract.
     const contractId = Number(req.body.contractId);
-    if (!Number.isInteger(contractId) || !repo.contract.existsLive(req.user.id, contractId)) {
+    if (!Number.isInteger(contractId) || !repo.contract.existsLive(contractId)) {
       return { error: 'Select a valid contract.' };
     }
     // Date of payment required (ISO). Amount required (> 0, integer paise).
@@ -1005,9 +988,7 @@ makeLedgerCrud({
 // ---------------------------------------------------------------------------
 const TRASH_TABLES = ['cash_in', 'cash_out', 'loans', 'contract', 'contractor_payments']; // the ONLY allowed :table values
 const TRASH_SHAPERS = { cash_in: cashInRow, cash_out: cashOutRow, loans: loanRow, contract: contractRow, contractor_payments: paymentRow };
-// Tenancy Phase 3 (Part B.4) — the Recycle Bin routes through repo.trash, tenant-scoped. list/find/
-// restore/hard-delete all take req.user.id first, so a CROSS-TENANT id is simply "not found" (404,
-// never 403 — a 403 would confirm the row exists) and a cross-tenant restore/hard-delete changes 0 rows.
+// The Recycle Bin routes through repo.trash.
 const TRASH_REPO = {
   cash_in:  repo.trash({ table: 'cash_in', select: CASH_IN_SELECT, alias: 'c' }),
   cash_out: repo.trash({ table: 'cash_out', select: CASH_OUT_SELECT, alias: 'c' }),
@@ -1016,12 +997,12 @@ const TRASH_REPO = {
   contractor_payments: repo.trash({ table: 'contractor_payments', select: CONTRACTOR_PAYMENTS_SELECT, alias: 'cp' }),
 };
 
-// GET /api/trash — soft-deleted rows for all five tables (THIS tenant's), each shaped like the live
-// list plus deletedAt, newest-deleted first.
+// GET /api/trash — soft-deleted rows for all five tables, each shaped like the live list plus
+// deletedAt, newest-deleted first.
 app.get('/api/trash', requireApiAuth, (req, res) => {
   const trash = {};
   for (const t of TRASH_TABLES) {
-    trash[t] = TRASH_REPO[t].listDeleted(req.user.id).map((r) => ({ ...TRASH_SHAPERS[t](r), deletedAt: r.deleted_at }));
+    trash[t] = TRASH_REPO[t].listDeleted().map((r) => ({ ...TRASH_SHAPERS[t](r), deletedAt: r.deleted_at }));
   }
   res.json({ trash });
 });
@@ -1034,21 +1015,21 @@ app.post('/api/trash/:table/:id/restore', requireApiAuth, (req, res) => {
   const table = trashTable(req);
   if (!table) return res.status(400).json({ error: 'Unknown table.' });
   const id = Number(req.params.id);
-  if (!Number.isInteger(id) || !TRASH_REPO[table].find(req.user.id, id)) return res.status(404).json({ error: 'That deleted item was not found.' });
+  if (!Number.isInteger(id) || !TRASH_REPO[table].find(id)) return res.status(404).json({ error: 'That deleted item was not found.' });
   // Guard: a contractor payment must not go live under a still-deleted contract — otherwise a
   // live payment sits under a deleted contract, inflating Overview spend while the contract's
-  // value stays out of the totals. Require the contract to be restored first. (Tenant-scoped.)
+  // value stays out of the totals. Require the contract to be restored first.
   if (table === 'contractor_payments') {
-    const row = repo.contract.paymentContractId(req.user.id, id);
-    const parent = repo.contract.deletedAt(req.user.id, row.contract_id);
+    const row = repo.contract.paymentContractId(id);
+    const parent = repo.contract.deletedAt(row.contract_id);
     if (!parent || parent.deleted_at !== null) {
       return res.status(409).json({ error: 'Restore the parent contract first — this payment belongs to a contract that is still in the Recycle Bin.' });
     }
   }
-  // Phase 5H — the single-live-contract invariant (idx_contract_single_live_tenant) is PER-TENANT.
-  // Guard explicitly (per tenant): refuse restoring a contract while another is already live in THIS
-  // household. Message style matches the two guards above and /api/delete-account.
-  if (table === 'contract' && repo.contract.liveCount(req.user.id) > 0) {
+  // Phase 5H — the single-live-contract invariant (idx_contract_single_live). Guard explicitly:
+  // refuse restoring a contract while another is already live. Message style matches the two
+  // guards above and /api/delete-account.
+  if (table === 'contract' && repo.contract.liveCount() > 0) {
     return res.status(409).json({ error: 'Another contract is already live — Plannr tracks a single contract. Delete the current one before restoring this from the Recycle Bin.' });
   }
   // Services phase (Part D) — a soft-deleted debit RELEASED its service (the partial-unique index only
@@ -1056,15 +1037,15 @@ app.post('/api/trash/:table/:id/restore', requireApiAuth, (req, res) => {
   // make two live debits offset a single substitution — the DB index would raise a raw 500. Guard
   // explicitly with the same 409 shape: refuse, naming the claimant.
   if (table === 'cash_out') {
-    const row = repo.contract.cashOutServiceId(req.user.id, id); // tenant-scoped
+    const row = repo.contract.cashOutServiceId(id);
     if (row && row.contract_service_id != null) {
-      const other = repo.contract.serviceClaimedByOther(req.user.id, row.contract_service_id, id);
+      const other = repo.contract.serviceClaimedByOther(row.contract_service_id, id);
       if (other) {
         return res.status(409).json({ error: `Can’t restore — its contract service is now linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can offset only one debit. Unlink it there first, then restore.` });
       }
     }
   }
-  TRASH_REPO[table].restore(req.user.id, id);
+  TRASH_REPO[table].restore(id);
   res.json({ ok: true });
 });
 
@@ -1073,18 +1054,18 @@ app.delete('/api/trash/:table/:id', requireApiAuth, (req, res) => {
   const table = trashTable(req);
   if (!table) return res.status(400).json({ error: 'Unknown table.' });
   const id = Number(req.params.id);
-  if (!Number.isInteger(id) || !TRASH_REPO[table].find(req.user.id, id)) return res.status(404).json({ error: 'That deleted item was not found.' });
+  if (!Number.isInteger(id) || !TRASH_REPO[table].find(id)) return res.status(404).json({ error: 'That deleted item was not found.' });
   // Guard: contractor_payments.contract_id references contract(id) with NO ACTION (unlike
   // contract_payment_dates / contract_services, which CASCADE). Hard-deleting a contract that
   // any payment — live OR soft-deleted — still references would orphan/violate the FK, so
-  // refuse and say so (modelled on the /api/delete-account guard). (Tenant-scoped count.)
+  // refuse and say so (modelled on the /api/delete-account guard).
   if (table === 'contract') {
-    const n = repo.contract.paymentsForAny(req.user.id, id);
+    const n = repo.contract.paymentsForAny(id);
     if (n > 0) {
       return res.status(409).json({ error: `This contract still has ${n} contractor payment${n === 1 ? '' : 's'} referencing it (live or in the Recycle Bin). Permanently deleting it would orphan ${n === 1 ? 'that payment' : 'those payments'} — delete or restore ${n === 1 ? 'it' : 'them'} first.` });
     }
   }
-  TRASH_REPO[table].hardDelete(req.user.id, id); // contract_payment_dates / contract_services children cascade
+  TRASH_REPO[table].hardDelete(id); // contract_payment_dates / contract_services children cascade
   res.json({ ok: true });
 });
 
@@ -1095,29 +1076,27 @@ app.delete('/api/trash/:table/:id', requireApiAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 
 // Optional overall budget, stored as one settings row. NULL = unset.
-function getBudgetPaise(tenantId) {
-  const r = BUDGET_STMT.get(tenantId);
+function getBudgetPaise() {
+  const r = BUDGET_STMT.get();
   if (!r || r.value == null || r.value === '') return null;
   const n = Number(r.value);
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 app.get('/api/budget', requireApiAuth, (req, res) => {
-  res.json({ budgetPaise: getBudgetPaise(req.user.id) });
+  res.json({ budgetPaise: getBudgetPaise() });
 });
 
 // Set (positive ₹) or clear (empty) the overall budget. Optional / non-blocking.
 app.put('/api/budget', requireApiAuth, (req, res) => {
   const raw = req.body.budgetRupees;
   if (raw === undefined || raw === null || String(raw).trim() === '') {
-    db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, 'budget_paise', NULL) ON CONFLICT(tenant_id, key) DO UPDATE SET value = NULL").run(req.user.id);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL").run();
     return res.json({ budgetPaise: null });
   }
   const paise = parsePaise(raw);
   if (paise === null) return res.status(400).json({ error: 'Enter a valid budget greater than 0 (up to 2 decimals).' });
-  // Tenancy Phase 2 — the budget is per-tenant: upsert on (tenant_id, key) so one household's budget is
-  // its own row and setting A's never touches B's. (Reads stay unfiltered in Phase 2 — see getBudgetPaise.)
-  db.prepare("INSERT INTO settings (tenant_id, key, value) VALUES (?, 'budget_paise', ?) ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value").run(req.user.id, String(paise));
+  db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(paise));
   res.json({ budgetPaise: paise });
 });
 
@@ -1136,7 +1115,7 @@ const CUSTOM_GROUP_NAME = 'Custom / Uncategorized';
 //   Every spend transaction counts in the ledger rollup regardless of who paid or of
 //   contract scope: cash_out AND contractor_payments both contribute; a contractor
 //   payment with no ledger tag rolls up under Custom / Uncategorized.
-function computeOverview(tenantId, range) {
+function computeOverview(range) {
   const start = (range && range.start) || null;
   const end = (range && range.end) || null;
   const bounded = !!(start || end);              // any bound set -> range mode (dateless rows drop out)
@@ -1145,12 +1124,12 @@ function computeOverview(tenantId, range) {
   // --- CUMULATIVE aggregates (Phase 6C) — computed in SQL, NO rows fetched, and NEVER range-scoped.
   // The reimbursement offset MUST stay cumulative: a date range must never zero it. NULL/0 stated is
   // excluded from the offset (SUM ignores NULL) and separately counted by the missing-offset check.
-  const cum = repo.overview.cashoutCumulative(tenantId);    // one scan of THIS tenant's 'included' debits
+  const cum = repo.overview.cashoutCumulative();            // one scan of 'included' debits
   const includedOffset = cum.offset;                        // Σ contract_stated_paise ('included', >0)
   const missingOffset = { count: cum.missCount, amountPaise: cum.missSum }; // 'included' with NULL/0 offset
 
   // Live contract (single, Phase 5D). area_of_work + headline ledger label the owed row.
-  const contractRows = repo.overview.contracts(tenantId);
+  const contractRows = repo.overview.contracts();
   const liveContractIds = new Set(contractRows.map((c) => c.id));
 
   // paid grouped by contract_id (cumulative) — ONE aggregate feeds three things: the owed balance
@@ -1159,7 +1138,7 @@ function computeOverview(tenantId, range) {
   const paidByContract = new Map();
   let cumulativePaid = 0;
   const orphan = { count: 0, amountPaise: 0, contractIds: [] };
-  for (const g of repo.overview.paidByContract(tenantId)) {
+  for (const g of repo.overview.paidByContract()) {
     paidByContract.set(g.contract_id, g.s);
     cumulativePaid += g.s;
     if (!liveContractIds.has(g.contract_id)) { orphan.count += g.c; orphan.amountPaise += g.s; orphan.contractIds.push(g.contract_id); }
@@ -1224,8 +1203,8 @@ function computeOverview(tenantId, range) {
 
   // Phase 6C — RANGE-SCOPED row fetches: the range is pushed into SQL (partial index on tx_date/
   // pay_date), so only the in-range rows are transferred. These feed C, B and the pie ONLY.
-  const outs = bounded ? repo.overview.outsRange(tenantId, lo, hi) : repo.overview.outsAll(tenantId);
-  const payments = bounded ? repo.overview.paymentsRange(tenantId, lo, hi) : repo.overview.paymentsAll(tenantId);
+  const outs = bounded ? repo.overview.outsRange(lo, hi) : repo.overview.outsAll();
+  const payments = bounded ? repo.overview.paymentsRange(lo, hi) : repo.overview.paymentsAll();
   for (const r of outs) {
     spentBySelf += r.amount_paise; // C (range)
     rollup(r.by_type, r.ledger_code, r.subledger_code, r.subledger_custom_name, r.amount_paise);
@@ -1235,7 +1214,7 @@ function computeOverview(tenantId, range) {
     rollup('other', p.ledger_code || CUSTOM_CODE, p.subledger_code, p.subledger_custom_name, p.amount_paise);
   }
 
-  const loanReceived = repo.overview.loansSum(tenantId).s; // E (cumulative)
+  const loanReceived = repo.overview.loansSum().s; // E (cumulative)
   const totalSpent = paidToContractors + spentBySelf; // D = B + C (range)
 
   const ledgers = [...ledMap.values()]
@@ -1275,7 +1254,7 @@ function computeOverview(tenantId, range) {
   }
 
   return {
-    budgetPaise: getBudgetPaise(tenantId),
+    budgetPaise: getBudgetPaise(),
     ledgers,
     // Money model (A–F). A/E/F are cumulative; B/C/D reflect the selected date range.
     money: {
@@ -1287,7 +1266,7 @@ function computeOverview(tenantId, range) {
       owedToContractorsPaise: owedToContractors, // F = stated − Σ paid − Σ included offset (cumulative)
     },
     contracts, // per-contract: { id, contractorName, statedPaise, paidPaise, offsetPaise, owedPaise }
-    upcomingPayments: computeUpcomingPayments(tenantId), // Part C — scheduled dates forward + soft overdue
+    upcomingPayments: computeUpcomingPayments(), // Part C — scheduled dates forward + soft overdue
     // Phase 4D + 5E — reconciliation status (additive, backward-compatible; the frontend may
     // surface it later). ok=false means the summary doesn't self-reconcile. Every sub-object is a
     // flag over data reported AS-IS — nothing here adjusts a figure.
@@ -1311,13 +1290,13 @@ function daysBetweenIso(fromIso, toIso) {
   const [yb, mb, db2] = toIso.split('-').map(Number);
   return Math.round((Date.UTC(yb, mb - 1, db2) - Date.UTC(ya, ma - 1, da)) / 86400000);
 }
-function computeUpcomingPayments(tenantId) {
+function computeUpcomingPayments() {
   const today = istDateStamp();
   const out = [];
-  for (const c of repo.contract.list(tenantId)) { // one live contract per tenant, but loop is correct either way
-    for (const d of repo.contract.payDatesFor(tenantId, c.id)) {
+  for (const c of repo.contract.list()) { // one live contract, but the loop is correct either way
+    for (const d of repo.contract.payDatesFor(c.id)) {
       const daysRemaining = daysBetweenIso(today, d);
-      const paidOnDate = repo.contract.paymentOnDate(tenantId, c.id, d);
+      const paidOnDate = repo.contract.paymentOnDate(c.id, d);
       out.push({ date: d, daysRemaining, paidOnDate, possiblyOverdue: daysRemaining < 0 && !paidOnDate });
     }
   }
@@ -1332,7 +1311,7 @@ app.get('/api/overview', requireApiAuth, (req, res) => {
   const e = parseIsoDate(req.query.end);
   if (e.error) return res.status(400).json({ error: 'Invalid end date (YYYY-MM-DD).' });
   if (s.date && e.date && s.date > e.date) return res.status(400).json({ error: 'Start date must be on or before the end date.' });
-  res.json(computeOverview(req.user.id, { start: s.date, end: e.date }));
+  res.json(computeOverview({ start: s.date, end: e.date }));
 });
 
 // ---------------------------------------------------------------------------
@@ -1531,11 +1510,10 @@ function buildOverviewPdfHtml(part, o, rows, range, theme) {
 // Render the Overview PDF to a Buffer. The SINGLE source of PDF generation — used by
 // the HTTP export below. Defaults: full report, light theme. Throws on Playwright
 // failure (callers handle it).
-async function generateOverviewPdf({ tenantId, part = 'full', theme = 'light', range = { start: null, end: null } } = {}) {
-  if (tenantId == null) throw new Error('generateOverviewPdf requires a tenantId'); // every render is per-tenant
-  const o = computeOverview(tenantId, range);
+async function generateOverviewPdf({ part = 'full', theme = 'light', range = { start: null, end: null } } = {}) {
+  const o = computeOverview(range);
   const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
-  const rows = LEDGER_CRUDS.cash_out.list(tenantId).map(cashOutRow).filter((r) => inR(r.txDate)); // tenant-scoped
+  const rows = LEDGER_CRUDS.cash_out.list().map(cashOutRow).filter((r) => inR(r.txDate));
   const html = buildOverviewPdfHtml(part, o, rows, range, theme);
   _pdfInFlight++;                                    // hold off the idle-close for the whole render
   try {
@@ -1578,7 +1556,7 @@ app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
   const gotSlot = await acquirePdfSlot();
   if (!gotSlot) return res.status(503).json({ error: 'The server is busy generating other PDFs right now. Please try again in a moment.' });
   try {
-    const pdf = await generateOverviewPdf({ tenantId: req.user.id, part, theme, range: { start: s.date, end: e.date } });
+    const pdf = await generateOverviewPdf({ part, theme, range: { start: s.date, end: e.date } });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${istDateStamp()}.pdf"`); // Phase 10C — IST date, not UTC
     res.send(pdf);
@@ -1680,11 +1658,9 @@ const CONTACT_SETTINGS_KEYS = ['daily_report_recipients', 'daily_report_whatsapp
 // soft-deleted rows. Shared by /export (includeContacts from the opt-in) and the pre-import safety
 // snapshot (includeContacts:true — a LOCAL rollback file that never leaves the machine, so it MUST
 // keep the contacts or a rollback would lose them).
-function buildBackup(tenantId, { includeContacts = false } = {}) {
+function buildBackup({ includeContacts = false } = {}) {
   const tables = {};
-  // Tenancy Phase 3 (Part B.9) — export contains ONLY the caller's tenant (repo.backup.exportTable is
-  // scoped `WHERE tenant_id = ?`, settings included). B's export can never carry A's rows.
-  for (const t of BACKUP_TABLES) tables[t] = repo.backup.exportTable(tenantId, t);
+  for (const t of BACKUP_TABLES) tables[t] = repo.backup.exportTable(t);
   if (!includeContacts) tables.settings = tables.settings.filter((r) => !CONTACT_SETTINGS_KEYS.includes(r.key));
   return { app: 'plannr', kind: 'plannr-backup', schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), tables };
 }
@@ -1795,7 +1771,7 @@ app.get('/api/backup/export', requireApiAuth, (req, res) => {
   // Phase 8B — contacts (Gmail + WhatsApp numbers) are excluded unless the user opts in on the Data
   // page (?includeContacts=1). Default omits them so a shared/stored backup carries no personal data.
   const includeContacts = req.query.includeContacts === '1';
-  const backup = buildBackup(req.user.id, { includeContacts });
+  const backup = buildBackup({ includeContacts });
   res.setHeader('Content-Disposition', `attachment; filename="plannr-backup-${backup.exportedAt.slice(0, 10)}.json"`);
   res.json(backup);
 });
@@ -1814,7 +1790,7 @@ app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
   try {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const snapPath = path.join(path.dirname(DB_PATH), `auto-snapshot-before-import-${stamp}.json`);
-    fs.writeFileSync(snapPath, JSON.stringify(buildBackup(req.user.id, { includeContacts: true }), null, 2)); // local rollback file — keep contacts (this tenant only)
+    fs.writeFileSync(snapPath, JSON.stringify(buildBackup({ includeContacts: true }), null, 2)); // local rollback file — keeps contacts
     snapshot = path.relative(__dirname, snapPath).split(path.sep).join('/');
   } catch (e) {
     if (!IS_PROD) console.error('Backup snapshot failed:', e);
@@ -1831,27 +1807,22 @@ app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
 
   db.exec('BEGIN');
   try {
-    // Tenancy Phase 3 (Part B.9) — the teardown clears ONLY THE IMPORTING TENANT'S rows (repo.backup.
-    // deleteTenantRows is `DELETE FROM <t> WHERE tenant_id = ?`), CHILDREN-FIRST (IMPORT_OWNED_TABLES).
-    // Another household's data is NEVER touched — the old global `DELETE FROM <t>` would have wiped
-    // everyone. users/sessions/edit_locks are not owned. Settings is NOT cleared (absent keys keep the
-    // target's value); present keys are UPSERTed below.
-    for (const t of IMPORT_OWNED_TABLES) { if (t === 'settings') continue; if (existingTables.has(t)) repo.backup.deleteTenantRows(req.user.id, t); }
-    // NO global sqlite_sequence reset here (unlike the old global import). ids are shared across
-    // tenants, so resetting the counter would let a NEW row reuse another tenant's id. The importing
-    // tenant's own ids were just freed by the teardown above, so re-inserting them collides with no
-    // one; the AUTOINCREMENT high-water mark is left as SQLite maintains it (never reused).
+    // The teardown clears every import-owned table, CHILDREN-FIRST (IMPORT_OWNED_TABLES). users/
+    // sessions/edit_locks are not owned. Settings is NOT cleared (absent keys keep their current
+    // value); present keys are UPSERTed below.
+    for (const t of IMPORT_OWNED_TABLES) { if (t === 'settings') continue; if (existingTables.has(t)) repo.backup.deleteTenantRows(t); }
+    // No sqlite_sequence reset here. The rows were just freed by the teardown above, so re-inserting
+    // them collides with nothing; the AUTOINCREMENT high-water mark is left as SQLite maintains it
+    // (never reused).
 
     for (const t of BACKUP_TABLES) {
-      // Settings is UPSERTed (not cleared+inserted), owned by the importing tenant (composite key).
+      // Settings is UPSERTed (not cleared+inserted).
       if (t === 'settings') {
-        for (const r of (T.settings || [])) repo.backup.upsertSetting(req.user.id, r.key, r.value === undefined ? null : r.value);
+        for (const r of (T.settings || [])) repo.backup.upsertSetting(r.key, r.value === undefined ? null : r.value);
         continue;
       }
-      // Every non-settings BACKUP_TABLE is a tenant table. Stamp tenant_id = the importing user (the
-      // whole restored ledger is re-owned by that tenant), so a foreign/pre-tenancy backup imports
-      // cleanly. ids are preserved (FK integrity within the file); a colliding id -> the whole
-      // transaction rolls back, leaving every tenant byte-identical.
+      // ids are preserved (FK integrity within the file); a colliding id -> the whole transaction
+      // rolls back, leaving the existing data byte-identical.
       const cols = BACKUP_COLS[t];
       for (const r of (T[t] || [])) {
         const vals = cols.map((col) => {
@@ -1859,7 +1830,7 @@ app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
           if (col === 'by_user_id' && val != null && !userIds.has(val)) { val = null; remappedUsers++; }
           return val === undefined ? null : val;
         });
-        repo.backup.insertRow(req.user.id, t, cols, vals);
+        repo.backup.insertRow(t, cols, vals);
       }
     }
     db.exec('COMMIT');
@@ -2029,22 +2000,17 @@ app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: 
 app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview warm Playwright; teardown closes it
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?
 app._watchStopSentinel = watchStopSentinel; // Phase 11B: test that a sentinel file routes into the same stop callback as SIGINT
-// Phase 10G — the exact HTML page.pdf() rasterizes, for rendering the table to an image in tests.
-// Tenancy Phase 3 — REQUIRES tenantId: this is the authoritative composition path the isolation harness
-// byte-searches (the endpoint's compressed stream is a weaker check), so it must be tenant-scoped.
-app._overviewPdfHtml = ({ tenantId, part = 'full', theme = 'light', range = { start: null, end: null } } = {}) => {
-  if (tenantId == null) throw new Error('_overviewPdfHtml requires a tenantId');
-  const o = computeOverview(tenantId, range);
+// Phase 10G — the exact HTML page.pdf() rasterizes, for rendering the table to an image in tests
+// (the authoritative composition path; the endpoint's compressed stream is a weaker check).
+app._overviewPdfHtml = ({ part = 'full', theme = 'light', range = { start: null, end: null } } = {}) => {
+  const o = computeOverview(range);
   const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
-  const rows = LEDGER_CRUDS.cash_out.list(tenantId).map(cashOutRow).filter((r) => inR(r.txDate));
+  const rows = LEDGER_CRUDS.cash_out.list().map(cashOutRow).filter((r) => inR(r.txDate));
   return buildOverviewPdfHtml(part, o, rows, range, theme);
 };
-// Tenancy Phase 3 (Part A) — the enforcement backstop. Placed at the END of synchronous setup so
-// EVERY repo statement (incl. the makeLedgerCrud/trash factories and the column-dependent ones
-// pre-built by configure) is registered before the scan runs. Fails module load — every boot AND
-// every test import — if any repo statement touching a tenant table lacks a tenant_id predicate.
+// Pre-builds every column/table-dependent repo statement (the makeLedgerCrud/trash factories already
+// built theirs at route-registration time above).
 repo.configure({ contractCols: CONTRACT_COLS, backupTables: BACKUP_TABLES, backupCols: BACKUP_COLS });
-repo.assertTenantScoped();
 
 module.exports = app;
 

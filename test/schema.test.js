@@ -28,7 +28,7 @@ test('foreign_key_check is clean after a full seed-and-delete cycle', async () =
   const pid = H.seedPayment({ contractId: cid });
   H.seedCashOut({ byUserId: userId, contractScope: 'extra' });
   H.seedCashIn({ byUserId: userId });
-  H.db.prepare('INSERT INTO loans (amount_paise, bank_name, tenant_id) VALUES (?, ?, (SELECT MIN(id) FROM users))').run(500000, 'Bank');
+  H.db.prepare('INSERT INTO loans (amount_paise, bank_name) VALUES (?, ?)').run(500000, 'Bank');
   // soft-delete some, hard-delete others
   await H.del('/api/contractor-payments/' + pid, { cookie }); // soft
   H.db.prepare('DELETE FROM cash_in').run();                    // hard

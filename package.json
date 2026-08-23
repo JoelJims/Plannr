@@ -10,7 +10,6 @@
     "reset-db": "node reset-db.js --confirm",
     "seed:demo": "node seed-demo.js",
     "test": "node run-tests.js",
-    "test:isolation": "node test-isolation/run.js",
     "test:slow": "node --test --test-concurrency=1 \"test/slow/**/*.test.js\"",
     "test:ui": "node test-ui/run.js"
   },

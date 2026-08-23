@@ -90,12 +90,12 @@ test('Part D — two live debits cannot claim one service (API 409, naming the e
 
 test('Part D — the invariant is enforced in the DB (partial unique index), not just app code', () => {
   const cid = H.seedContract();
-  const sid = Number(H.db.prepare("INSERT INTO contract_services (contract_id, name, price_paise, tenant_id) VALUES (?, 'E', 4000000, ?)").run(cid, userId).lastInsertRowid);
-  const ins = (d) => H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, contract_scope, contract_stated_paise, contract_service_id, tenant_id) VALUES (100,?,'user','5.0','included',4000000,?,?)").run(d, sid, userId);
+  const sid = Number(H.db.prepare("INSERT INTO contract_services (contract_id, name, price_paise) VALUES (?, 'E', 4000000)").run(cid).lastInsertRowid);
+  const ins = (d) => H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, contract_scope, contract_stated_paise, contract_service_id) VALUES (100,?,'user','5.0','included',4000000,?)").run(d, sid);
   ins('2026-07-12');
   assert.throws(() => ins('2026-07-13'), /UNIQUE/, 'a second LIVE debit on the same service violates idx_cash_out_service_live');
   // A NULL link is unconstrained: many live debits may carry no service.
-  const nul = () => H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, contract_scope, tenant_id) VALUES (1,'2026-07-14','user','1.0','extra',?)").run(userId);
+  const nul = () => H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, contract_scope) VALUES (1,'2026-07-14','user','1.0','extra')").run();
   assert.doesNotThrow(nul); assert.doesNotThrow(nul);
 });
 
@@ -147,7 +147,7 @@ test('Part D — worked example still owed ₹20,000, cumulative under a debit-e
 
 test('Part E — existing free-text custom ledger names still display on their rows', async () => {
   // A pre-existing row written directly (as a migration/legacy row would be), custom ledger, no list entry.
-  const id = Number(H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, ledger_custom_name, contract_scope, tenant_id) VALUES (500, '2026-01-01', 'user', 'CUSTOM', 'Legacy custom cat', 'extra', ?)").run(userId).lastInsertRowid);
+  const id = Number(H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, ledger_custom_name, contract_scope) VALUES (500, '2026-01-01', 'user', 'CUSTOM', 'Legacy custom cat', 'extra')").run().lastInsertRowid);
   const rows = (await H.get('/api/cash-out', { cookie })).json.entries;
   const row = rows.find((e) => e.id === id);
   assert.ok(row, 'the legacy custom row is listed');
@@ -174,9 +174,8 @@ test('a pre-change backup (no contract_services, no company / contract_service_i
   };
   const r = await H.post('/api/backup/import', backup, { cookie });
   assert.strictEqual(r.status, 200, 'pre-change backup imports: ' + JSON.stringify(r.json));
-  // imported rows are stamped for the importer + carry NULL for the new columns
-  const co = H.db.prepare('SELECT contract_service_id, tenant_id FROM cash_out WHERE id=1').get();
+  // imported rows carry NULL for the new columns
+  const co = H.db.prepare('SELECT contract_service_id FROM cash_out WHERE id=1').get();
   assert.strictEqual(co.contract_service_id, null, 'no service link on a pre-change row');
-  assert.strictEqual(co.tenant_id, userId, 're-owned by the importer');
   assert.strictEqual(H.db.prepare('SELECT company FROM contract WHERE id=1').get().company, null, 'company defaults NULL');
 });

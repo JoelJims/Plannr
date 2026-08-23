@@ -84,37 +84,33 @@ function seedSession(userId) {
 // A logged-in user in one step: seed the user + a session, return { user, cookie }.
 function seedLoggedIn(opts) { const user = seedUser(opts); return { user, cookie: seedSession(user.id) }; }
 
-// Tenancy Phase 2 — every ledger table now has NOT NULL tenant_id. The seed helpers stamp it from
-// opts.tenantId, falling back to opts.byUserId (where present) and finally the first seeded user
-// (SELECT MIN(id) FROM users) — so the existing call sites (which seed a user first) need no change,
-// and the two-tenant tests pass tenantId explicitly.
+// Phase 2 dropped tenant_id from every ledger table — these seed helpers no longer stamp one.
 function seedContract(opts = {}) {
   const info = db.prepare(
-    `INSERT INTO contract (contractor_name, area_of_work, ledger_code, price_of_contract_paise, date_signed, deleted_at, tenant_id)
-     VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT MIN(id) FROM users)))`
+    `INSERT INTO contract (contractor_name, area_of_work, ledger_code, price_of_contract_paise, date_signed, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(opts.contractorName || 'ACME', opts.areaOfWork || 'Foundation', opts.ledgerCode || '5.0',
-    opts.pricePaise == null ? 10000000 : opts.pricePaise, opts.dateSigned || '2026-07-01', opts.deletedAt || null, opts.tenantId == null ? null : opts.tenantId);
+    opts.pricePaise == null ? 10000000 : opts.pricePaise, opts.dateSigned || '2026-07-01', opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 function seedPayment(opts = {}) {
-  const info = db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at, tenant_id) VALUES (?, ?, ?, ?, COALESCE(?, (SELECT tenant_id FROM contract WHERE id = ?), (SELECT MIN(id) FROM users)))')
-    .run(opts.contractId, opts.payDate || '2026-07-10', opts.amountPaise == null ? 4000000 : opts.amountPaise, opts.deletedAt || null, opts.tenantId == null ? null : opts.tenantId, opts.contractId);
+  const info = db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at) VALUES (?, ?, ?, ?)')
+    .run(opts.contractId, opts.payDate || '2026-07-10', opts.amountPaise == null ? 4000000 : opts.amountPaise, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 function seedCashOut(opts = {}) {
   const info = db.prepare(
-    `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, contract_scope, contract_stated_paise, deleted_at, tenant_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?, (SELECT MIN(id) FROM users)))`
+    `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, contract_scope, contract_stated_paise, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.txDate || '2026-07-12', opts.byType || 'user',
     opts.byUserId == null ? null : opts.byUserId, opts.byLabel || null, opts.ledgerCode || '1.0', opts.subledgerCode || null,
-    opts.contractScope || 'extra', opts.contractStatedPaise == null ? null : opts.contractStatedPaise, opts.deletedAt || null,
-    opts.tenantId == null ? null : opts.tenantId, opts.byUserId == null ? null : opts.byUserId);
+    opts.contractScope || 'extra', opts.contractStatedPaise == null ? null : opts.contractStatedPaise, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 function seedCashIn(opts = {}) {
-  const info = db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at, tenant_id) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, ?, (SELECT MIN(id) FROM users)))')
+  const info = db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.byType || 'user', opts.byUserId == null ? null : opts.byUserId,
-      opts.byLabel || null, opts.reason || null, opts.deletedAt || null, opts.tenantId == null ? null : opts.tenantId, opts.byUserId == null ? null : opts.byUserId);
+      opts.byLabel || null, opts.reason || null, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 

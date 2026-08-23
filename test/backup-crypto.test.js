@@ -24,8 +24,8 @@ let plainBuf; // a clean plaintext snapshot of a DB holding exactly the fixture
 before(() => {
   // Seed exactly 11 cash_out rows summing 78000000 paise (10×7,00,000 + 1×8,00,000).
   const user = H.seedUser();
-  for (let i = 0; i < 10; i++) H.seedCashOut({ amountPaise: 7000000, byUserId: user.id, tenantId: user.id });
-  H.seedCashOut({ amountPaise: 8000000, byUserId: user.id, tenantId: user.id });
+  for (let i = 0; i < 10; i++) H.seedCashOut({ amountPaise: 7000000, byUserId: user.id });
+  H.seedCashOut({ amountPaise: 8000000, byUserId: user.id });
   const fixture = H.db.prepare('SELECT COUNT(*) n, SUM(amount_paise) s FROM cash_out').get();
   assert.strictEqual(fixture.n, 11);
   assert.strictEqual(fixture.s, 78000000);
