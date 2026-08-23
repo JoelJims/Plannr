@@ -19,7 +19,6 @@
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "express": "^4.21.2",
-    "playwright": "^1.61.1",
-    "sql.js": "^1.14.2"
+    "playwright": "^1.61.1"
   }
 }
