@@ -314,9 +314,13 @@
     </main>
   </div>
 
-  <script src="/ledgers.js"></script>
+  <script type="module" src="/ledgers.js"></script>
   <script src="/plannr-ui.js"></script>
   <script>
+  // Phase 4c: ledgers.js is now a real ES module, so its script tag above is deferred — see the same
+  // note in overview.html. Wrapping this block in DOMContentLoaded restores the ordering this page
+  // already relied on: window.LEDGERS set before it's read below.
+  document.addEventListener('DOMContentLoaded', () => {
     const $ = (id) => document.getElementById(id);
     const msg = $('coMsg'), form = $('coForm'), amount = $('amount'), bySelect = $('bySelect'),
           dateDay = $('dateDay'), dateMonth = $('dateMonth'), dateYear = $('dateYear'),
@@ -525,6 +529,7 @@
     window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
     (async () => { await loadMe(); await loadEntries(); await loadServices(); await loadCustoms(); })();
+  });
   </script>
 </body>
 </html>

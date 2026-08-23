@@ -4,7 +4,7 @@
 // cash_out.ledger_code / subledger_code (e.g. "4.2") to a human-readable
 // category name. Single source of truth, usable by BOTH sides:
 //   • server:  const { LEDGERS } = require('./public/ledgers.js');
-//   • browser: <script src="/ledgers.js"></script>  ->  window.LEDGERS
+//   • browser: <script type="module" src="/ledgers.js"></script>  ->  window.LEDGERS
 //
 // NOTE: loan INTEREST is recorded under 20.0 (Taxes & Finance Charges) as an ordinary cash_out row —
 // sub-ledger 20.3 (Loan interest) — so real money paid on a construction loan is counted in total
@@ -14,8 +14,14 @@
 // billing). Interest is never part of a contract, so it is always logged out-of-contract ('extra').
 //
 // Shape: [{ code, name, subLedgers: [{ code, name }, ...] }, ...]
-(function (root) {
-  const LEDGERS = [
+//
+// Phase 4c: converted to a real ES module (`export const LEDGERS`) so Node's require(esm) keeps
+// serving server.js/seed-demo.js unchanged, and a future browser bundle/import can consume it
+// directly. Still also sets `window.LEDGERS` as a side effect, for plannr-ui.js's existing global
+// read — but that assignment now happens only once this module actually runs, which for a
+// `<script type="module">` tag is DEFERRED relative to classic scripts (see the 4 HTML pages that
+// load this — their tags were updated to type="module" as part of this conversion).
+export const LEDGERS = [
     { code: '1.0', name: 'LAND & LEGAL', subLedgers: [
       { code: '1.1', name: 'Land cost (if not already owned)' },
       { code: '1.2', name: 'Land registration & stamp duty' },
@@ -128,8 +134,6 @@
       { code: '23.2', name: 'Material transport costs' },
       { code: '23.3', name: 'Contingency fund (10–15% of total budget)' },
     ] },
-  ];
+];
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { LEDGERS };
-  else root.LEDGERS = LEDGERS;
-})(typeof globalThis !== 'undefined' ? globalThis : this);
+if (typeof window !== 'undefined') window.LEDGERS = LEDGERS;

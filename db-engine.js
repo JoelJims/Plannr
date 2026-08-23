@@ -25,12 +25,9 @@
 // anyway (only two slots exist).
 //
 // ── Error shape ──────────────────────────────────────────────────────────────────────────────────
-// sqlite-wasm's real error class (SQLite3Error) carries the SQLite result code as `.resultCode` — NOT
-// `.sqlite3Rc`, despite that being the property name isStorageFullError() in db.js was written to
-// check (that name came from an earlier spike script's own ad-hoc guess, not from this package's
-// actual API). Rather than special-case this in db.js, every error this adapter lets escape also gets
-// `.sqlite3Rc` mirrored from `.resultCode`, so isStorageFullError()'s existing check keeps working
-// unchanged once this adapter is eventually wired in.
+// sqlite-wasm's real error class (SQLite3Error) carries the SQLite result code as `.resultCode`.
+// isStorageFullError() in db.js checks that property name directly (Phase 4c) — no compensating
+// mirror needed here; errors from this adapter's calls are just let through as-is.
 
 let sqlite3 = null;
 let readyPromise = null;
@@ -57,15 +54,6 @@ export function getSqlite3() {
 
 const KVVFS_SLOT = 'local'; // persistent (vs. 'session', which is wiped when the tab/WebView closes)
 
-// See header comment: mirrors sqlite-wasm's real `.resultCode` onto `.sqlite3Rc` so db.js's existing
-// isStorageFullError() (err.errcode ?? err.sqlite3Rc) recognizes a SQLITE_IOERR from this engine.
-function normalizeError(err) {
-  if (err && typeof err === 'object' && err.resultCode != null && err.sqlite3Rc == null) {
-    try { err.sqlite3Rc = err.resultCode; } catch { /* non-configurable — nothing more we can do */ }
-  }
-  return err;
-}
-
 // A prepared-statement wrapper matching node:sqlite's Statement: .get(...params) -> object|undefined,
 // .all(...params) -> object[], .run(...params) -> { changes, lastInsertRowid }. Rows are built as
 // null-prototype objects (matches node:sqlite exactly — verified empirically, and relied on by tests)
@@ -91,8 +79,7 @@ class Statement {
       if (params.length) this._raw.bind(params);
       const has = this._raw.step();
       return has && this._cols ? this._row() : undefined;
-    } catch (e) { throw normalizeError(e); }
-    finally { this._raw.reset(true); }
+    } finally { this._raw.reset(true); }
   }
   all(...params) {
     try {
@@ -100,15 +87,13 @@ class Statement {
       const rows = [];
       if (this._cols) { while (this._raw.step()) rows.push(this._row()); }
       return rows;
-    } catch (e) { throw normalizeError(e); }
-    finally { this._raw.reset(true); }
+    } finally { this._raw.reset(true); }
   }
   run(...params) {
     try {
       if (params.length) this._raw.bind(params);
       this._raw.step();
-    } catch (e) { throw normalizeError(e); }
-    finally { this._raw.reset(true); }
+    } finally { this._raw.reset(true); }
     const changes = this._rawDb.changes();
     const lastInsertRowid = Number(sqlite3.capi.sqlite3_last_insert_rowid(this._rawDb.pointer));
     return { changes, lastInsertRowid };
@@ -122,17 +107,15 @@ export class DatabaseSync {
   constructor(path, opts = {}) {
     if (!sqlite3) throw new Error('db-engine: ready() must be awaited once before the first `new DatabaseSync()` — see the header comment.');
     this.filename = path; // kept for API parity; see header comment on the single kvvfs slot
-    try {
-      this._raw = new sqlite3.oo1.JsStorageDb({ filename: KVVFS_SLOT, flags: opts.readOnly ? 'r' : 'c' });
-    } catch (e) { throw normalizeError(e); }
+    this._raw = new sqlite3.oo1.JsStorageDb({ filename: KVVFS_SLOT, flags: opts.readOnly ? 'r' : 'c' });
   }
   exec(sql) {
-    try { this._raw.exec(sql); } catch (e) { throw normalizeError(e); }
+    this._raw.exec(sql);
   }
   prepare(sql) {
-    try { return new Statement(this._raw, sql); } catch (e) { throw normalizeError(e); }
+    return new Statement(this._raw, sql);
   }
   close() {
-    try { if (this._raw.isOpen()) this._raw.close(); } catch (e) { throw normalizeError(e); }
+    if (this._raw.isOpen()) this._raw.close();
   }
 }

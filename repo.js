@@ -8,8 +8,16 @@
 // dropping that one argument.
 //
 // db.init() must have run before this module is required (server.js requires it right after init()).
+//
+// Phase 4c: this module is now an ES module and imports `db` directly from db.js — every statement
+// below is prepared eagerly, at THIS module's own top level, against whatever `db` is at that moment.
+// Under Node that's always already open (db.js's Node path is synchronous), so nothing here changed
+// behaviorally. A future browser entry point must `await` db.js's `ready()` and only import this
+// module afterward (e.g. via a dynamic `import('./repo.js')`) — importing it eagerly, before `db` is
+// open, would throw the moment any statement below tries to `db.prepare(...)` against a not-yet-open
+// connection.
 
-const { db } = require('./db');
+import { db } from './db.js';
 
 // ── generic CRUD (used by makeLedgerCrud) ────────────────────────────────────────────────────────
 // config: { table, select, listWhere, byIdWhere, columns, alias } — alias is the table alias used in
@@ -244,7 +252,7 @@ function configure({ contractCols, backupTables, backupCols }) {
   exportStmtFor('settings'); deleteStmtFor('settings');
 }
 
-module.exports = {
+export {
   crud, trash, configure,
   overview, contract, ledgerCustoms, authoredCount, backup,
 };
