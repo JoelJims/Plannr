@@ -24,3 +24,19 @@ PLANNR-AUDIT-LIVE.md
 
 .spike*
 *-spike.js
+
+# Phase 8b — sync-public-modules.js's copies (source of truth stays at the project root; these are
+# regenerated before every `cap sync`, never hand-edited).
+/public/db.js
+/public/repo.js
+/public/db-engine.js
+/public/node-builtins-browser-stub.js
+/public/node_modules/
+
+# Capacitor Android — the native project itself is checked in (some of it is hand-editable), but its
+# build outputs and local machine config are not.
+/android/app/build/
+/android/build/
+/android/.gradle/
+/android/local.properties
+/android/capacitor-cordova-android-plugins/build/

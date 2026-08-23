@@ -12,12 +12,19 @@
     "test": "node run-tests.js",
     "test:slow": "node --test --test-concurrency=1 \"test/slow/**/*.test.js\"",
     "test:ui": "node test-ui/run.js",
-    "test:backup-crypto": "node test-ui/backup-crypto.js"
+    "test:backup-crypto": "node test-ui/backup-crypto.js",
+    "sync:public-modules": "node sync-public-modules.js",
+    "android:sync": "node sync-public-modules.js && npx cap sync android"
   },
   "engines": {
     "node": ">=22.12.0"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.3",
+    "@capacitor/share": "^8.0.1",
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "express": "^4.21.2",
     "playwright": "^1.61.1",

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Plannr</string>
+    <string name="title_activity_main">Plannr</string>
+    <string name="package_name">com.plannr.app</string>
+    <string name="custom_url_scheme">com.plannr.app</string>
+</resources>

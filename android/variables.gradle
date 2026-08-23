@@ -1,0 +1,20 @@
+ext {
+    minSdkVersion = 24
+    // Phase 8b: androidx.activity 1.11.0 / androidx.core 1.17.0 (pulled in by @capacitor/android
+    // 8.5.0) hard-require compileSdk >= 36 (AAR metadata check) — dropping to 35 to dodge a broken
+    // android-36 auto-download just traded one failure for another. Deleted the broken empty
+    // platforms/android-36 stub and let AGP's auto-installer fetch it fresh instead.
+    compileSdkVersion = 36
+    targetSdkVersion = 36
+    androidxActivityVersion = '1.11.0'
+    androidxAppCompatVersion = '1.7.1'
+    androidxCoordinatorLayoutVersion = '1.3.0'
+    androidxCoreVersion = '1.17.0'
+    androidxFragmentVersion = '1.8.9'
+    coreSplashScreenVersion = '1.2.0'
+    androidxWebkitVersion = '1.14.0'
+    junitVersion = '4.13.2'
+    androidxJunitVersion = '1.3.0'
+    androidxEspressoCoreVersion = '3.7.0'
+    cordovaAndroidVersion = '14.0.1'
+}

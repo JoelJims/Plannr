@@ -1,0 +1,16 @@
+<!doctype html>
+<!--
+  Phase 8b — Capacitor's WebView always loads index.html as the entry point (there is no server-side
+  routing here to send "/" to home.html the way server.js's app.get('/', ...) does). This is not a
+  page of its own — it just hands off to the real home page immediately.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url=home.html">
+  <title>Plannr</title>
+</head>
+<body>
+  <script>location.replace('home.html');</script>
+</body>
+</html>
