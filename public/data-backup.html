@@ -204,6 +204,30 @@
         <button type="button" id="importBtn" class="btn ghost">Import / Restore</button>
       </section>
 
+      <!-- Phase 7: encrypted full-database backup (distinct from the JSON ledger backup above — this
+           is EVERYTHING, byte-for-byte, the local-mode equivalent of the scheduled encrypted .db.enc
+           snapshots; cross-compatible with those files in both directions). -->
+      <section class="bk-section">
+        <h2>Encrypted full backup <span class="tag">Restorable</span></h2>
+        <p>Downloads the entire database — every table, exactly as stored — encrypted with a passphrase you choose, as one <code>.db.enc</code> file. Cross-compatible with the encrypted snapshots the desktop install can make.</p>
+        <p class="bk-note">Anyone with this file still needs the passphrase to read it — but anyone with BOTH can read everything, including anything the JSON backup leaves out by default. Store the passphrase somewhere separate from the file.</p>
+        <div id="encExportMsg" class="msg" role="status" aria-live="polite"></div>
+        <label for="encExportPass">Passphrase</label>
+        <input type="password" id="encExportPass" autocomplete="new-password" placeholder="Choose a passphrase">
+        <button type="button" id="encExportBtn" class="btn primary">Download encrypted backup</button>
+      </section>
+
+      <section class="bk-section">
+        <h2>Restore from encrypted backup <span class="tag">Replaces data</span></h2>
+        <p>Restores a Plannr encrypted (<code>.db.enc</code>) backup, replacing everything currently stored with the file's contents.</p>
+        <p class="bk-warn">Warning: this replaces the entire database and can't be undone from inside the app.</p>
+        <div id="encImportMsg" class="msg" role="status" aria-live="polite"></div>
+        <input type="file" id="encImportFile" class="file-input" accept=".enc" aria-label="Choose a Plannr encrypted backup to restore">
+        <label for="encImportPass">Passphrase</label>
+        <input type="password" id="encImportPass" autocomplete="off" placeholder="The passphrase this backup was encrypted with">
+        <button type="button" id="encImportBtn" class="btn ghost">Restore from encrypted backup</button>
+      </section>
+
       <!-- 3. CSV export (Excel, export-only) -->
       <section class="bk-section">
         <h2>CSV for Excel <span class="tag muted">Export only</span></h2>
@@ -225,6 +249,9 @@
   </div>
 
   <script src="/plannr-ui.js"></script>
+  <!-- Phase 7: scrypt-js, a UMD build (no ES export — see backup-crypto.js's header), for the
+       encrypted-backup key derivation. Only needed on this page. -->
+  <script src="/node_modules/scrypt-js/scrypt.js"></script>
   <script>
   document.addEventListener('DOMContentLoaded', async () => {
     // Phase 5: see the same note in home.html — this await is what actually guarantees the fetch
@@ -332,6 +359,80 @@
           importMsg.show('Network error. Your current data is unchanged.', 'error');
         } finally {
           importBtn.disabled = false;
+        }
+      });
+
+      // ---- Encrypted full backup (Phase 7) -----------------------------------
+      const encExportMsg = makeMsg(document.getElementById('encExportMsg'));
+      const encExportPass = document.getElementById('encExportPass');
+      const encExportBtn = document.getElementById('encExportBtn');
+      encExportBtn.addEventListener('click', async () => {
+        encExportMsg.clear();
+        const passphrase = encExportPass.value;
+        if (!passphrase) { encExportMsg.show('Enter a passphrase first.', 'error'); return; }
+        encExportBtn.disabled = true;
+        try {
+          const res = await fetch('/api/backup/export-encrypted', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passphrase }),
+          });
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            encExportMsg.show(d.error || 'Could not build the encrypted backup.', 'error');
+            return;
+          }
+          const blob = await res.blob();
+          download(blob, `plannr-backup-${today()}.db.enc`);
+          encExportPass.value = '';
+          encExportMsg.show('Encrypted backup downloaded. Keep the passphrase somewhere separate from the file.', 'success');
+        } catch {
+          encExportMsg.show('Network error. Please try again.', 'error');
+        } finally {
+          encExportBtn.disabled = false;
+        }
+      });
+
+      // ---- Restore from encrypted backup (Phase 7) ---------------------------
+      const encImportMsg = makeMsg(document.getElementById('encImportMsg'));
+      const encImportFile = document.getElementById('encImportFile');
+      const encImportPass = document.getElementById('encImportPass');
+      const encImportBtn = document.getElementById('encImportBtn');
+      encImportBtn.addEventListener('click', async () => {
+        encImportMsg.clear();
+        const file = encImportFile.files && encImportFile.files[0];
+        if (!file) { encImportMsg.show('Choose a Plannr encrypted backup file first.', 'error'); return; }
+        const passphrase = encImportPass.value;
+        if (!passphrase) { encImportMsg.show('Enter the passphrase this backup was encrypted with.', 'error'); return; }
+
+        if (!window.confirm("This REPLACES the entire database with this backup's contents. This can't be undone in the app.")) return;
+
+        encImportBtn.disabled = true;
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          // btoa() works on a "binary string" (one char per byte) — build it in chunks so a large
+          // backup doesn't blow the call-stack limit of String.fromCharCode(...bytes).
+          let binary = '';
+          const CHUNK = 0x8000;
+          for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+          const dataBase64 = btoa(binary);
+
+          const res = await fetch('/api/backup/import-encrypted', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passphrase, dataBase64 }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            encImportMsg.show('Restored ✓ — reloading…', 'success');
+            setTimeout(() => location.reload(), 800);
+          } else {
+            encImportMsg.show(data.error || 'Restore failed. Your current data may be unchanged.', 'error');
+          }
+        } catch {
+          encImportMsg.show('Network error. Your current data is unchanged.', 'error');
+        } finally {
+          encImportBtn.disabled = false;
         }
       });
 
