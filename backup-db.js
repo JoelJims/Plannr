@@ -1,11 +1,9 @@
 // Plannr — offsite-ready database backup.
 //
-// Produces a CONSISTENT, self-contained snapshot of the live DB with SQLite's `VACUUM INTO`, which
-// reads the committed state (main file + the WAL) into ONE clean file. Two things this buys us:
-//   1. It is safe to run WHILE the server is live (it takes a read transaction, never writes the source).
-//   2. It sidesteps the trap that copying plannr.db ALONE — without a checkpoint — yields a near-empty
-//      file, because recent writes still live in plannr.db-wal. VACUUM INTO folds the WAL in, so the
-//      snapshot is a single complete .db with no -wal/-shm to carry alongside.
+// Produces a CONSISTENT, self-contained snapshot of the live DB with SQLite's `VACUUM INTO`. One
+// thing this buys us: it is safe to run WHILE the server is live (it takes a read transaction, never
+// writes the source). (Phase 4a: journal_mode is DELETE, not WAL — see db.js — so a plain file copy of
+// plannr.db is already complete; VACUUM INTO is kept anyway for the live-server safety property above.)
 //
 // Snapshots are written OUTSIDE the project directory (default: ~/PlannrBackups) so a project-dir or
 // disk loss doesn't take the backups with it. Point PLANNR_BACKUP_DIR at a synced/offsite folder
@@ -44,8 +42,8 @@ function stamp(d = new Date()) {
 // Matches both the encrypted (.db.enc) and legacy/plaintext (.db) snapshot names, so retention prunes both.
 const SNAP_RE = /^plannr-\d{8}-\d{6}\.db(\.enc)?$/;
 
-// VACUUM INTO a clean, self-contained copy (folds the WAL in; safe while the server is live). Prefers a
-// read-only handle; falls back to read-write if this SQLite build wants one. Never modifies the source.
+// VACUUM INTO a clean, self-contained copy (safe while the server is live — see header comment).
+// Prefers a read-only handle; falls back to read-write if this SQLite build wants one. Never modifies the source.
 function vacuumInto(destPath) {
   const destSql = destPath.split('\\').join('/'); // SQLite wants forward slashes in the SQL string literal
   let db;

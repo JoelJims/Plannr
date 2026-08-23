@@ -199,7 +199,7 @@ gh repo create plannr --private --source . --remote origin   # one-time; require
 git push -u origin main
 ```
 
-**2. Database → scheduled `VACUUM INTO` snapshots (encrypted).** `backup-db.js` writes a **consistent, self-contained** snapshot of the live DB to **`%USERPROFILE%\PlannrBackups\plannr-YYYYMMDD-HHMMSS.db.enc`** (outside the project), keeping the **newest 14**. It uses SQLite's `VACUUM INTO`, which folds the WAL into one clean file — so it's safe to run while the server is live and it **avoids the trap that copying `plannr.db` alone yields a near-empty file** (recent writes still sit in `plannr.db-wal`) — then **encrypts** that snapshot with **AES-256-GCM** (`node:crypto`, no new dependency) before it touches the backup folder. Every encrypted write is **verified decryptable** in the same run before older snapshots are pruned.
+**2. Database → scheduled `VACUUM INTO` snapshots (encrypted).** `backup-db.js` writes a **consistent, self-contained** snapshot of the live DB to **`%USERPROFILE%\PlannrBackups\plannr-YYYYMMDD-HHMMSS.db.enc`** (outside the project), keeping the **newest 14**. It uses SQLite's `VACUUM INTO`, which is **safe to run while the server is live** (a read transaction, never touches the source) — then **encrypts** that snapshot with **AES-256-GCM** (`node:crypto`, no new dependency) before it touches the backup folder. Every encrypted write is **verified decryptable** in the same run before older snapshots are pruned.
 
 ```sh
 node backup-db.js                       # one manual snapshot
@@ -216,7 +216,7 @@ A **daily Task Scheduler job ("Plannr DB Backup", 02:00, StartWhenAvailable)** r
 
 ### Restore procedure
 
-An encrypted snapshot must be **decrypted first** (`decrypt-db.js`, the matching step to `backup-db.js`); the result is a complete standalone database. The one crucial step when putting it in place is **removing the stale `-wal`/`-shm`** so the old write-ahead log can't shadow the restored file. `decrypt-db.js` is routed through the live-DB guard, so it refuses to overwrite `data/plannr.db` unless you pass `--i-really-mean-the-live-db` — the safe path is to decrypt to a scratch file and copy it in yourself.
+An encrypted snapshot must be **decrypted first** (`decrypt-db.js`, the matching step to `backup-db.js`); the result is a complete standalone database. If you're restoring a snapshot taken **before** the Phase 4a journal-mode change (WAL → DELETE), also remove any stale `-wal`/`-shm` sidecars sitting next to the target path so an old write-ahead log can't shadow the restored file — snapshots taken after that change never have one. `decrypt-db.js` is routed through the live-DB guard, so it refuses to overwrite `data/plannr.db` unless you pass `--i-really-mean-the-live-db` — the safe path is to decrypt to a scratch file and copy it in yourself.
 
 ```sh
 #  ── with the server STOPPED (stop-plannr.cmd) ──
@@ -225,13 +225,14 @@ ls "$env:USERPROFILE\PlannrBackups"
 #  2. decrypt it to a SCRATCH path (PLANNR_BACKUP_PASSPHRASE must be the value it was written with):
 $env:PLANNR_BACKUP_PASSPHRASE = "…"
 node decrypt-db.js "$env:USERPROFILE\PlannrBackups\plannr-YYYYMMDD-HHMMSS.db.enc" "$env:TEMP\plannr-restore.db"
-#  3. replace the live DB with the decrypted file and DROP the stale WAL/SHM:
+#  3. replace the live DB with the decrypted file (drop any stale -wal/-shm sidecars first if present —
+#     see the note above; snapshots taken after Phase 4a never have one):
 copy "$env:TEMP\plannr-restore.db" "data\plannr.db"
-del  "data\plannr.db-wal" "data\plannr.db-shm"     # ignore "not found" — they may not exist
-#  4. start the server; it reopens the restored DB and recreates a fresh WAL.
+del  "data\plannr.db-wal" "data\plannr.db-shm"     # ignore "not found" — normal after Phase 4a
+#  4. start the server; it reopens the restored DB.
 ```
 
-(A legacy **plaintext** `…​.db` snapshot — one written while `PLANNR_BACKUP_PASSPHRASE` was unset — skips step 2: copy it straight to `data\plannr.db` and drop the stale WAL/SHM.)
+(A legacy **plaintext** `…​.db` snapshot — one written while `PLANNR_BACKUP_PASSPHRASE` was unset — skips step 2: copy it straight to `data\plannr.db`, dropping any stale WAL/SHM as above.)
 
 **Verify a snapshot before trusting it** (non-destructive — decrypts to a scratch path, never the live DB). Check the `cash_out` fixture — it must read **11 rows summing to 78000000** (₹7,80,000):
 
@@ -402,7 +403,7 @@ matters once Plannr is multi-tenant and internet-facing; safely skipped for the 
 | 3 | **Secure-cookie interaction** | **[REQUIRED]** — already coded | The session cookie is `secure: IS_PROD`. `secure: true` **needs `trust proxy` + real HTTPS**: without trust proxy Express sees the proxy's HTTP hop, treats the connection as insecure, and **silently drops the Set-Cookie** — logins appear to "not work." Items 1–3 stand or fall together. |
 | 4 | **CAPTCHA (or invite-gate) on `/api/register`** | **[REQUIRED]** | Registration is open and only IP-rate-limited. Public on the internet, that's a spam/abuse funnel. Add a CAPTCHA (hCaptcha/Turnstile) or make registration invite-only before opening it up. |
 | 5 | **Disk encryption at rest** | **[REQUIRED]** | `data/plannr.db` holds every household's finances in cleartext SQLite. On a rented VM/VPS, enable full-disk/volume encryption (LUKS, provider-managed) — otherwise a snapshot or disposed disk is a plaintext data breach. |
-| 6 | **Persistent paths survive restarts/redeploys** | **[REQUIRED]** | `data/` (the DB + WAL), `.env` (secrets), and the backup/snapshot files **must be on a persistent volume**, not an ephemeral container layer. A redeploy that wipes `data/` is total data loss; one that regenerates `.env` invalidates every session and can't decrypt nothing (there's no app-level crypto, but a new session secret logs everyone out). |
+| 6 | **Persistent paths survive restarts/redeploys** | **[REQUIRED]** | `data/` (the DB), `.env` (secrets), and the backup/snapshot files **must be on a persistent volume**, not an ephemeral container layer. A redeploy that wipes `data/` is total data loss; one that regenerates `.env` invalidates every session and can't decrypt nothing (there's no app-level crypto, but a new session secret logs everyone out). |
 | 7 | **Email verification on signup** | **[REQUIRED]** | (Tenancy audit gap.) No proof a registrant owns the address. Needed before password reset (item 8) can be trusted and before Daily Reports mail out on a stranger's say-so. |
 | 8 | **Self-service password reset** | **[REQUIRED]** | (Tenancy audit gap.) Recovery today is `set-password.js`, an **operator-run CLI** — fine for one owner, unworkable for tenants who can't reach the box. Needs the verified email from item 7. |
 | 9 | **Per-account rate limits** | **[REQUIRED]** | (Tenancy audit gap.) Limits are per-IP only. One authenticated account behind a shared IP (or a botnet) isn't individually bounded — add per-account throttling on the expensive routes (PDF render, import, batch save). |

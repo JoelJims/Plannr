@@ -20,7 +20,6 @@ test('wipes a fully-seeded DB: every table -> 0, ids restart at 1, foreign_key_c
   H.db.prepare('INSERT INTO loans (amount_paise, bank_name) VALUES (?, ?)').run(500000, 'Bank');
   H.seedSession(u.id);
   H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', '12345') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
-  H.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
 
   const target = path.join(os.tmpdir(), `plannr-reset-${process.pid}.db`);
   fs.copyFileSync(H.TEST_DB, target);

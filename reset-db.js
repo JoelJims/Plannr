@@ -58,7 +58,6 @@ db.exec('PRAGMA foreign_keys = ON'); // restore enforcement
 // Prove the wipe left NO dangling foreign key (empty tables can't, but assert it rather
 // than trust it — this is the real check that FK-off didn't hide an integrity problem).
 const fkViolations = db.prepare('PRAGMA foreign_key_check').all();
-db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); // flush the WAL into the main db file
 
 const after = count();
 

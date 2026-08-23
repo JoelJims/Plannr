@@ -7,7 +7,7 @@ try { process.loadEnvFile(); } catch { /* no .env present */ }
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
-const { db, init, DB_PATH } = require('./db');
+const { db, init, DB_PATH, isStorageFullError } = require('./db');
 const { LEDGERS } = require('./public/ledgers.js'); // fixed 23-ledger reference (single source, shared with the browser)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -238,6 +238,7 @@ function makeLedgerCrud(opts) {
       } catch (e) {
         db.exec('ROLLBACK');
         if (!IS_PROD) console.error(`${table} batch write failed, rolled back:`, e);
+        if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
         return res.status(500).json({ error: 'The save failed and was rolled back — no rows were changed.' });
       }
 
@@ -1837,6 +1838,7 @@ app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
   } catch (e) {
     db.exec('ROLLBACK');
     if (!IS_PROD) console.error('Backup import failed, rolled back:', e);
+    if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the import did not go through. Free up space, then try again.', snapshot });
     return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
   }
 
@@ -1933,6 +1935,13 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   // generic 'Something went wrong.' message; client errors report their status.
   const status = (err && (err.statusCode || err.status)) || 500;
   if (status >= 500) console.error('Unhandled error:', err);
+  // Phase 4a (WASM SQLite port prep): a write that hit the kvvfs storage ceiling surfaces as a clean
+  // SQLITE_IOERR (confirmed in the storage-ceiling spike — atomic rollback, never corruption). Most
+  // write routes have no try/catch of their own (see the comment above this handler), so this is
+  // where their errors land; give a clear message instead of the raw SQLite one.
+  if (status >= 500 && isStorageFullError(err)) {
+    return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
+  }
   // Body-parser "payload too large" (413 / entity.too.large): a Save All batch whose rows carry
   // very long remarks can exceed the 256kb parser limit BEFORE the row-count check runs, which
   // otherwise surfaces as a bare "Invalid request." Give it a clear message consistent with the
@@ -1946,12 +1955,11 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 // ---------------------------------------------------------------------------
-// Graceful shutdown: on a normal stop (e.g. Ctrl+C), checkpoint the WAL into
-// the main DB file and close it, so data/plannr.db is self-contained and safe
-// to copy. Without this, the newest writes stay stranded in data/plannr.db-wal
-// — which is how a copy of plannr.db alone can look almost empty. (On a hard
-// kill the handler won't run, but SQLite still recovers from the WAL on the
-// next open, so no data is lost either way.)
+// Graceful shutdown: on a normal stop (e.g. Ctrl+C), close the DB cleanly.
+// Phase 4a (WASM SQLite port prep): journal_mode is DELETE, not WAL (see db.js), so every commit
+// already lands directly in data/plannr.db — there is no WAL to checkpoint or fold in, and a copy of
+// plannr.db alone is always complete. (On a hard kill the handler won't run either way, but there's
+// nothing left stranded for it to recover.)
 // ---------------------------------------------------------------------------
 // Phase 7A — clean shutdown that reaps the Playwright Chromium browser before exit. Async so the
 // close can be awaited; a hard timeout force-exits if Chromium hangs; a SECOND Ctrl+C exits immediately.
@@ -1968,10 +1976,10 @@ async function shutdown() {
   try {
     if (_pdfBrowserPromise) { const b = await _pdfBrowserPromise.catch(() => null); if (b) await b.close().catch(() => {}); }
   } catch (e) { console.error('PDF browser shutdown error:', e); }
-  // 3) Checkpoint the WAL into the main file, then close the DB (unchanged behaviour).
-  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); db.close(); } catch (e) { console.error('DB shutdown error:', e); }
+  // 3) Close the DB (no WAL to checkpoint — see the comment above shutdown()).
+  try { db.close(); } catch (e) { console.error('DB shutdown error:', e); }
   clearTimeout(hardKill);
-  console.log('[shutdown] browsers closed, WAL checkpointed — exiting cleanly.');
+  console.log('[shutdown] browsers closed, DB closed — exiting cleanly.');
   process.exit(0);
 }
 
@@ -2022,8 +2030,8 @@ if (require.main === module) {
   let sigints = 0;
   process.on('SIGINT', () => {
     if (++sigints >= 2) {
-      // Phase 9 (Part E): the force-exit bypasses shutdown()'s graceful close (WAL checkpoint, PDF
-      // browser cleanup). Warn loudly.
+      // Phase 9 (Part E): the force-exit bypasses shutdown()'s graceful close (PDF browser cleanup,
+      // clean DB close). Warn loudly.
       console.error('[shutdown] second Ctrl+C — force-exiting NOW, bypassing the graceful close.');
       process.exit(1);
     }
