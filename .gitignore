@@ -21,3 +21,6 @@ data/
 
 .wwebjs_cache.bak/
 PLANNR-AUDIT-LIVE.md
+
+.spike*
+*-spike.js
