@@ -225,9 +225,13 @@
     </main>
   </div>
 
-  <script src="/ledgers.js"></script>
+  <script type="module" src="/ledgers.js"></script>
   <script src="/plannr-ui.js"></script>
   <script>
+  // Phase 4c: ledgers.js is now a real ES module, so its script tag above is deferred — see the same
+  // note in overview.html. Wrapping this block in DOMContentLoaded restores the ordering this page
+  // already relied on: window.LEDGERS set before it's read below.
+  document.addEventListener('DOMContentLoaded', () => {
     const $ = (id) => document.getElementById(id);
     const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, createLedgerPicker, createDatePicker } = window.PlannrUI;
 
@@ -437,6 +441,7 @@
     }
 
     (async () => { await loadContracts(); await loadPayments(); resetForm(); })();
+  });
   </script>
 </body>
 </html>

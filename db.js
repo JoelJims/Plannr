@@ -1,24 +1,72 @@
 // Database setup for Plannr.
-// Uses Node's built-in SQLite (node:sqlite) — synchronous, prepared
-// statements, parameterized queries, no native build step required.
+//
+// Phase 4c: this file is an ES module and picks its SQLite engine at load time — node:sqlite under
+// Node (synchronous, exactly as before; every existing `require('./db')` consumer keeps working with
+// zero changes), or db-engine.js (the WASM/kvvfs adapter, Phase 4b) in a browser. Both engines expose
+// the same DatabaseSync surface (Phase 4a's audit: new DatabaseSync(path[, opts]), .exec(),
+// .prepare().get()/.all()/.run(), .close()) — that's what makes swapping the engine below safe.
+//
+// node:fs / node:path / node:sqlite are imported statically (named imports) so the Node path stays
+// fully synchronous. A real browser can't resolve those three specifiers at all — whatever browser
+// entry point eventually loads this file needs an import map mapping all three to
+// node-builtins-browser-stub.js (see that file's header for the exact snippet). The code paths that
+// would use the stubbed fs/path/DatabaseSync are never reached when isNode is false below.
+//
+// The browser path is async — db-engine.js's own WASM bootstrap is unconditionally async (see its
+// header). `ready()` below is the seam: under Node it's a no-op (db is already open by the time this
+// module finishes loading, synchronously, as today); under a browser it's what a caller MUST await
+// before using `db`/`init` — see `ready()`'s own comment.
 
-const fs = require('fs');
-const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_PATH = process.env.PLANNR_DB || path.join(DATA_DIR, 'plannr.db');
+const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
 
-// Make sure the folder for the database file exists before opening it.
-fs.mkdirSync(DATA_DIR, { recursive: true });
+const DATA_DIR = isNode ? join(import.meta.dirname, 'data') : '';
+// Browser: DB_PATH is never used for anything real — db-engine.js's DatabaseSync ignores its `path`
+// argument (kvvfs has exactly one persistent slot; see that file's header) — so any placeholder works.
+export const DB_PATH = isNode ? (process.env.PLANNR_DB || join(DATA_DIR, 'plannr.db')) : 'plannr';
 
-const db = new DatabaseSync(DB_PATH);
-// Phase 4a (WASM SQLite port prep): DELETE, not WAL. A WAL-stamped file cannot be opened at all by
-// the WASM SQLite build this app is moving to (confirmed empirically in Spike A2 — SQLITE_CANTOPEN;
-// no shared-memory/multi-process primitives in that sandbox). Single-process, single-user desktop/
-// mobile app has no concurrency need WAL was buying us anyway.
-db.exec('PRAGMA journal_mode = DELETE');
-db.exec('PRAGMA foreign_keys = ON');  // enforce foreign keys
+function openDb(EngineDatabaseSync) {
+  const d = new EngineDatabaseSync(DB_PATH);
+  // Phase 4a (WASM SQLite port prep): DELETE, not WAL. A WAL-stamped file cannot be opened at all by
+  // the WASM SQLite build this app is moving to (confirmed empirically in Spike A2 — SQLITE_CANTOPEN;
+  // no shared-memory/multi-process primitives in that sandbox). Single-process, single-user desktop/
+  // mobile app has no concurrency need WAL was buying us anyway.
+  d.exec('PRAGMA journal_mode = DELETE');
+  d.exec('PRAGMA foreign_keys = ON'); // enforce foreign keys
+  return d;
+}
+
+export let db;
+let readyPromise = null;
+
+if (isNode) {
+  mkdirSync(DATA_DIR, { recursive: true }); // make sure the folder for the database file exists
+  db = openDb(NodeDatabaseSync);
+}
+
+/**
+ * Must be awaited before the first use of `db`/`init` in a browser. A no-op under Node — db is
+ * already open by the time this module finishes loading (see above), so no existing Node consumer
+ * (server.js, the test suite, reset-db.js, seed-demo.js) needs to call this.
+ *
+ * Note for whoever builds the browser entry point: repo.js prepares its cached statements against
+ * `db` at ITS OWN module top level (eager, on import) — same as it always has. That means repo.js must
+ * be imported (e.g. via a dynamic `import('./repo.js')`) only AFTER this `ready()` resolves, not just
+ * before its functions are first called. repo.js's internals are unchanged from before this phase.
+ */
+export function ready() {
+  if (db) return Promise.resolve();
+  if (!readyPromise) {
+    readyPromise = import('./db-engine.js').then(async (engine) => {
+      await engine.ready();
+      db = openDb(engine.DatabaseSync);
+    });
+  }
+  return readyPromise;
+}
 
 // Schema-version marker: stamped at the END of init() once all migrations succeed. It lets a
 // DESTRUCTIVE, presence-keyed migration be gated so it runs ONLY on a pre-marker DB and can never
@@ -29,7 +77,7 @@ db.exec('PRAGMA foreign_keys = ON');  // enforce foreign keys
 const SCHEMA_VERSION = 2; // v2 = Phase 2 Step 2a: the tenant_id dimension is dropped back off (see the
                           // `userVersion < 2` migration near the end of init()).
 
-function init() {
+export function init() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -962,17 +1010,18 @@ function init() {
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
-// Phase 4a (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which SQLite
-// binding raised it — node:sqlite exposes the raw result code as `err.errcode`; the WASM build
-// (Spike A2) exposes it as `err.sqlite3Rc`. Both use SQLite's own result-code numbering, where every
-// IOERR subcode (SQLITE_IOERR_WRITE, _SHORT_READ, etc.) shares base code 10 in its low byte. This is
-// the failure mode confirmed in the kvvfs storage-ceiling spike: exceeding the quota surfaces as a
-// clean, atomically-rolled-back SQLITE_IOERR, never silent corruption — so a write path seeing this
-// can safely tell the user "storage is full" instead of a raw SQLite message.
-function isStorageFullError(err) {
-  const code = err && (err.errcode ?? err.sqlite3Rc);
+// Phase 4a/4c (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which
+// SQLite binding raised it. node:sqlite exposes the raw result code as `err.errcode`; the real
+// sqlite-wasm engine (Phase 4b) exposes it as `err.resultCode` — its actual SQLite3Error property,
+// confirmed by reading the package's own type definitions (an earlier guess at `err.sqlite3Rc` was
+// wrong; db-engine.js no longer compensates for that, since this checks the real name directly). Both
+// use SQLite's own result-code numbering, where every IOERR subcode (SQLITE_IOERR_WRITE, _SHORT_READ,
+// etc.) shares base code 10 in its low byte. This is the failure mode confirmed in the kvvfs
+// storage-ceiling spike: exceeding the quota surfaces as a clean, atomically-rolled-back SQLITE_IOERR,
+// never silent corruption — so a write path seeing this can safely tell the user "storage is full"
+// instead of a raw SQLite message.
+export function isStorageFullError(err) {
+  const code = err && (err.errcode ?? err.resultCode);
   if (typeof code === 'number' && (code & 0xff) === 10) return true;
   return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error/i.test(err.message));
 }
-
-module.exports = { db, init, DB_PATH, isStorageFullError };

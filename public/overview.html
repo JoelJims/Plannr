@@ -437,9 +437,15 @@
     </main>
   </div>
 
-  <script src="/ledgers.js"></script>
+  <script type="module" src="/ledgers.js"></script>
   <script src="/plannr-ui.js"></script>
   <script>
+  // Phase 4c: ledgers.js is now a real ES module, so its script tag above is deferred (modules always
+  // are) — it can no longer be guaranteed to have run by the time a later CLASSIC script executes
+  // (classic scripts run immediately, in document order, before any deferred/module script). Wrapping
+  // this whole block in DOMContentLoaded (which fires only after every deferred/module script has
+  // run) restores the ordering this page already relied on: window.LEDGERS set before it's read below.
+  document.addEventListener('DOMContentLoaded', () => {
     const $ = (id) => document.getElementById(id);
     const { formatPaise: fmtPaise, formatOwed: fmtOwed, escapeHtml: esc, formatDate: fmtDate, makeMsg, createDatePicker } = window.PlannrUI;
     const LEDGERS = window.LEDGERS;
@@ -984,6 +990,7 @@
     window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
     load();
+  });
   </script>
 </body>
 </html>
