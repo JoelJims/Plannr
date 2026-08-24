@@ -132,6 +132,7 @@ app.post('/api/ledgers/csv', requireApiAuth, (req, res) => {
   try {
     repo.ledgers.replaceAll(v.mains, v.subs);
   } catch (e) {
+    if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the ledger list was not saved. Free up space, then try again.' });
     return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
   }
   refreshLedgers();
@@ -1106,6 +1107,13 @@ app.delete('/api/trash/:table/:id', requireApiAuth, (req, res) => {
     if (n > 0) {
       return res.status(409).json({ error: `This contract still has ${n} contractor payment${n === 1 ? '' : 's'} referencing it (live or in the Recycle Bin). Permanently deleting it would orphan ${n === 1 ? 'that payment' : 'those payments'} — delete or restore ${n === 1 ? 'it' : 'them'} first.` });
     }
+    // cash_out.contract_service_id has no ON DELETE action, so a contract_services row cascading out
+    // from this delete would otherwise throw a raw FK error if any cash-out entry (live or in the
+    // Recycle Bin) still references one of this contract's services.
+    const m = repo.contract.cashOutReferencingServices(id);
+    if (m > 0) {
+      return res.status(409).json({ error: `This contract still has ${m} cash-out entr${m === 1 ? 'y' : 'ies'} linked to one of its services (live or in the Recycle Bin). Permanently deleting it would orphan ${m === 1 ? 'that entry' : 'those entries'} — unlink or restore ${m === 1 ? 'it' : 'them'} first.` });
+    }
   }
   TRASH_REPO[table].hardDelete(id); // contract_payment_dates / contract_services children cascade
   res.json({ ok: true });
@@ -1450,11 +1458,18 @@ const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '
 const PDF_PALETTE = ['#f59e0b', '#fbbf24', '#b45309', '#d97706', '#fcd34d', '#92400e', '#ef8a4b',
   '#eab308', '#a16207', '#f4a06a', '#c2703d', '#facc15', '#7c3f12', '#fdba74', '#9a6a2f', '#e0a800',
   '#ffcf70', '#8a5a2b', '#f6b352', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#eab676'];
+// Phase 11 audit: same fix as overview.html's colorByCode — a 25th+ main ledger must never wrap
+// back onto an earlier ledger's colour in the PDF pie either. The fixed 24 above are untouched.
+function extraLedgerColor(extraIndex) {
+  const hue = (extraIndex * 137.508) % 360;
+  return `hsl(${hue.toFixed(1)}, 65%, 50%)`;
+}
 function pdfSlices(o) {
-  return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => ({
-    label: L.name, value: L.totalPaise,
-    color: L.code === CUSTOM_CODE ? '#8a5a2b' : PDF_PALETTE[Math.max(0, LEDGERS.findIndex((x) => x.code === L.code)) % PDF_PALETTE.length],
-  }));
+  return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => {
+    const idx = Math.max(0, LEDGERS.findIndex((x) => x.code === L.code));
+    const color = L.code === CUSTOM_CODE ? '#8a5a2b' : (idx < PDF_PALETTE.length ? PDF_PALETTE[idx] : extraLedgerColor(idx - PDF_PALETTE.length));
+    return { label: L.name, value: L.totalPaise, color };
+  });
 }
 function pdfPieSvg(slices) {
   const total = slices.reduce((a, s) => a + s.value, 0);
@@ -1882,6 +1897,16 @@ app.post('/api/backup/export-encrypted', requireApiAuth, (req, res) => {
     if (!IS_PROD) console.error('Encrypted export failed:', e);
     res.status(500).json({ error: 'Could not build the encrypted backup: ' + e.message });
   }
+});
+
+// public/local-api.js has a real POST /api/backup/import-encrypted (Phase 7) — swapping the live
+// SQLite file out from under an in-memory browser DB is straightforward there. Doing the same under
+// server.js means safely closing/replacing/reopening a live node:sqlite handle shared by every route
+// above, which is real design work, not a one-line port. Until that's built, the shared data-backup.html
+// button must fail with a clear, specific message instead of Express's raw 404 (which the client's
+// res.json().catch(() => ({})) swallows into a generic, misleading "Restore failed" — see Phase 11 audit).
+app.post('/api/backup/import-encrypted', requireApiAuth, (req, res) => {
+  res.status(501).json({ error: 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.' });
 });
 
 app.get('/api/backup/export', requireApiAuth, (req, res) => {

@@ -282,13 +282,14 @@
     // shim is installed before the fetch() calls below run.
     await import('/local-bootstrap.js');
     (function () {
-      const { paiseToInput, formatDate: fmtDate, makeMsg } = window.PlannrUI;
+      const { paiseToInput, formatDate: fmtDate, makeMsg, confirmModal } = window.PlannrUI;
 
       const jsonMsg = makeMsg(document.getElementById('jsonMsg'));
       const importMsg = makeMsg(document.getElementById('importMsg'));
       const csvMsg = makeMsg(document.getElementById('csvMsg'));
 
-      // Trigger a browser download of a Blob under a chosen filename.
+      // Trigger a browser download of a Blob under a chosen filename. Browser-only — see saveFile()
+      // below for the native-Android path, which this stays the fallback for.
       function download(blob, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -298,6 +299,46 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
+      }
+
+      const errText = (err) => (err && err.message) ? err.message : String(err);
+
+      // Phase 11 audit — confirmed via overview.html's PDF share path (Phase 6a, verified on-device):
+      // a plain <a download> click is a dead end on Android's WebView (no visible effect), so a blob
+      // download alone is not a real delivery path there. Capacitor's Filesystem+Share is the only one
+      // that works — reused here verbatim (same plugin calls, same timeouts) for every file this page
+      // produces, so a failure is always reported rather than silently doing nothing on-device.
+      function withTimeout(promise, ms, label) {
+        let timer;
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s.`)), ms);
+        });
+        return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+      }
+      function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+          reader.onerror = () => reject(reader.error || new Error('Could not read the file data.'));
+          reader.readAsDataURL(blob);
+        });
+      }
+      // Delivers `blob` to the user as `fname` and only resolves once that has actually happened (or
+      // throws with a specific reason). Native Android: Filesystem.writeFile + Share.share, same as
+      // the Overview PDF path. Browser: the existing blob-link download().
+      async function saveFile(blob, fname, dialogTitle) {
+        let Capacitor;
+        try { ({ Capacitor } = await import('@capacitor/core')); }
+        catch (err) { throw new Error('Could not load the native bridge: ' + errText(err)); }
+
+        if (Capacitor.isNativePlatform()) {
+          const [{ Filesystem, Directory }, { Share }] = await Promise.all([import('@capacitor/filesystem'), import('@capacitor/share')]);
+          const base64Data = await blobToBase64(blob);
+          const written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the file');
+          await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }), 20000, 'Opening the share sheet');
+          return;
+        }
+        download(blob, fname);
       }
 
       const today = () => {
@@ -323,10 +364,10 @@
           const res = await fetch('/api/backup/export' + (includeContacts ? '?includeContacts=1' : ''));
           if (!res.ok) { jsonMsg.show('Could not build the backup. Please try again.', 'error'); return; }
           const data = await res.json();
-          download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `plannr-backup-${today()}.json`);
-          jsonMsg.show('Backup downloaded. Keep this file somewhere safe.', 'success');
-        } catch {
-          jsonMsg.show('Network error. Please try again.', 'error');
+          await saveFile(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `plannr-backup-${today()}.json`, 'Save backup');
+          jsonMsg.show('Backup saved. Keep this file somewhere safe.', 'success');
+        } catch (err) {
+          jsonMsg.show('Could not save the backup: ' + errText(err), 'error');
         } finally {
           downloadJsonBtn.disabled = false;
         }
@@ -407,11 +448,11 @@
             return;
           }
           const blob = await res.blob();
-          download(blob, `plannr-backup-${today()}.db.enc`);
+          await saveFile(blob, `plannr-backup-${today()}.db.enc`, 'Save encrypted backup');
           encExportPass.value = '';
-          encExportMsg.show('Encrypted backup downloaded. Keep the passphrase somewhere separate from the file.', 'success');
-        } catch {
-          encExportMsg.show('Network error. Please try again.', 'error');
+          encExportMsg.show('Encrypted backup saved. Keep the passphrase somewhere separate from the file.', 'success');
+        } catch (err) {
+          encExportMsg.show('Could not save the encrypted backup: ' + errText(err), 'error');
         } finally {
           encExportBtn.disabled = false;
         }
@@ -476,12 +517,15 @@
         csvMsg.clear();
         downloadCsvBtn.disabled = true;
         try {
+          // A failed fetch here must abort the whole export, not silently produce a CSV with a
+          // missing/empty section that looks complete — check res.ok before trusting the body.
+          const okJson = (r) => { if (!r.ok) throw new Error('CSV export: ' + r.url + ' failed (' + r.status + ')'); return r.json(); };
           const [ci, co, ln, ct, cp] = await Promise.all([
-            fetch('/api/cash-in').then((r) => r.json()),
-            fetch('/api/cash-out').then((r) => r.json()),
-            fetch('/api/loans').then((r) => r.json()),
-            fetch('/api/contracts').then((r) => r.json()),
-            fetch('/api/contractor-payments').then((r) => r.json()),
+            fetch('/api/cash-in').then(okJson),
+            fetch('/api/cash-out').then(okJson),
+            fetch('/api/loans').then(okJson),
+            fetch('/api/contracts').then(okJson),
+            fetch('/api/contractor-payments').then(okJson),
           ]);
 
           const contractsList = ct.contracts || [];
@@ -558,10 +602,10 @@
         try {
           const res = await fetch('/api/ledgers/csv');
           if (!res.ok) { const d = await res.json().catch(() => ({})); ledgerCsvMsg.show(d.error || 'Could not build the Ledger List CSV.', 'error'); return; }
-          download(await res.blob(), `plannr-ledger-list-${today()}.csv`);
-          ledgerCsvMsg.show('Ledger List downloaded.', 'success');
-        } catch {
-          ledgerCsvMsg.show('Network error. Please try again.', 'error');
+          await saveFile(await res.blob(), `plannr-ledger-list-${today()}.csv`, 'Save Ledger List CSV');
+          ledgerCsvMsg.show('Ledger List saved.', 'success');
+        } catch (err) {
+          ledgerCsvMsg.show('Could not save the Ledger List CSV: ' + errText(err), 'error');
         } finally {
           downloadLedgerCsvBtn.disabled = false;
         }
@@ -574,7 +618,7 @@
         if (!file) { ledgerCsvMsg.show('Choose an edited Ledger List CSV first.', 'error'); return; }
         const passphrase = ledgerCsvBackupPass.value;
         if (!passphrase) { ledgerCsvMsg.show('Enter a passphrase for the automatic safety backup first.', 'error'); return; }
-        if (!window.confirm('This replaces the ledger category list. A safety backup downloads first; the import only proceeds if that succeeds.')) return;
+        if (!window.confirm('This replaces the ledger category list. A safety backup saves first; the import only proceeds once you confirm you have it.')) return;
 
         importLedgerCsvBtn.disabled = true;
         try {
@@ -596,7 +640,24 @@
             ledgerCsvMsg.show('Safety backup failed (network error) — import aborted.', 'error');
             return;
           }
-          download(backupBlob, `plannr-backup-${today()}.db.enc`);
+
+          const backupFname = `plannr-backup-${today()}.db.enc`;
+          try {
+            await saveFile(backupBlob, backupFname, 'Save safety backup');
+          } catch (err) {
+            ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
+            return;
+          }
+
+          // A save/share call succeeding isn't proof the user actually has the file in hand — make
+          // them say so explicitly before the ledger list, and every historical spend reference riding
+          // on it, actually changes. Cancelling here aborts the import; nothing has been imported yet.
+          const gotIt = await confirmModal({
+            title: 'Confirm you have the safety backup',
+            message: `"${backupFname}" was just saved. Before the ledger list is replaced, confirm you actually have this file — check where it was saved or shared to. If you're not sure, cancel and look first.`,
+            confirmLabel: 'I have the backup — continue',
+          });
+          if (!gotIt) { ledgerCsvMsg.show('Import cancelled — locate the safety backup, then try again.', 'error'); return; }
 
           const csvText = await file.text();
           const res = await fetch('/api/ledgers/csv', {
@@ -608,7 +669,7 @@
           if (res.ok) {
             ledgerCsvBackupPass.value = '';
             ledgerCsvFile.value = '';
-            ledgerCsvMsg.show('Ledger List imported ✓. A safety backup was downloaded first — keep the passphrase somewhere separate from the file.', 'success');
+            ledgerCsvMsg.show('Ledger List imported ✓. Keep the safety backup\'s passphrase somewhere separate from the file.', 'success');
           } else {
             ledgerCsvMsg.show(data.error || 'Import failed.', 'error');
             showLedgerRowErrors(data.rowErrors);
