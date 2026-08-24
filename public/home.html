@@ -6,6 +6,8 @@
   <script type="importmap">
   { "imports": {
       "@sqlite.org/sqlite-wasm": "/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs",
+      "@capacitor/core": "/node_modules/@capacitor/core/dist/index.js",
+      "@capacitor/local-notifications": "/node_modules/@capacitor/local-notifications/dist/esm/index.js",
       "node:fs": "/node-builtins-browser-stub.js",
       "node:path": "/node-builtins-browser-stub.js",
       "node:sqlite": "/node-builtins-browser-stub.js"
@@ -77,6 +79,22 @@
     .navbtn:active { background: var(--panel-2); }
     .navbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+    /* ---- Daily report reminders (Phase 6b) ---- */
+    .notif-settings { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--accent-line); }
+    .notif-hint { font-size: 13px; opacity: 0.75; margin: 4px 0 12px; }
+    .notif-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .notif-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--accent-line); }
+    .notif-empty { opacity: 0.6; font-size: 13px; justify-content: flex-start !important; }
+    .notif-time { font-family: var(--font-head); letter-spacing: 0.04em; }
+    .notif-del, .notif-btn-sm { font-size: 12px; padding: 6px 10px; background: var(--panel-2); color: var(--accent); border: 1px solid var(--accent-line); cursor: pointer; }
+    .notif-del:hover, .notif-btn-sm:hover:not(:disabled) { border-color: var(--accent); color: #ffb020; }
+    .notif-btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+    .notif-add { display: flex; gap: 8px; align-items: center; }
+    .notif-add input[type="time"] { background: var(--panel); color: inherit; border: 1px solid var(--accent-line); padding: 6px 8px; font-family: inherit; }
+    .notif-msg { font-size: 13px; margin: 10px 0 0; }
+    .notif-msg.error { color: #ff6b6b; }
+    .notif-msg.info { opacity: 0.75; }
+
     /* Brand column (the contained Prism box was removed): on desktop the shared
        style anchors the tagline to the bottom to fill space the box used to take —
        with the box gone, group the header content at the top so there's no empty
@@ -127,6 +145,17 @@
           <!-- Part D — last login (time + IP) and any failed attempts since then. Populated from /api/me;
                built via textContent (CSP-safe). The failed-attempts note is the part that does the work. -->
           <p class="home-lastlogin" id="lastLogin" hidden></p>
+        </div>
+
+        <div class="notif-settings">
+          <p class="lead">Daily report reminders</p>
+          <p class="notif-hint">A reminder to open Overview and share today's report. Up to 5 times a day — nothing is sent automatically.</p>
+          <ul class="notif-list" id="notifList" aria-label="Configured reminder times"></ul>
+          <div class="notif-add">
+            <input type="time" id="notifTimeInput" aria-label="New reminder time">
+            <button type="button" id="notifAddBtn" class="notif-btn-sm">Add</button>
+          </div>
+          <p class="notif-msg" id="notifMsg" hidden></p>
         </div>
       </section>
     </main>
@@ -189,6 +218,107 @@
         // TODO: route to the target page when it exists.
         void target;
       });
+    });
+
+    // ---------------------------------------------------------------------------
+    // Phase 6b — daily report reminders. Replaces the Phase 1.3 deleted email scheduler: a local
+    // notification (native Android only; a plain no-op under server.js/local-server.js) that opens
+    // Overview on tap. Persisted via /api/notification-times (the settings table, daily_report_times
+    // key). local-bootstrap.js already imports notifications.js unconditionally, so by the time this
+    // runs its module is cached — this import() just retrieves the same instance.
+    const notif = await import('/notifications.js');
+    const notifList = document.getElementById('notifList');
+    const notifTimeInput = document.getElementById('notifTimeInput');
+    const notifAddBtn = document.getElementById('notifAddBtn');
+    const notifMsg = document.getElementById('notifMsg');
+    let notifTimes = [];
+
+    function fmtTime12h(hhmm) {
+      const [h, m] = hhmm.split(':').map(Number);
+      const period = h >= 12 ? 'PM' : 'AM';
+      const h12 = ((h + 11) % 12) + 1;
+      return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+    }
+
+    function showNotifMsg(text, kind) {
+      notifMsg.textContent = text;
+      notifMsg.className = 'notif-msg' + (kind ? ' ' + kind : '');
+      notifMsg.hidden = !text;
+    }
+
+    function renderNotifList() {
+      notifList.replaceChildren();
+      if (!notifTimes.length) {
+        const li = document.createElement('li');
+        li.className = 'notif-empty';
+        li.textContent = 'No reminders set.';
+        notifList.append(li);
+      } else {
+        notifTimes.forEach((t) => {
+          const li = document.createElement('li');
+          const span = document.createElement('span');
+          span.className = 'notif-time';
+          span.textContent = fmtTime12h(t);
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'notif-del';
+          del.textContent = 'Remove';
+          del.dataset.time = t;
+          li.append(span, del);
+          notifList.append(li);
+        });
+      }
+      const full = notifTimes.length >= 5;
+      notifAddBtn.disabled = full;
+      notifTimeInput.disabled = full;
+    }
+
+    async function persistNotifTimes(times) {
+      const r = await fetch('/api/notification-times', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ times }),
+      });
+      return r.ok;
+    }
+
+    function describeDegrade(result) {
+      if (result.reason === 'permission-denied') {
+        return { text: 'Saved — but notifications are off in Android settings, so you won’t get a reminder until you allow them.', kind: 'error' };
+      }
+      return { text: 'Saved.', kind: 'info' };
+    }
+
+    notifAddBtn.addEventListener('click', async () => {
+      const val = notifTimeInput.value; // "HH:MM" from <input type="time">, or "" if nothing picked
+      if (!val) { showNotifMsg('Pick a time first.', 'error'); return; }
+      if (notifTimes.includes(val)) { showNotifMsg('That time is already set.', 'error'); return; }
+      if (notifTimes.length >= 5) { showNotifMsg('Up to 5 reminders — remove one first.', 'error'); return; }
+      const next = [...notifTimes, val].sort();
+      if (!(await persistNotifTimes(next))) { showNotifMsg('Could not save — try again.', 'error'); return; }
+      notifTimes = next;
+      renderNotifList();
+      notifTimeInput.value = '';
+      const result = await notif.onTimesChanged(notifTimes); // the "user first sets a time" moment — may prompt for permission
+      const { text, kind } = describeDegrade(result);
+      showNotifMsg(text, kind);
+    });
+
+    notifList.addEventListener('click', async (e) => {
+      const del = e.target.closest('.notif-del');
+      if (!del) return;
+      const next = notifTimes.filter((t) => t !== del.dataset.time);
+      if (!(await persistNotifTimes(next))) { showNotifMsg('Could not save — try again.', 'error'); return; }
+      notifTimes = next;
+      renderNotifList();
+      await notif.onTimesChanged(notifTimes); // cancel-and-reschedule from the new (shorter) list; never prompts on removal
+      showNotifMsg('Removed.', 'info');
+    });
+
+    fetch('/api/notification-times').then((r) => r.json()).then((data) => {
+      notifTimes = Array.isArray(data.times) ? data.times : [];
+      renderNotifList();
+      return notif.onAppStart(notifTimes); // reapply on launch; never prompts for permission
     });
 
   });

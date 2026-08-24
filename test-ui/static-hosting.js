@@ -107,6 +107,36 @@ function attachErrorCollector(page) {
       check(`${p}: #bySelect has entries`, optionCount > 0, `optionCount=${optionCount}`);
       check(`${p}: no console/page errors`, errors.length === 0, errors.join(' | '));
     }
+
+    // Notification settings UI (Phase 6b) — renders, times save through /api/notification-times and
+    // reload correctly, no console/page errors. The actual notification firing is native-only and
+    // can't be tested off-device (Capacitor.isNativePlatform() is false under local-server.js) —
+    // that's out of scope here by design; this only proves the settings screen itself works.
+    const notifTimes = () => page.$$eval('#notifList li .notif-time', (els) => els.map((e) => e.textContent));
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+    check('home.html: notification settings render empty', (await page.$eval('#notifList', (el) => el.textContent)).includes('No reminders set'), '');
+
+    await page.fill('#notifTimeInput', '07:30');
+    await page.click('#notifAddBtn');
+    await page.waitForTimeout(300);
+    await page.fill('#notifTimeInput', '20:00');
+    await page.click('#notifAddBtn');
+    await page.waitForTimeout(300);
+    check('home.html: two added times both render', (await notifTimes()).length === 2, JSON.stringify(await notifTimes()));
+
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' }); // fresh navigation — proves server-side persistence, not just page memory
+    await page.waitForTimeout(500);
+    check('home.html: times reload after navigating away and back', (await notifTimes()).length === 2, JSON.stringify(await notifTimes()));
+
+    await page.click('.notif-del');
+    await page.waitForTimeout(300);
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+    check('home.html: removal also persists after reload', (await notifTimes()).length === 1, JSON.stringify(await notifTimes()));
+
+    check('home.html notification settings: no console/page errors', errors.length === 0, errors.join(' | '));
   } finally {
     await browser.close();
     server.kill();

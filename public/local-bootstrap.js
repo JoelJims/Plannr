@@ -20,6 +20,13 @@
 // checks for an ETag response header — express.static sets one by default (server.js relies on this
 // default; see its own comment on the static middleware), and local-server.js's plain http server
 // does not set one at all. No request ever 404s, so there is nothing for Chrome to log either way.
+
+// Phase 6b — registers the local-notification tap listener (always opens Overview). Unconditional
+// and outside the local-only branch below: it must be active on EVERY page under EVERY environment
+// so a tap lands on Overview no matter which page happened to be open when the app was resumed, and
+// it is a deliberate no-op under server.js/local-server.js (no native Capacitor bridge there).
+await import('./notifications.js');
+
 const probe = await fetch(location.pathname, { method: 'HEAD' }).catch(() => null);
 if (probe && probe.headers.has('etag')) {
   console.log('[local-bootstrap] a real API server is present (ETag from express.static) — leaving fetch alone (not local-only mode).');

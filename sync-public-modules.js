@@ -26,7 +26,9 @@ const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
 
 const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js'];
-const VENDOR_PACKAGES = [path.join('@sqlite.org', 'sqlite-wasm'), 'scrypt-js'];
+// Phase 6b added @capacitor/core + @capacitor/local-notifications to the import maps (notifications.js) —
+// same reasoning as the two below: those absolute paths only resolve if the whole package is here too.
+const VENDOR_PACKAGES = [path.join('@sqlite.org', 'sqlite-wasm'), 'scrypt-js', path.join('@capacitor', 'core'), path.join('@capacitor', 'local-notifications')];
 
 for (const f of FILES) {
   fs.copyFileSync(path.join(ROOT, f), path.join(PUBLIC, f));
@@ -42,5 +44,17 @@ for (const pkg of VENDOR_PACKAGES) {
   fs.cpSync(src, dest, { recursive: true });
   console.log(`[sync-public-modules] copied node_modules/${pkg}`);
 }
+
+// @capacitor/local-notifications' ESM entry (dist/esm/index.js) re-exports/dynamically imports two
+// sibling files by extension-less relative specifier (./web, ./definitions) — fine for a bundler
+// (which tries .js/.ts extensions itself) or Node's own resolver, but a literal 404 under a browser's
+// native ES module loader, which requires the exact file. Patch the COPIED file only; the real
+// node_modules install (what Node/npm actually use) is left untouched.
+const lnIndexPath = path.join(publicNodeModules, '@capacitor', 'local-notifications', 'dist', 'esm', 'index.js');
+const lnIndexSrc = fs.readFileSync(lnIndexPath, 'utf8')
+  .replace("import('./web')", "import('./web.js')")
+  .replace("from './definitions'", "from './definitions.js'");
+fs.writeFileSync(lnIndexPath, lnIndexSrc);
+console.log('[sync-public-modules] patched @capacitor/local-notifications/dist/esm/index.js (extension-less relative imports)');
 
 console.log('[sync-public-modules] done.');
