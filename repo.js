@@ -219,6 +219,175 @@ const ledgerCustoms = {
   remove: (name) => lcStmt.remove.run(name),
 };
 
+// ── Ledger taxonomy (Phase 10b) — user-editable via CSV export/import on the Data Backup page.
+// `code` IS the identity (no separate internal id); a rename keeps the same code so historical
+// cash_out/contract/contractor_payments rows never orphan. ────────────────────────────────────────
+const ledgerStmt = {
+  mains: db.prepare('SELECT code, name FROM ledger_mains ORDER BY sort_order ASC'),
+  allSubs: db.prepare('SELECT code, main_code AS mainCode, name FROM ledger_subs ORDER BY sort_order ASC'),
+  deleteMains: db.prepare('DELETE FROM ledger_mains'),
+  deleteSubs: db.prepare('DELETE FROM ledger_subs'),
+  insMain: db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)'),
+  insSub: db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)'),
+};
+
+const MAIN_CODE_RE = /^\d+\.0$/;
+const SUB_CODE_RE = /^(\d+)\.(\d+)$/;
+const LEDGER_CSV_HEADER = ['Code', 'Main ledger', 'Sub-code', 'Sub-ledger'];
+
+function ledgerList() {
+  const subs = ledgerStmt.allSubs.all();
+  return ledgerStmt.mains.all().map((m) => ({
+    code: m.code, name: m.name,
+    subLedgers: subs.filter((s) => s.mainCode === m.code).map((s) => ({ code: s.code, name: s.name })),
+  }));
+}
+
+// How many rows across the three ledger-bearing tables reference each of `codes` (main or sub) —
+// counting EVERY row, not just live ones: a soft-deleted row can be restored later, so its stored
+// code still has to resolve to something real. contract_services has no ledger_code column at all,
+// so it is not part of this check.
+function ledgerUsageCounts(codes) {
+  const counts = {};
+  if (!codes.length) return counts;
+  const placeholders = codes.map(() => '?').join(',');
+  for (const table of ['cash_out', 'contract', 'contractor_payments']) {
+    for (const col of ['ledger_code', 'subledger_code']) {
+      const rows = db.prepare(`SELECT ${col} AS code, COUNT(*) AS n FROM ${table} WHERE ${col} IN (${placeholders}) GROUP BY ${col}`).all(...codes);
+      for (const r of rows) counts[r.code] = (counts[r.code] || 0) + r.n;
+    }
+  }
+  return counts;
+}
+
+function ledgerReplaceAll(mains, subs) {
+  db.exec('BEGIN');
+  try {
+    ledgerStmt.deleteSubs.run();
+    ledgerStmt.deleteMains.run();
+    mains.forEach((m, i) => ledgerStmt.insMain.run(m.code, m.name, i));
+    subs.forEach((s, i) => ledgerStmt.insSub.run(s.code, s.mainCode, s.name, i));
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+function ledgerToCsv(list) {
+  const esc = (v) => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const rows = [LEDGER_CSV_HEADER];
+  for (const L of list) {
+    rows.push([L.code, L.name, '', '']);
+    for (const s of L.subLedgers) rows.push([L.code, L.name, s.code, s.name]);
+  }
+  return '﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
+}
+
+// The app's own 4-column export shape (Code, Main ledger, Sub-code, Sub-ledger) — NOT a general CSV
+// library: quoted fields with embedded commas/quotes/newlines (RFC 4180), nothing more.
+function parseLedgerCsv(text) {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  const s = text.replace(/^﻿/, ''); // strip a UTF-8 BOM if present (Excel/Sheets add one on save)
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\r') { /* swallow; \r\n and a bare \r both end on the \n (or EOF) below */ }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim() !== '')); // drop wholly-blank rows (e.g. a trailing newline)
+}
+
+// Validates a full Ledger List CSV against every rule in Phase 10b's spec and returns either
+// { ok:true, mains, subs } (ready for ledgerReplaceAll) or { ok:false, error, rowErrors }. The
+// WHOLE file is rejected on any failure — this never does a partial import.
+function validateLedgerCsv(csvText) {
+  let rows;
+  try { rows = parseLedgerCsv(csvText); } catch (e) { return { ok: false, error: 'Could not parse the file as CSV: ' + e.message, rowErrors: [] }; }
+  if (!rows.length) return { ok: false, error: 'The file is empty.', rowErrors: [] };
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const expected = LEDGER_CSV_HEADER.map((h) => h.toLowerCase());
+  if (header.length !== 4 || !expected.every((h, i) => header[i] === h)) {
+    return { ok: false, error: 'Expected columns "Code, Main ledger, Sub-code, Sub-ledger" as the first row.', rowErrors: [] };
+  }
+
+  const rowErrors = [];
+  const mains = [];
+  const subRowsPending = [];
+  const seenCodes = new Set();
+  const declaredMains = new Set();
+
+  rows.slice(1).forEach((r, i) => {
+    const rowNum = i + 2; // 1-based; row 1 is the header
+    const code = (r[0] || '').trim();
+    const mainLedger = (r[1] || '').trim();
+    const subCode = (r[2] || '').trim();
+    const subLedger = (r[3] || '').trim();
+
+    if (!subCode) {
+      if (!code || !MAIN_CODE_RE.test(code)) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: Code "${code}" is malformed — a main ledger code must be "N.0".` }); return; }
+      if (!mainLedger) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: main ledger "${code}" has no name.` }); return; }
+      if (seenCodes.has(code)) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: code "${code}" is duplicated.` }); return; }
+      seenCodes.add(code); declaredMains.add(code);
+      mains.push({ code, name: mainLedger });
+    } else {
+      const m = SUB_CODE_RE.exec(subCode);
+      if (!m) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: sub-code "${subCode}" is malformed — must be "N.M".` }); return; }
+      if (!subLedger) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: sub-ledger "${subCode}" has no name.` }); return; }
+      if (seenCodes.has(subCode)) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: code "${subCode}" is duplicated.` }); return; }
+      const impliedMain = m[1] + '.0';
+      if (!code || code !== impliedMain) { rowErrors.push({ row: rowNum, message: `Row ${rowNum}: sub-code "${subCode}" doesn't match its Code column ("${code}") — expected "${impliedMain}".` }); return; }
+      seenCodes.add(subCode);
+      subRowsPending.push({ rowNum, code: subCode, mainCode: code, name: subLedger });
+    }
+  });
+
+  const subs = [];
+  for (const p of subRowsPending) {
+    if (!declaredMains.has(p.mainCode)) {
+      rowErrors.push({ row: p.rowNum, message: `Row ${p.rowNum}: sub-ledger "${p.code}" references main "${p.mainCode}", which is not present in this file.` });
+      continue;
+    }
+    subs.push({ code: p.code, mainCode: p.mainCode, name: p.name });
+  }
+
+  if (rowErrors.length) return { ok: false, error: `${rowErrors.length} row(s) failed validation.`, rowErrors };
+
+  // The critical check: a code missing from the new file must not still be in use.
+  const newCodes = new Set([...mains.map((m) => m.code), ...subs.map((s) => s.code)]);
+  const oldCodes = [...ledgerStmt.mains.all().map((m) => m.code), ...ledgerStmt.allSubs.all().map((s) => s.code)];
+  const removedCodes = oldCodes.filter((c) => !newCodes.has(c));
+  if (removedCodes.length) {
+    const counts = ledgerUsageCounts(removedCodes);
+    const stillUsed = removedCodes.filter((c) => counts[c] > 0).map((c) => ({ code: c, rows: counts[c] }));
+    if (stillUsed.length) {
+      return {
+        ok: false,
+        error: 'Some codes removed from this file are still used by existing rows: ' + stillUsed.map((u) => `${u.code} (${u.rows} row${u.rows === 1 ? '' : 's'})`).join(', ') + '.',
+        rowErrors: stillUsed.map((u) => ({ row: null, message: `Code "${u.code}" is missing from the file but is still used by ${u.rows} existing row${u.rows === 1 ? '' : 's'}.` })),
+      };
+    }
+  }
+
+  return { ok: true, mains, subs };
+}
+
+const ledgers = {
+  list: ledgerList,
+  usageCounts: ledgerUsageCounts,
+  replaceAll: ledgerReplaceAll,
+  toCsv: ledgerToCsv,
+  validateImport: validateLedgerCsv,
+};
+
 // ── delete-account: rows the user authored ────────────────────────────────────────────────────────
 const authoredStmt = {
   cashIn: db.prepare('SELECT COUNT(*) AS n FROM cash_in WHERE by_user_id = ?'),
@@ -254,5 +423,5 @@ function configure({ contractCols, backupTables, backupCols }) {
 
 export {
   crud, trash, configure,
-  overview, contract, ledgerCustoms, authoredCount, backup,
+  overview, contract, ledgerCustoms, ledgers, authoredCount, backup,
 };

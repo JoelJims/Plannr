@@ -15,6 +15,7 @@
 // URL fails exactly the way a tap would, and asserts zero console/page errors on every page.
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const { chromium } = require('playwright');
 
 const ROOT = path.join(__dirname, '..');
@@ -161,6 +162,92 @@ function attachErrorCollector(page) {
 
     const badRange = await page.evaluate(() => fetch('/api/overview/pdf?start=2026-06-01&end=2026-01-01').then((r) => r.json()));
     check('/api/overview/pdf: start-after-end range is rejected', /on or before/i.test(badRange.error || ''), JSON.stringify(badRange));
+
+    // ---------------------------------------------------------------------------------------------
+    // Ledger List CSV (Phase 10b) — export (via the real button), edit+re-import (rename preserving
+    // spend), addition, and every rejection case from the spec. The rejection/rename/addition cases
+    // go straight through fetch() to /api/ledgers/csv — the exact same route the real Import button
+    // calls — since juggling file-input + confirm-dialog + passphrase-derived encryption for every
+    // one of these would test Playwright's plumbing more than the app's validation logic.
+    // ---------------------------------------------------------------------------------------------
+    await page.goto(BASE + '/data-backup.html', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#downloadLedgerCsvBtn')]);
+    const exportedCsv = fs.readFileSync(await dl.path(), 'utf8').replace(/^﻿/, '');
+    check('Ledger List export: correct header', exportedCsv.split(/\r?\n/)[0] === 'Code,Main ledger,Sub-code,Sub-ledger', exportedCsv.slice(0, 60));
+    check('Ledger List export: contains a known ledger', exportedCsv.includes('6.0,MATERIALS — STRUCTURAL'), '');
+    check('Ledger List export path: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    const toLedgerCsv = (rows) => ['Code,Main ledger,Sub-code,Sub-ledger', ...rows.map((r) => r.map((v) => (/[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v)).join(','))].join('\n');
+    const fetchLedgerRows = () => page.evaluate(async () => {
+      const { ledgers } = await (await fetch('/api/ledgers')).json();
+      const rows = [];
+      for (const L of ledgers) {
+        rows.push([L.code, L.name, '', '']);
+        for (const s of L.subLedgers) rows.push([L.code, L.name, s.code, s.name]);
+      }
+      return rows;
+    });
+    const postLedgerCsv = (csv) => page.evaluate(
+      (csvText) => fetch('/api/ledgers/csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ csv: csvText }) })
+        .then(async (r) => ({ status: r.status, body: await r.json() })),
+      csv
+    );
+    const seedDebit = (uid, ledgerCode, subledgerCode) => page.evaluate(
+      ({ uid, ledgerCode, subledgerCode }) => fetch('/api/cash-out', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountRupees: '500.00', txDate: '2026-01-01', byType: 'user', byUserId: uid, ledgerCode, subledgerCode, contractScope: 'extra' }),
+      }).then(async (r) => ({ status: r.status, body: await r.json() })),
+      { uid, ledgerCode, subledgerCode }
+    );
+    const ownerId = await page.evaluate(() => fetch('/api/me').then((r) => r.json()).then((d) => d.user.id));
+
+    // ---- Rename (same code, new name) — historical spend stays attached to the CODE, not the name ----
+    const seed1 = await seedDebit(ownerId, '6.0', '6.1');
+    check('Ledger List test setup: seeded a debit against 6.1 (Cement)', seed1.status === 201, JSON.stringify(seed1.body));
+
+    let rows = await fetchLedgerRows();
+    rows = rows.map((r) => (r[2] === '6.1' ? [r[0], r[1], r[2], 'Cement (OPC 53 Grade)'] : r));
+    const renameRes = await postLedgerCsv(toLedgerCsv(rows));
+    check('Ledger List import: rename accepted', renameRes.status === 200, JSON.stringify(renameRes.body));
+
+    const afterRename = await page.evaluate(() => fetch('/api/cash-out').then((r) => r.json()));
+    const renamedRow = (afterRename.entries || []).find((e) => e.subledgerCode === '6.1');
+    check('Ledger List rename: the seeded debit still resolves to 6.1 under the NEW name', !!renamedRow && renamedRow.ledger.includes('Cement (OPC 53 Grade)'), JSON.stringify(renamedRow));
+
+    // ---- Addition — a brand-new main ledger + its Misc sub ----
+    rows = await fetchLedgerRows();
+    rows.push(['25.0', 'TEST ADDITION', '', ''], ['25.0', 'TEST ADDITION', '25.99', 'Misc']);
+    const addRes = await postLedgerCsv(toLedgerCsv(rows));
+    check('Ledger List import: addition accepted', addRes.status === 200, JSON.stringify(addRes.body));
+    const afterAdd = await page.evaluate(() => fetch('/api/ledgers').then((r) => r.json()));
+    check('Ledger List addition: new main appears', afterAdd.ledgers.some((l) => l.code === '25.0' && l.name === 'TEST ADDITION'), '');
+
+    // ---- Rejections: each must reject the WHOLE file with a clear reason, changing nothing ----
+    const dupRes = await postLedgerCsv(toLedgerCsv([['1.0', 'A', '', ''], ['1.0', 'A', '', '']]));
+    check('Ledger List import: duplicate code rejected', dupRes.status === 400 && /duplicated/i.test(JSON.stringify(dupRes.body)), JSON.stringify(dupRes.body));
+
+    const malformedRes = await postLedgerCsv(toLedgerCsv([['1.X', 'A', '', '']]));
+    check('Ledger List import: malformed main code rejected', malformedRes.status === 400 && /malformed/i.test(JSON.stringify(malformedRes.body)), JSON.stringify(malformedRes.body));
+
+    // 9.1 declares its parent as 9.0 (matches its own Code column) — but 9.0 is never declared as a
+    // main row anywhere in this file.
+    const orphanSubRes = await postLedgerCsv(toLedgerCsv([['1.0', 'A', '', ''], ['9.0', 'Electrical', '9.1', 'Wires']]));
+    check('Ledger List import: sub referencing an undeclared main rejected', orphanSubRes.status === 400 && /not present in this file/i.test(JSON.stringify(orphanSubRes.body)), JSON.stringify(orphanSubRes.body));
+
+    // The critical check: a code with real spend against it can never go missing from the file.
+    const seed2 = await seedDebit(ownerId, '1.0', '1.1');
+    check('Ledger List test setup: seeded a debit against 1.1', seed2.status === 201, JSON.stringify(seed2.body));
+    const removedRes = await postLedgerCsv(toLedgerCsv([['2.0', 'B', '', '']])); // a valid file that simply omits 1.0/1.1
+    const flags1p1 = (removedRes.body.rowErrors || []).some((e) => e.message.includes('"1.1"'));
+    check('Ledger List import: removing a code still in use is rejected', removedRes.status === 400 && flags1p1 && /still used/i.test(removedRes.body.error || ''), JSON.stringify(removedRes.body));
+
+    // None of the rejected imports actually changed anything.
+    const finalLedgers = await page.evaluate(() => fetch('/api/ledgers').then((r) => r.json()));
+    check('Ledger List: rejected imports left the taxonomy untouched (25.0 still present)', finalLedgers.ledgers.some((l) => l.code === '25.0'), '');
+    check('Ledger List section: no console/page errors', errors.length === 0, errors.join(' | '));
   } finally {
     await browser.close();
     server.kill();

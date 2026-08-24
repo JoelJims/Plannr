@@ -1,24 +1,25 @@
-// Plannr — the fixed 24-ledger reference list (Phase 10a).
+// Plannr — seed data for the ledger taxonomy (Phase 10b).
 //
-// This is a FIXED reference taxonomy, NOT an editable table. It maps a
-// cash_out.ledger_code / subledger_code (e.g. "6.2") to a human-readable
-// category name. Single source of truth, usable by BOTH sides:
-//   • server:  const { LEDGERS } = require('./public/ledgers.js');
-//   • browser: <script type="module" src="/ledgers.js"></script>  ->  window.LEDGERS
+// Phase 10a shipped the 24-category taxonomy as this static array, the RUNTIME source every
+// consumer read directly. Phase 10b moves the runtime source into the database (ledger_mains /
+// ledger_subs tables — see db.js's init()) so the household can edit it via CSV, while keeping
+// history intact (a row's code is its identity across a re-import; existing cash_out/contract/
+// contractor_payments rows keep pointing at the same code even if its name changes).
 //
-// Phase 10a replaces the old 23-category phase-based taxonomy with a 24-category one
-// derived from the real construction contract and the owner's own tracking spreadsheet.
-// Two structural additions over the old taxonomy:
-//   1. Every main ledger now has a fixed "Misc" sub-ledger, coded N.99 (e.g. 6.99, 24.99) —
-//      a REAL code that rolls up under its parent in the Overview pie, distinct from CUSTOM.
-//   2. The CUSTOM mechanism (ledger_code/subledger_code = 'CUSTOM' + a typed free-text name)
-//      is unchanged — still available on every ledger and sub-ledger picker, exactly as before.
+// This file is now ONLY seed data: db.js's init() imports it and inserts these rows into
+// ledger_mains/ledger_subs the FIRST time those tables are empty (a fresh install, or an
+// upgrade from a pre-10b database). After that first seed, nothing reads this file again — the
+// live taxonomy lives entirely in the database and is read via repo.ledgers.list().
 //
-// NOTE: loan INTEREST is recorded under 22.0 (Taxes, Finance & Insurance) as an ordinary
-// cash_out row — sub-ledger 22.5 (Loan interest) — so real money paid on a construction loan
-// is counted in total spend rather than being structurally invisible. It is NOT double-counted:
-// `loans.interest_rate` is informational only and drives no calculation anywhere, so there is
-// no derived interest figure for a ledger line to duplicate.
+// Moved from public/ to the project root (alongside db.js/repo.js) because db.js needs it for
+// seeding on BOTH sides (Node directly; the browser via sync-public-modules.js's copy into
+// public/, the same mechanism db.js/repo.js already use) — see that script's header for why.
+//
+// Two structural features baked into this seed, both permanent parts of the schema/validation,
+// not just data: every main ledger has a fixed "Misc" sub-ledger coded N.99 (a real code that
+// rolls up under its parent in the Overview pie, distinct from CUSTOM), and the CUSTOM mechanism
+// (ledger_code/subledger_code = 'CUSTOM' + a typed free-text name) sits alongside this table,
+// unaffected by anything in it.
 //
 // Shape: [{ code, name, subLedgers: [{ code, name }, ...] }, ...]
 export const LEDGERS = [
@@ -234,5 +235,3 @@ export const LEDGERS = [
       { code: '24.99', name: 'Misc' },
     ] },
 ];
-
-if (typeof window !== 'undefined') window.LEDGERS = LEDGERS;

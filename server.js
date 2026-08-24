@@ -6,9 +6,12 @@ try { process.loadEnvFile(); } catch { /* no .env present */ }
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
+const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const { db, init, DB_PATH, isStorageFullError } = require('./db');
-const { LEDGERS } = require('./public/ledgers.js'); // fixed 23-ledger reference (single source, shared with the browser)
+const { encrypt } = require('./backup-crypto'); // Phase 10b — the pre-Ledger-List-import safety backup
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
 // upcoming-payment day counts. IST has no DST, so no seasonal complexity.
@@ -106,10 +109,40 @@ app.get('/api/users', requireApiAuth, (req, res) => {
   res.json({ users: USERS_ROSTER_STMT.all() });
 });
 
+// Phase 10b — the fixed ledger taxonomy itself (ledger_mains/ledger_subs), user-editable via CSV on
+// the Data Backup page. GET returns the current list for dropdowns; the CSV pair is export/import.
+app.get('/api/ledgers', requireApiAuth, (req, res) => {
+  res.json({ ledgers: LEDGERS });
+});
+app.get('/api/ledgers/csv', requireApiAuth, (req, res) => {
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="plannr-ledger-list-${istDateStamp()}.csv"`);
+  res.send(repo.ledgers.toCsv(LEDGERS));
+});
+// Validate fully -> replace in ONE transaction -> refresh the in-memory cache. The mandatory
+// pre-import encrypted backup (non-negotiable per spec) is sequenced by the CLIENT, which must call
+// POST /api/backup/export-encrypted and have it succeed before it ever calls this route — appropriate
+// for a single-user app where the only person who could skip that step is the same person the
+// safety net protects, but noted here because it is a real design choice, not enforced server-side.
+app.post('/api/ledgers/csv', requireApiAuth, (req, res) => {
+  const csvText = typeof req.body.csv === 'string' ? req.body.csv : '';
+  if (!csvText.trim()) return res.status(400).json({ error: 'No CSV content received.' });
+  const v = repo.ledgers.validateImport(csvText);
+  if (!v.ok) return res.status(400).json({ error: v.error, rowErrors: v.rowErrors });
+  try {
+    repo.ledgers.replaceAll(v.mains, v.subs);
+  } catch (e) {
+    return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
+  }
+  refreshLedgers();
+  res.json({ ok: true, ledgers: LEDGERS });
+});
+
 // Services phase (Part E) — the caller's saved custom LEDGER names, for the debit form's pick-list.
 // FILTERED by the caller (a genuinely PER-USER list, unlike the shared household ledger tables), so
 // one user's private category names are never visible to another. Names are auto-saved on first use
-// (see saveLedgerCustom / afterWrite on cash_out). The 23 built-ins stay in ledgers.js, not here.
+// (see saveLedgerCustom / afterWrite on cash_out). The 24 built-ins live in ledger_mains/ledger_subs
+// (Phase 10b), not here — this table is only ever free-text CUSTOM names.
 app.get('/api/ledger-customs', requireApiAuth, (req, res) => {
   res.json({ customs: repo.ledgerCustoms.list() });
 });
@@ -422,8 +455,16 @@ const CONTRACT_SCOPES = new Set(['included', 'extra']);
 const CUSTOM_CODE = 'CUSTOM';
 const CUSTOM_NAME_MAX = 80;
 
-// Ledger lookups built once from the single source of truth (ledgers.js).
-const LEDGER_BY_CODE = new Map(LEDGERS.map((l) => [l.code, l]));
+// Phase 10b — the ledger taxonomy is DATA now (ledger_mains/ledger_subs, seeded from ledgers.js on
+// first run — see db.js), not a static import: it can change at runtime via the Ledger List CSV
+// import, so LEDGERS/LEDGER_BY_CODE are rebuilt on demand rather than frozen once at require time.
+// refreshLedgers() is called once below and again after every successful CSV import.
+let LEDGERS, LEDGER_BY_CODE;
+function refreshLedgers() {
+  LEDGERS = repo.ledgers.list();
+  LEDGER_BY_CODE = new Map(LEDGERS.map((l) => [l.code, l]));
+}
+refreshLedgers();
 const subBelongs = (ledgerCode, subCode) => {
   const l = LEDGER_BY_CODE.get(ledgerCode);
   return !!l && l.subLedgers.some((s) => s.code === subCode);
@@ -1803,6 +1844,46 @@ function validateBackup(data) {
 // EXPORT: one JSON object (schema version + timestamp + every ledger table as
 // arrays of full rows, incl. soft-deleted + the budget/settings). The frontend
 // downloads it via fetch, but Content-Disposition names it for direct hits too.
+// Phase 10b — full encrypted database snapshot, added specifically so the Ledger List CSV import
+// (below) has something real to trigger as its non-negotiable pre-import restore point: server.js
+// never had an encrypted, user-downloadable backup route before (only the plain-JSON ledger export
+// above, and the unattended backup-db.js cron script, which writes to disk rather than the browser).
+// VACUUM INTO a temp file first (safe to run against a live DB — see backup-db.js's own header for
+// why), encrypt it, delete the temp file, return the bytes directly — same contract as local-api.js's
+// export-encrypted, so the client-side code that calls this works identically under either backend.
+function vacuumSnapshotBytes() {
+  const tmp = path.join(os.tmpdir(), `plannr-ledger-backup-${process.pid}-${crypto.randomBytes(6).toString('hex')}.db`);
+  let handle;
+  try {
+    const destSql = tmp.split('\\').join('/'); // SQLite wants forward slashes in the SQL string literal
+    try {
+      handle = new DatabaseSync(DB_PATH, { readOnly: true });
+      handle.exec(`VACUUM INTO '${destSql}'`);
+    } catch (e) {
+      try { if (handle) handle.close(); } catch { /* ignore */ }
+      handle = new DatabaseSync(DB_PATH);
+      handle.exec(`VACUUM INTO '${destSql}'`);
+    }
+    return fs.readFileSync(tmp);
+  } finally {
+    try { if (handle) handle.close(); } catch { /* ignore */ }
+    for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + s); } catch { /* ignore */ } }
+  }
+}
+app.post('/api/backup/export-encrypted', requireApiAuth, (req, res) => {
+  const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
+  if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
+  try {
+    const plain = vacuumSnapshotBytes();
+    const enc = encrypt(plain, passphrase);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.send(enc);
+  } catch (e) {
+    if (!IS_PROD) console.error('Encrypted export failed:', e);
+    res.status(500).json({ error: 'Could not build the encrypted backup: ' + e.message });
+  }
+});
+
 app.get('/api/backup/export', requireApiAuth, (req, res) => {
   // Phase 8B — contacts (Gmail + WhatsApp numbers) are excluded unless the user opts in on the Data
   // page (?includeContacts=1). Default omits them so a shared/stored backup carries no personal data.

@@ -31,6 +31,7 @@ PLANNR-AUDIT-LIVE.md
 /public/repo.js
 /public/db-engine.js
 /public/node-builtins-browser-stub.js
+/public/ledgers.js
 /public/node_modules/
 
 # Capacitor Android — the native project itself is checked in (some of it is hand-editable), but its

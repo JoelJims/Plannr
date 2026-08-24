@@ -453,19 +453,18 @@
     </main>
   </div>
 
-  <script type="module" src="/ledgers.js"></script>
   <script src="/plannr-ui.js"></script>
   <script>
-  // Phase 4c: ledgers.js is now a real ES module, so its script tag above is deferred (modules always
-  // are) — it can no longer be guaranteed to have run by the time a later CLASSIC script executes
-  // (classic scripts run immediately, in document order, before any deferred/module script). Wrapping
-  // this whole block in DOMContentLoaded (which fires only after every deferred/module script has
-  // run) restores the ordering this page already relied on: window.LEDGERS set before it's read below.
+  // Phase 10b: the ledger taxonomy is DB-backed now, not the static ledgers.js file, so it's fetched
+  // from /api/ledgers instead of relying on a <script type="module" src="/ledgers.js"> tag's
+  // window.LEDGERS side effect. Works identically under server.js (a real HTTP round trip) and
+  // local-only mode (intercepted by the fetch shim, in-process) — same /api/* contract either way.
   document.addEventListener('DOMContentLoaded', async () => {
     // Phase 5: DOMContentLoaded does NOT wait for a deferred module's top-level await to settle
     // (verified empirically). This explicit await is what actually guarantees the fetch shim is
-    // installed before the fetch() calls below run; the module tag above just starts it early.
+    // installed before the fetch() calls below run.
     await import('/local-bootstrap.js');
+    window.LEDGERS = (await fetch('/api/ledgers').then((r) => r.json())).ledgers;
     const $ = (id) => document.getElementById(id);
     const { formatPaise: fmtPaise, formatOwed: fmtOwed, escapeHtml: esc, formatDate: fmtDate, makeMsg, createDatePicker } = window.PlannrUI;
     const LEDGERS = window.LEDGERS;
