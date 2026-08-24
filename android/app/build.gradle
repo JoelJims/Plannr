@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+// Phase 8e — release signing. Credentials live in keystore.properties at the PROJECT root (a
+// sibling of this android/ directory, NOT checked in — see .gitignore), never here in build.gradle.
+// Read lazily and guarded: a missing properties file (e.g. a fresh checkout with no keystore yet)
+// must NOT break debug builds, which never consult signingConfigs.release at all, nor should it
+// break `assembleRelease` itself — it just produces an unsigned release APK instead of failing
+// Gradle's configuration phase outright.
+def projectRootDir = rootProject.file('..')
+def keystorePropertiesFile = new File(projectRootDir, 'keystore.properties')
+def keystoreProperties = new Properties()
+def hasReleaseSigning = keystorePropertiesFile.exists()
+if (hasReleaseSigning) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
 android {
     namespace = "com.plannr.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,8 +30,19 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile new File(projectRootDir, keystoreProperties.getProperty('storeFile'))
+                storePassword keystoreProperties.getProperty('storePassword')
+                keyAlias keystoreProperties.getProperty('keyAlias')
+                keyPassword keystoreProperties.getProperty('keyPassword')
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig = hasReleaseSigning ? signingConfigs.release : null
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

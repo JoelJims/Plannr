@@ -40,3 +40,6 @@ PLANNR-AUDIT-LIVE.md
 /android/.gradle/
 /android/local.properties
 /android/capacitor-cordova-android-plugins/build/
+
+*.keystore
+keystore.properties
