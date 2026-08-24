@@ -137,6 +137,30 @@ function attachErrorCollector(page) {
     check('home.html: removal also persists after reload', (await notifTimes()).length === 1, JSON.stringify(await notifTimes()));
 
     check('home.html notification settings: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    // Overview PDF export (Phase 6a) — the native print-adapter render itself can't be exercised
+    // off-device (Capacitor.isNativePlatform() is false under local-server.js), but the route's
+    // validation and its "not native" degrade-gracefully path both can be, driven through the real
+    // UI (theme modal -> fetch -> on-screen message), not just a raw fetch.
+    await page.goto(BASE + '/overview.html', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+    await page.click('#ovPdfBtn');
+    await page.waitForTimeout(200);
+    await page.click('[data-ch="0"]'); // theme choice modal: "Light" (first option)
+    await page.waitForTimeout(500);
+    const pdfMsg = await page.$eval('#ovMsg', (el) => el.textContent).catch(() => '');
+    check('overview.html: PDF export degrades gracefully (non-native) with a clear message', /android app/i.test(pdfMsg), pdfMsg);
+    check('overview.html: PDF export path: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    const badStart = await page.evaluate(async () => {
+      const r = await fetch('/api/overview/pdf?start=not-a-date');
+      return { status: r.status, body: await r.json() };
+    });
+    check('/api/overview/pdf: bad start date is rejected before any native check', badStart.status === 400 && /start date/i.test(JSON.stringify(badStart.body)), JSON.stringify(badStart));
+
+    const badRange = await page.evaluate(() => fetch('/api/overview/pdf?start=2026-06-01&end=2026-01-01').then((r) => r.json()));
+    check('/api/overview/pdf: start-after-end range is rejected', /on or before/i.test(badRange.error || ''), JSON.stringify(badRange));
   } finally {
     await browser.close();
     server.kill();

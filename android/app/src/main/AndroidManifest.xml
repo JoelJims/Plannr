@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -24,14 +24,22 @@
 
         </activity>
 
+        <!-- Phase 6a: @capgo/capacitor-pdf-generator ships its own androidx.core.content.FileProvider
+             declaration (a different authority, for its own unused type:'share' fallback — this app
+             calls it with type:'base64' instead and shares via @capacitor/share/Filesystem using THIS
+             provider). The manifest merger matches <provider> elements by android:name, so two
+             providers of the same class collide even with different authorities/resource files;
+             tools:replace makes this app's values win outright. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
             android:exported="false"
-            android:grantUriPermissions="true">
+            android:grantUriPermissions="true"
+            tools:replace="android:authorities">
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths"></meta-data>
+                android:resource="@xml/file_paths"
+                tools:replace="android:resource"></meta-data>
         </provider>
     </application>
 
