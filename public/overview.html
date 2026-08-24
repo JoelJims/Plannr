@@ -483,10 +483,20 @@
       '#e6194b', '#42d4f4', '#ffe119', '#b23fe0', '#3cb44b', '#f58231', '#4f8cff', '#f032e6',
       '#bfef45', '#ff69b4', '#2dd4bf', '#6a4cff', '#dcbeff', '#9acd32', '#00bfff', '#ffb347',
       '#c56bff', '#aaffc3', '#c9a66b', '#a0e7ff', '#fabed4', '#fff29a', '#7cf5a0', '#8b4513'];
+    // Phase 11 audit: a 25th+ main ledger (the Ledger List CSV import allows additions) must never
+    // wrap back onto an earlier ledger's colour — that silently made two different categories look
+    // identical in the chart. The fixed 24 above are untouched; only ledgers past the palette get a
+    // generated colour. Golden-angle hue rotation (137.508°) spreads each extra hue maximally apart
+    // from every other extra one, however many get added.
+    function extraLedgerColor(extraIndex) {
+      const hue = (extraIndex * 137.508) % 360;
+      return `hsl(${hue.toFixed(1)}, 65%, 50%)`;
+    }
     const colorByCode = (code) => {
       if (code === CUSTOM_CODE) return '#cbd5e1';
       const i = LEDGERS.findIndex((l) => l.code === code);
-      return LEDGER_PALETTE[(i < 0 ? 0 : i) % LEDGER_PALETTE.length];
+      const idx = i < 0 ? 0 : i;
+      return idx < LEDGER_PALETTE.length ? LEDGER_PALETTE[idx] : extraLedgerColor(idx - LEDGER_PALETTE.length);
     };
 
     let data = null;

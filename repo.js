@@ -155,6 +155,13 @@ const cStmt = {
   paymentOnDate: db.prepare('SELECT 1 FROM contractor_payments WHERE contract_id = ? AND pay_date = ? AND deleted_at IS NULL LIMIT 1'),
   paymentsForAny: db.prepare('SELECT COUNT(*) AS n FROM contractor_payments WHERE contract_id = ?'),
   paymentContractId: db.prepare('SELECT contract_id FROM contractor_payments WHERE id = ?'),
+  // cash_out.contract_service_id -> contract_services(id) has NO ON DELETE action, so hard-deleting a
+  // contract (which CASCADEs into its contract_services) throws a raw FK error if any cash_out row —
+  // live OR in the Recycle Bin, since FK checks don't know about deleted_at — still points at one of
+  // those services. Counted the same way as paymentsForAny, so the route can guard it the same way.
+  cashOutReferencingServices: db.prepare(
+    'SELECT COUNT(*) AS n FROM cash_out WHERE contract_service_id IN (SELECT id FROM contract_services WHERE contract_id = ?)'
+  ),
   // Service one-offset guard (the safety-critical pair)
   serviceLivePriced: db.prepare('SELECT cs.id, cs.price_paise FROM contract_services cs JOIN contract c ON c.id = cs.contract_id WHERE cs.id = ? AND cs.deleted_at IS NULL AND c.deleted_at IS NULL'),
   serviceClaimedByOther: db.prepare('SELECT id, tx_date, amount_paise FROM cash_out WHERE contract_service_id = ? AND deleted_at IS NULL AND id != ?'),
@@ -182,6 +189,7 @@ const contract = {
 
   paymentsForAny: (cid) => cStmt.paymentsForAny.get(cid).n,
   paymentContractId: (id) => cStmt.paymentContractId.get(id),
+  cashOutReferencingServices: (cid) => cStmt.cashOutReferencingServices.get(cid).n,
   serviceLivePriced: (sid) => cStmt.serviceLivePriced.get(sid),
   serviceClaimedByOther: (sid, excludeId) => cStmt.serviceClaimedByOther.get(sid, excludeId),
   cashOutServiceId: (id) => cStmt.cashOutServiceId.get(id),
