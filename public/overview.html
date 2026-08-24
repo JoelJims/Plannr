@@ -752,6 +752,32 @@
       if (range.end) q.push('end=' + range.end);
       return q.length ? '&' + q.join('&') : '';
     };
+    // A failure here must NEVER be silent — this whole path (fetch, the native plugin calls) has no
+    // other diagnostic channel on-device (no adb), and there is no acceptable "nothing happened" for
+    // a user who just tapped a button. Every step below either succeeds, or calls ovMsg.show(...)
+    // with what specifically failed. withTimeout turns a stuck native call (no throw, no resolve —
+    // indistinguishable from success mid-flight) into a real, visible error after a bounded wait.
+    function withTimeout(promise, ms, label) {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s.`)), ms);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    }
+    const errText = (err) => (err && err.message) ? err.message : String(err);
+    // @capacitor/filesystem's writeFile *declares* data: string | Blob, but on-device a raw Blob
+    // failed native validation ("the 'writeFile' input parameters aren't valid") — a Blob isn't
+    // JSON-serializable across the bridge, so nothing meaningful was actually crossing it. Per the
+    // plugin's own docs, omitting `encoding` means data is read as base64 — so convert here instead.
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(reader.error || new Error('Could not read the PDF data.'));
+        reader.readAsDataURL(blob);
+      });
+    }
+
     async function downloadPdf(part) {
       ovMsg.clear();
       // Light/dark theme choice before rendering (cancel aborts).
@@ -763,24 +789,35 @@
       if (!theme) return;
       const btn = $('ovPdfBtn'); btn.disabled = true;
       try {
-        const res = await fetch(`/api/overview/pdf?part=${encodeURIComponent(part)}&theme=${theme}${pdfRangeQuery()}`);
-        if (!res.ok) { const d = await res.json().catch(() => ({})); ovMsg.show(d.error || 'Could not generate the PDF.', 'error'); return; }
+        let res;
+        try {
+          res = await withTimeout(fetch(`/api/overview/pdf?part=${encodeURIComponent(part)}&theme=${theme}${pdfRangeQuery()}`), 30000, 'PDF request');
+        } catch (err) { ovMsg.show('Could not reach the PDF endpoint: ' + errText(err), 'error'); return; }
+
+        if (!res.ok) { const d = await res.json().catch(() => ({})); ovMsg.show(d.error || `Could not generate the PDF (HTTP ${res.status}).`, 'error'); return; }
         const blob = await res.blob();
+        if (!blob || blob.size === 0) { ovMsg.show('The PDF came back empty — nothing to share.', 'error'); return; }
         const fname = `plannr-overview-${part}-${new Date().toISOString().slice(0, 10)}.pdf`;
 
         // Phase 6a — native Android: the WebView doesn't support the Web Share API's `files` member
-        // the way a full Chrome tab does, so canShare({files}) below would just be false there anyway.
-        // Go straight to Capacitor's own Filesystem+Share instead. Any failure (including the user
-        // simply dismissing the share sheet, which this plugin has no distinct signal for) falls
-        // through to the same browser path used everywhere else.
-        const { Capacitor } = await import('@capacitor/core');
+        // the way a full Chrome tab does, so canShare({files}) below would just be false there anyway
+        // — and confirmed on-device, a plain <a download> click is a dead end too (no visible effect
+        // in a WebView). Capacitor's own Filesystem+Share is the ONLY real delivery path natively, so
+        // a failure here is reported directly rather than falling through to either dead end.
+        let Capacitor;
+        try { ({ Capacitor } = await import('@capacitor/core')); }
+        catch (err) { ovMsg.show('Could not load the native bridge: ' + errText(err), 'error'); return; }
+
         if (Capacitor.isNativePlatform()) {
           try {
             const [{ Filesystem, Directory }, { Share }] = await Promise.all([import('@capacitor/filesystem'), import('@capacitor/share')]);
-            const written = await Filesystem.writeFile({ path: fname, data: blob, directory: Directory.Cache });
-            await Share.share({ files: [written.uri], title: 'Plannr', dialogTitle: 'Share report' });
-            return;
-          } catch (err) { console.error('Native share failed, falling back to a plain download:', err); }
+            const base64Data = await blobToBase64(blob);
+            const written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the PDF file');
+            // Both `url` and `files` set to the same file:// URI — some Android/OEM combinations have
+            // only honoured one or the other for attaching an actual file (vs. sharing a link).
+            await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: 'Share report' }), 20000, 'Opening the share sheet');
+          } catch (err) { ovMsg.show('Generated the PDF but could not share it: ' + errText(err), 'error'); }
+          return;
         }
 
         const file = new File([blob], fname, { type: 'application/pdf' });
@@ -792,7 +829,7 @@
         const a = document.createElement('a'); a.href = objUrl; a.download = fname;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
-      } catch { ovMsg.show('Network error generating the PDF.', 'error'); }
+      } catch (err) { ovMsg.show('Unexpected error generating the PDF: ' + errText(err), 'error'); }
       finally { btn.disabled = false; }
     }
     $('ovPdfBtn').addEventListener('click', () => downloadPdf($('ovPdfPart').value));

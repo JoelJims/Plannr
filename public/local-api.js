@@ -1204,6 +1204,19 @@ export function installFetchShim(repo) {
     return bytes;
   }
 
+  // Phase 6a follow-up — the print-adapter plugin's native call has no cancel API and, if the hidden
+  // WebView it spins up never fires onPageFinished/onLayout, its PluginCall promise simply never
+  // settles: no throw, no reject, nothing for a try/catch to catch. Without this, that hang is
+  // indistinguishable from "nothing happened" — exactly the silent failure reported on-device. This
+  // turns an infinite silent wait into a real, visible error after a bounded time.
+  function withTimeout(promise, ms, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — the native print adapter did not respond.`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
   localApp.get('/api/overview/pdf', async (req, res) => {
     const s = parseIsoDate(req.query.start); if (s.error) return res.status(400).json({ error: 'Invalid start date (YYYY-MM-DD).' });
     const e = parseIsoDate(req.query.end); if (e.error) return res.status(400).json({ error: 'Invalid end date (YYYY-MM-DD).' });
@@ -1214,6 +1227,11 @@ export function installFetchShim(repo) {
     if (!Capacitor.isNativePlatform()) {
       return res.status(503).json({ error: 'PDF export needs the Android app — this browser preview cannot generate one.' });
     }
+    if (!Capacitor.isPluginAvailable('PdfGenerator')) {
+      // Distinguishes "isNativePlatform() is true but the plugin never registered" from every other
+      // failure mode below — a real possibility the on-screen message must be able to name outright.
+      return res.status(500).json({ error: `PDF export: the PdfGenerator plugin is not available on this platform (${Capacitor.getPlatform()}). It may not have registered correctly.` });
+    }
 
     const range = { start: s.date, end: e.date };
     const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
@@ -1222,11 +1240,18 @@ export function installFetchShim(repo) {
     const html = buildOverviewPdfHtml(part, o, rows, range, theme);
 
     try {
-      const result = await PdfGenerator.fromData({ data: html, type: 'base64', documentSize: 'A4', fileName: `plannr-overview-${part}.pdf` });
-      if (result.type !== 'base64' || !result.base64) return res.status(500).json({ error: 'PDF generation did not return any data.' });
+      const result = await withTimeout(
+        PdfGenerator.fromData({ data: html, type: 'base64', documentSize: 'A4', fileName: `plannr-overview-${part}.pdf` }),
+        25000,
+        'PDF generation'
+      );
+      if (!result || result.type !== 'base64' || !result.base64) {
+        return res.status(500).json({ error: 'PDF generation returned an unexpected result: ' + JSON.stringify(result) });
+      }
       res.send(base64ToBytes(result.base64));
     } catch (err) {
-      res.status(500).json({ error: 'Could not generate the PDF: ' + (err && err.message ? err.message : 'unknown error') });
+      console.error('PDF generation failed:', err);
+      res.status(500).json({ error: 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
     }
   });
 
