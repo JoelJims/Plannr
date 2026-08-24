@@ -274,7 +274,7 @@ export function init() {
 
     -- 5. loans: one-time loan record. NO EMI/repayment logic. interest_rate is INFORMATIONAL only
     --    (drives no calculation). Interest actually PAID is recorded as an ordinary cash_out row under
-    --    ledger 22.0, sub-ledger 22.5 (Loan interest) — see public/ledgers.js — so it counts in spend.
+    --    ledger 22.0, sub-ledger 22.5 (Loan interest) — see ledger_mains/ledger_subs — so it counts in spend.
     CREATE TABLE IF NOT EXISTS loans (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise  INTEGER,                     -- paise (₹1=100)
@@ -369,10 +369,21 @@ export function init() {
   if (!db.prepare('SELECT 1 FROM ledger_mains LIMIT 1').get()) {
     const insMain = db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)');
     const insSub = db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)');
-    let order = 0;
-    for (const L of SEED_LEDGERS) {
-      insMain.run(L.code, L.name, order++);
-      for (const s of L.subLedgers) insSub.run(s.code, L.code, s.name, order++);
+    // Phase 12: these ~190 inserts were each their own autocommit transaction (a journal
+    // create/fsync/delete per row under DELETE journal mode) — 0.5-1.1s on a fresh install, the very
+    // first thing a new user waits on. One transaction for the whole seed: same rows, same order, same
+    // end state, ~7-12ms instead.
+    db.exec('BEGIN');
+    try {
+      let order = 0;
+      for (const L of SEED_LEDGERS) {
+        insMain.run(L.code, L.name, order++);
+        for (const s of L.subLedgers) insSub.run(s.code, L.code, s.name, order++);
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
     }
   }
 
@@ -753,8 +764,9 @@ export function init() {
   // tenant_id at table-CREATION time — there is no ALTER/rebuild path that adds it back. So a boot
   // where userVersion reads < 2 but the column is already gone (e.g. user_version was reset without
   // the schema being reset to match) must not attempt this INSERT.
-  const ledgerCustomsColsE = db.prepare('PRAGMA table_info(ledger_customs)').all().map((c) => c.name);
-  if (userVersion < 2 && ledgerCustomsColsE.includes('tenant_id') && chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
+  // Phase 12: check the cheap userVersion gate FIRST — short-circuits the PRAGMA call below (and
+  // everything after it) on every already-migrated boot, same as every other userVersion < 2 gate here.
+  if (userVersion < 2 && db.prepare('PRAGMA table_info(ledger_customs)').all().map((c) => c.name).includes('tenant_id') && chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
     db.prepare(
       "INSERT OR IGNORE INTO ledger_customs (tenant_id, name) " +
       "SELECT DISTINCT ?, ledger_custom_name FROM cash_out " +

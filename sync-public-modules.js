@@ -46,6 +46,33 @@ for (const f of FILES) {
   console.log(`[sync-public-modules] copied ${f}`);
 }
 
+// Phase 12 audit: cpSync above copies each whole package, but only a handful of its files are ever
+// actually reachable via an import map or a relative import from one of those files (confirmed by
+// grepping every public/*.html importmap and public/*.js import/import() against each package's own
+// entry file). These specific files are dead weight in the shipped Android bundle — confirmed via
+// `npx cap sync` byte-diffing that Capacitor's own copy step does NOT already strip them (unlike each
+// plugin's android/ native source tree, which cap sync does reduce, and which this leaves alone —
+// narrowing that further is a judgment call, not touched here).
+const PRUNE_ROOT_METADATA = ['README.md', 'README', 'LICENSE', 'LICENSE.txt', 'LICENSE.md', 'CHANGELOG.md', 'index.html'];
+const PRUNE_EXTRA = {
+  [path.join('@sqlite.org', 'sqlite-wasm')]: [
+    path.join('dist', 'node.mjs'),                     // Node-only entry; the browser importmap uses dist/index.mjs
+    path.join('dist', 'sqlite3-worker1.mjs'),           // only reachable via the Worker/OPFS APIs db-engine.js never calls
+    path.join('dist', 'sqlite3-opfs-async-proxy.js'),   // ditto — db-engine.js uses the kvvfs backend, not OPFS
+  ],
+  'scrypt-js': ['thirdparty'], // Node-side polyfills for scrypt-js's CJS entry; the app loads the browser UMD build (scrypt.js) instead
+};
+function pruneUnreachable(dir) {
+  // Recursive: source maps and TS declarations are never valid to load from any JS runtime, anywhere.
+  for (const entry of fs.readdirSync(dir, { recursive: true })) {
+    if (!/\.(map|d\.ts|d\.mts)$/i.test(entry)) continue;
+    const file = path.join(dir, entry);
+    if (fs.statSync(file, { throwIfNoEntry: false })?.isFile()) fs.rmSync(file);
+  }
+  // Root-level only: package metadata (docs/demo pages), never fetched by any import path.
+  for (const name of PRUNE_ROOT_METADATA) fs.rmSync(path.join(dir, name), { force: true });
+}
+
 const publicNodeModules = path.join(PUBLIC, 'node_modules');
 fs.mkdirSync(publicNodeModules, { recursive: true });
 for (const pkg of VENDOR_PACKAGES) {
@@ -53,6 +80,8 @@ for (const pkg of VENDOR_PACKAGES) {
   const dest = path.join(publicNodeModules, pkg);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(src, dest, { recursive: true });
+  pruneUnreachable(dest);
+  for (const rel of PRUNE_EXTRA[pkg] || []) fs.rmSync(path.join(dest, rel), { recursive: true, force: true });
   console.log(`[sync-public-modules] copied node_modules/${pkg}`);
 }
 
