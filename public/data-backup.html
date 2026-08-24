@@ -89,6 +89,8 @@
     .bk-section p { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; max-width: 54ch; }
     .bk-note { color: var(--text-faint); font-size: 12px; line-height: 1.45; margin: 12px 0 0; }
     .bk-warn { color: #ffb020; font-size: 12.5px; line-height: 1.45; margin: 0 0 12px; } /* amber-only (was coral) */
+    .ledger-csv-errors { color: #f87171; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-width: 54ch; }
+    .ledger-csv-errors ul { margin: 0; padding-left: 18px; }
     .bk-optin { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 13px; margin: 0 0 6px; cursor: pointer; max-width: 54ch; }
     .bk-optin input { flex: none; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 
@@ -243,7 +245,23 @@
         <p class="bk-note">CSV is for viewing/printing in Excel and cannot be imported back — use JSON to restore. CSV shows your live entries only (deleted rows are left out; the JSON backup keeps them).</p>
       </section>
 
-      <!-- 4. Recycle Bin (Phase 3C) — view / restore / permanently-delete soft-deleted rows. -->
+      <!-- 4. Ledger List (Phase 10b) — the fixed ledger taxonomy itself, editable via CSV. Its own
+           import path, separate from the CSV-for-Excel export above, which stays export-only. -->
+      <section class="bk-section">
+        <h2>Ledger List <span class="tag">Restorable</span></h2>
+        <p>Export the ledger category list as a CSV, edit names or add/remove categories in a spreadsheet, and re-import. A code is how the app matches a row across the round trip — rename freely, but a category still used by existing spend can't be removed.</p>
+        <div id="ledgerCsvMsg" class="msg" role="status" aria-live="polite"></div>
+        <button type="button" id="downloadLedgerCsvBtn" class="btn ghost">Download Ledger List (CSV)</button>
+
+        <p class="bk-warn">Before any import, Plannr automatically downloads a full encrypted backup as your restore point — the import only proceeds if that backup succeeds.</p>
+        <input type="file" id="ledgerCsvFile" class="file-input" accept="text/csv,.csv" aria-label="Choose an edited Ledger List CSV to import">
+        <label for="ledgerCsvBackupPass">Passphrase for the automatic safety backup</label>
+        <input type="password" id="ledgerCsvBackupPass" autocomplete="new-password" placeholder="Choose a passphrase">
+        <button type="button" id="importLedgerCsvBtn" class="btn ghost">Import Ledger List</button>
+        <div id="ledgerCsvErrors" class="ledger-csv-errors" hidden></div>
+      </section>
+
+      <!-- 4b. Recycle Bin (Phase 3C) — view / restore / permanently-delete soft-deleted rows. -->
       <section class="bk-section">
         <h2>Recycle Bin <span class="tag muted">Restore / delete</span></h2>
         <p>Everything you've deleted across Plannr is kept here. <b>Restore</b> returns a row to its page and back into the Overview totals. <b>Delete permanently</b> removes it for good — that one, unlike every other delete in the app, cannot be undone.</p>
@@ -513,6 +531,92 @@
           csvMsg.show('Could not build the CSV files. Please try again.', 'error');
         } finally {
           downloadCsvBtn.disabled = false;
+        }
+      });
+
+      // ---- Ledger List (Phase 10b) — export/import the fixed ledger taxonomy as its OWN CSV path.
+      // Separate from "CSV for Excel" above, which stays export-only, per spec. ----
+      const ledgerCsvMsg = makeMsg(document.getElementById('ledgerCsvMsg'));
+      const downloadLedgerCsvBtn = document.getElementById('downloadLedgerCsvBtn');
+      const ledgerCsvFile = document.getElementById('ledgerCsvFile');
+      const ledgerCsvBackupPass = document.getElementById('ledgerCsvBackupPass');
+      const importLedgerCsvBtn = document.getElementById('importLedgerCsvBtn');
+      const ledgerCsvErrorsEl = document.getElementById('ledgerCsvErrors');
+
+      function showLedgerRowErrors(errors) {
+        ledgerCsvErrorsEl.replaceChildren();
+        if (!errors || !errors.length) { ledgerCsvErrorsEl.hidden = true; return; }
+        const ul = document.createElement('ul');
+        errors.forEach((e) => { const li = document.createElement('li'); li.textContent = e.message; ul.appendChild(li); });
+        ledgerCsvErrorsEl.appendChild(ul);
+        ledgerCsvErrorsEl.hidden = false;
+      }
+
+      downloadLedgerCsvBtn.addEventListener('click', async () => {
+        ledgerCsvMsg.clear();
+        downloadLedgerCsvBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ledgers/csv');
+          if (!res.ok) { const d = await res.json().catch(() => ({})); ledgerCsvMsg.show(d.error || 'Could not build the Ledger List CSV.', 'error'); return; }
+          download(await res.blob(), `plannr-ledger-list-${today()}.csv`);
+          ledgerCsvMsg.show('Ledger List downloaded.', 'success');
+        } catch {
+          ledgerCsvMsg.show('Network error. Please try again.', 'error');
+        } finally {
+          downloadLedgerCsvBtn.disabled = false;
+        }
+      });
+
+      importLedgerCsvBtn.addEventListener('click', async () => {
+        ledgerCsvMsg.clear();
+        showLedgerRowErrors(null);
+        const file = ledgerCsvFile.files && ledgerCsvFile.files[0];
+        if (!file) { ledgerCsvMsg.show('Choose an edited Ledger List CSV first.', 'error'); return; }
+        const passphrase = ledgerCsvBackupPass.value;
+        if (!passphrase) { ledgerCsvMsg.show('Enter a passphrase for the automatic safety backup first.', 'error'); return; }
+        if (!window.confirm('This replaces the ledger category list. A safety backup downloads first; the import only proceeds if that succeeds.')) return;
+
+        importLedgerCsvBtn.disabled = true;
+        try {
+          // Non-negotiable: the encrypted safety backup must succeed BEFORE the import is even attempted.
+          let backupBlob;
+          try {
+            const backupRes = await fetch('/api/backup/export-encrypted', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ passphrase }),
+            });
+            if (!backupRes.ok) {
+              const d = await backupRes.json().catch(() => ({}));
+              ledgerCsvMsg.show('Safety backup failed — import aborted: ' + (d.error || 'unknown error'), 'error');
+              return;
+            }
+            backupBlob = await backupRes.blob();
+          } catch {
+            ledgerCsvMsg.show('Safety backup failed (network error) — import aborted.', 'error');
+            return;
+          }
+          download(backupBlob, `plannr-backup-${today()}.db.enc`);
+
+          const csvText = await file.text();
+          const res = await fetch('/api/ledgers/csv', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ csv: csvText }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            ledgerCsvBackupPass.value = '';
+            ledgerCsvFile.value = '';
+            ledgerCsvMsg.show('Ledger List imported ✓. A safety backup was downloaded first — keep the passphrase somewhere separate from the file.', 'success');
+          } else {
+            ledgerCsvMsg.show(data.error || 'Import failed.', 'error');
+            showLedgerRowErrors(data.rowErrors);
+          }
+        } catch {
+          ledgerCsvMsg.show('Network error during import.', 'error');
+        } finally {
+          importLedgerCsvBtn.disabled = false;
         }
       });
     })();

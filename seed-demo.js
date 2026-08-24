@@ -11,7 +11,10 @@ const { guardDbTarget } = require('./db-guard');
 guardDbTarget();                          // refuses data/plannr.db unless --i-really-mean-the-live-db
 const { db, init } = require('./db');
 init();
-const { LEDGERS } = require('./public/ledgers.js');
+// Phase 10b: the taxonomy is DB-backed now (seeded from ledgers.js on first run, but potentially
+// edited since) — read the live table, not the seed file, so a demo re-seed reflects reality.
+const { ledgers: repoLedgers } = require('./repo');
+const LEDGERS = repoLedgers.list();
 
 // ---- deterministic RNG (LCG) — no Math.random, so seed:demo reproduces exactly ----
 let _s = 20260803;

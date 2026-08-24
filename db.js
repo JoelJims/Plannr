@@ -20,6 +20,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
+import { LEDGERS as SEED_LEDGERS } from './ledgers.js';
 
 const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
 
@@ -304,8 +305,7 @@ export function init() {
 
     -- 6b. ledger_customs: a PER-USER saved list of custom ledger names (Services phase, Part E).
     --     ledger_custom_name on a cash_out row is free text, so customs were never reusable; this
-    --     makes a typed name selectable again after first use. The 23 built-in ledgers stay shared
-    --     reference data (ledgers.js) and are NOT stored here. Unlike the household ledger tables,
+    --     makes a typed name selectable again after first use. Unlike the household ledger tables,
     --     this list is genuinely PER-USER and its read endpoint IS filtered by the caller (a personal
     --     pick-list, not shared household data) — so it does not leak in the isolation harness.
     CREATE TABLE IF NOT EXISTS ledger_customs (
@@ -314,6 +314,31 @@ export function init() {
       name       TEXT    NOT NULL,                       -- the custom ledger name
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- 6c. ledger_mains / ledger_subs (Phase 10b): the fixed ledger taxonomy, now user-editable via
+    --     CSV export/import on the Data Backup page instead of hardcoded in ledgers.js. "code" IS the
+    --     identity (no separate internal id) — a row's code is what cash_out/contract/
+    --     contractor_payments store and what a re-import matches against, so a rename (same code, new
+    --     name) never orphans historical spend. sort_order preserves display/CSV-export order
+    --     (defaults to seed/import order; not alphabetical). ledgers.js now supplies only the SEED
+    --     rows inserted below the first time this table is empty — see init()'s seeding step and that
+    --     file's own header.
+    CREATE TABLE IF NOT EXISTS ledger_mains (
+      code       TEXT PRIMARY KEY,
+      name       TEXT    NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS ledger_subs (
+      code       TEXT PRIMARY KEY,
+      main_code  TEXT NOT NULL REFERENCES ledger_mains(code),
+      name       TEXT    NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_subs_main_code ON ledger_subs(main_code);
 
     -- Indexes later phases will need (minimal + sensible).
     CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code);
@@ -336,6 +361,20 @@ export function init() {
     -- idx_cash_out_service_live are created at the END of init() (after the cash_out rebuild + the
     -- contract_service_id ADD COLUMN), so a rebuild can't drop them and the column always exists first.
   `);
+
+  // Phase 10b — seed ledger_mains/ledger_subs from ledgers.js the first time they're empty (a fresh
+  // install, or an upgrade from a pre-10b database). Presence-keyed, not version-gated: once a
+  // household has edited the taxonomy via CSV import, the table is never empty again, so this can
+  // never re-fire and stomp an edit — it only ever runs once, on a genuinely empty table.
+  if (!db.prepare('SELECT 1 FROM ledger_mains LIMIT 1').get()) {
+    const insMain = db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)');
+    const insSub = db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)');
+    let order = 0;
+    for (const L of SEED_LEDGERS) {
+      insMain.run(L.code, L.name, order++);
+      for (const s of L.subLedgers) insSub.run(s.code, L.code, s.name, order++);
+    }
+  }
 
   // Idempotent migration: add the custom ledger/sub-ledger name columns to
   // cash_out for databases created before they existed (fresh DBs already have

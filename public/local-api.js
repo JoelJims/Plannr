@@ -27,7 +27,6 @@
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
 import { db, isStorageFullError } from './db.js';
-import { LEDGERS } from './ledgers.js';
 import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { Capacitor } from '@capacitor/core';
@@ -76,6 +75,28 @@ export function installFetchShim(repo) {
 
   localApp.get('/api/me', (req, res) => { res.json({ user: getOwner() }); });
   localApp.get('/api/users', (req, res) => { res.json({ users: USERS_ROSTER_STMT.all() }); });
+  // Phase 10b — the fixed ledger taxonomy itself (ledger_mains/ledger_subs), user-editable via CSV on
+  // the Data Backup page. Ported verbatim from server.js's identical routes.
+  localApp.get('/api/ledgers', (req, res) => { res.json({ ledgers: LEDGERS }); });
+  localApp.get('/api/ledgers/csv', (req, res) => {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="plannr-ledger-list.csv"');
+    res.send(repo.ledgers.toCsv(LEDGERS));
+  });
+  localApp.post('/api/ledgers/csv', (req, res) => {
+    const csvText = typeof req.body.csv === 'string' ? req.body.csv : '';
+    if (!csvText.trim()) return res.status(400).json({ error: 'No CSV content received.' });
+    const v = repo.ledgers.validateImport(csvText);
+    if (!v.ok) return res.status(400).json({ error: v.error, rowErrors: v.rowErrors });
+    try {
+      repo.ledgers.replaceAll(v.mains, v.subs);
+    } catch (e) {
+      return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
+    }
+    refreshLedgers();
+    res.json({ ok: true, ledgers: LEDGERS });
+  });
+
   localApp.get('/api/ledger-customs', (req, res) => { res.json({ customs: repo.ledgerCustoms.list() }); });
   localApp.delete('/api/ledger-customs', (req, res) => {
     const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
@@ -317,7 +338,15 @@ export function installFetchShim(repo) {
   const CUSTOM_CODE = 'CUSTOM';
   const CUSTOM_NAME_MAX = 80;
 
-  const LEDGER_BY_CODE = new Map(LEDGERS.map((l) => [l.code, l]));
+  // Phase 10b — the ledger taxonomy is DATA now (ledger_mains/ledger_subs, seeded from ledgers.js on
+  // first run — see db.js), not a static import: it can change at runtime via the Ledger List CSV
+  // import, so LEDGERS/LEDGER_BY_CODE are rebuilt on demand rather than frozen once at import time.
+  let LEDGERS, LEDGER_BY_CODE;
+  function refreshLedgers() {
+    LEDGERS = repo.ledgers.list();
+    LEDGER_BY_CODE = new Map(LEDGERS.map((l) => [l.code, l]));
+  }
+  refreshLedgers();
   const subBelongs = (ledgerCode, subCode) => {
     const l = LEDGER_BY_CODE.get(ledgerCode);
     return !!l && l.subLedgers.some((s) => s.code === subCode);

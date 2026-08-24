@@ -26,7 +26,9 @@ const path = require('path');
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
 
-const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js'];
+// Phase 10b: ledgers.js moved here from public/ — it's now seed data db.js reads at init() time
+// (on both sides, same reasoning as db.js/repo.js themselves), not a page's runtime source.
+const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js'];
 // Every package an import map points at by absolute /node_modules/... path — those paths only
 // resolve if the whole package directory is here too (see the header comment).
 const VENDOR_PACKAGES = [
