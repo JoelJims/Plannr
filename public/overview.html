@@ -8,6 +8,10 @@
       "@sqlite.org/sqlite-wasm": "/node_modules/@sqlite.org/sqlite-wasm/dist/index.mjs",
       "@capacitor/core": "/node_modules/@capacitor/core/dist/index.js",
       "@capacitor/local-notifications": "/node_modules/@capacitor/local-notifications/dist/esm/index.js",
+      "@capgo/capacitor-pdf-generator": "/node_modules/@capgo/capacitor-pdf-generator/dist/esm/index.js",
+      "@capacitor/share": "/node_modules/@capacitor/share/dist/esm/index.js",
+      "@capacitor/filesystem": "/node_modules/@capacitor/filesystem/dist/esm/index.js",
+      "@capacitor/synapse": "/node_modules/@capacitor/synapse/dist/synapse.mjs",
       "node:fs": "/node-builtins-browser-stub.js",
       "node:path": "/node-builtins-browser-stub.js",
       "node:sqlite": "/node-builtins-browser-stub.js"
@@ -738,9 +742,10 @@
     });
     $('budgetClear').addEventListener('click', () => { $('budgetInput').value = ''; putBudget(''); });
 
-    // ---- PDF download (server-side Playwright). Four independent parts. Delivery via
-    // the native share sheet (Web Share API with files) where supported, else a normal
-    // file download. Carries the currently-selected date range. ----
+    // ---- PDF download. Four independent parts. Rendered server-side via Playwright (server.js) or
+    // on-device via the print-adapter plugin (local-api.js, Phase 6a) — /api/overview/pdf hides which.
+    // Delivery: Capacitor's Share plugin when native, else the Web Share API with files where
+    // supported, else a normal file download. Carries the currently-selected date range. ----
     const pdfRangeQuery = () => {
       const q = [];
       if (range.start) q.push('start=' + range.start);
@@ -762,6 +767,22 @@
         if (!res.ok) { const d = await res.json().catch(() => ({})); ovMsg.show(d.error || 'Could not generate the PDF.', 'error'); return; }
         const blob = await res.blob();
         const fname = `plannr-overview-${part}-${new Date().toISOString().slice(0, 10)}.pdf`;
+
+        // Phase 6a — native Android: the WebView doesn't support the Web Share API's `files` member
+        // the way a full Chrome tab does, so canShare({files}) below would just be false there anyway.
+        // Go straight to Capacitor's own Filesystem+Share instead. Any failure (including the user
+        // simply dismissing the share sheet, which this plugin has no distinct signal for) falls
+        // through to the same browser path used everywhere else.
+        const { Capacitor } = await import('@capacitor/core');
+        if (Capacitor.isNativePlatform()) {
+          try {
+            const [{ Filesystem, Directory }, { Share }] = await Promise.all([import('@capacitor/filesystem'), import('@capacitor/share')]);
+            const written = await Filesystem.writeFile({ path: fname, data: blob, directory: Directory.Cache });
+            await Share.share({ files: [written.uri], title: 'Plannr', dialogTitle: 'Share report' });
+            return;
+          } catch (err) { console.error('Native share failed, falling back to a plain download:', err); }
+        }
+
         const file = new File([blob], fname, { type: 'application/pdf' });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
           try { await navigator.share({ files: [file], title: 'Plannr' }); return; }

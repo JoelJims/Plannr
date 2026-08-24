@@ -10,12 +10,17 @@
 // been imported (repo.js prepares statements eagerly at import time) — see local-bootstrap.js,
 // which is the only thing that should ever call this.
 //
-// PDF export is explicitly out of scope this phase (Phase 6 replaces it) — GET /api/overview/pdf
-// returns a clear "not available" error instead of a real PDF.
+// Phase 6a — PDF export, on-device. server.js renders buildOverviewPdfHtml()'s output with
+// Playwright, which doesn't run on Android. Instead: WebView.createPrintDocumentAdapter(), driven
+// manually against the app's own ParcelFileDescriptor (bypassing the print dialog/spooler entirely)
+// via @capgo/capacitor-pdf-generator, which implements exactly that. Rendering goes through the
+// WebView's own Chromium, so buildOverviewPdfHtml()'s inline <style>/inline SVG need no changes —
+// ported verbatim below, byte-for-byte the same function bodies as server.js.
 //
 // Not ported: GET /api/health (never called by any page) and everything in server.js that only
-// exists to serve the Overview PDF via Playwright (buildOverviewPdfHtml, pdfPieSvg, fmtRs, the PDF
-// concurrency guard, warmPdfBrowser) — none of it is reachable once /api/overview/pdf is a stub.
+// exists to drive Playwright specifically (the PDF concurrency guard, warmPdfBrowser, getPdfBrowser)
+// — the print-adapter plugin needs none of that; it's not a shared headless-browser resource, it's a
+// one-shot WebView spun up and torn down per call.
 //
 // Phase 7 adds the encrypted full-snapshot backup path (export-encrypted/import-encrypted) alongside
 // the plain-JSON ledger export/import above — a separate concern (raw database bytes, not the
@@ -25,6 +30,8 @@ import { db, isStorageFullError } from './db.js';
 import { LEDGERS } from './ledgers.js';
 import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
+import { Capacitor } from '@capacitor/core';
+import { PdfGenerator } from '@capgo/capacitor-pdf-generator';
 
 export function installFetchShim(repo) {
   const originalFetch = window.fetch.bind(window);
@@ -1054,11 +1061,173 @@ export function installFetchShim(repo) {
     res.json(computeOverview({ start: s.date, end: e.date }));
   });
 
-  // Phase 5: PDF export is out of scope this phase — Phase 6 replaces the Playwright pipeline with
-  // something that can run in a WebView. server.js's buildOverviewPdfHtml/pdfPieSvg/fmtRs-for-print/
-  // the PDF concurrency guard/warmPdfBrowser are all Playwright-only and have nothing to port to yet.
-  localApp.get('/api/overview/pdf', (req, res) => {
-    res.status(503).json({ error: 'PDF export is not available in local mode yet — this is coming in a later phase.' });
+  // ---------------------------------------------------------------------------
+  // Overview PDF (Phase 6a) — ported verbatim from server.js: same fmtRs/pdfEsc/PDF_PALETTE/
+  // pdfSlices/pdfPieSvg/fmtDatePdf/buildOverviewPdfHtml, same HTML, same layout. Only the render
+  // BACKEND differs (the print-adapter plugin's WebView instead of Playwright's).
+  // ---------------------------------------------------------------------------
+  function fmtRs(paise) {
+    const neg = paise < 0; paise = Math.abs(paise);
+    const rupees = Math.floor(paise / 100);
+    const p = String(paise % 100).padStart(2, '0');
+    return (neg ? '-' : '') + '₹' + rupees.toLocaleString('en-IN') + '.' + p;
+  }
+  const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const PDF_PALETTE = ['#f59e0b', '#fbbf24', '#b45309', '#d97706', '#fcd34d', '#92400e', '#ef8a4b',
+    '#eab308', '#a16207', '#f4a06a', '#c2703d', '#facc15', '#7c3f12', '#fdba74', '#9a6a2f', '#e0a800',
+    '#ffcf70', '#8a5a2b', '#f6b352', '#6f4518'];
+  function pdfSlices(o) {
+    return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => ({
+      label: L.name, value: L.totalPaise,
+      color: L.code === CUSTOM_CODE ? '#8a5a2b' : PDF_PALETTE[Math.max(0, LEDGERS.findIndex((x) => x.code === L.code)) % PDF_PALETTE.length],
+    }));
+  }
+  function pdfPieSvg(slices) {
+    const total = slices.reduce((a, s) => a + s.value, 0);
+    if (total <= 0) return '<p class="muted">No spending to chart in this range.</p>';
+    const cx = 50, cy = 50, r = 46;
+    if (slices.length === 1) return `<svg viewBox="0 0 100 100" class="pie"><circle cx="${cx}" cy="${cy}" r="${r}" fill="${slices[0].color}"/></svg>`;
+    let a0 = -Math.PI / 2;
+    const paths = slices.map((s) => {
+      const a1 = a0 + (s.value / total) * Math.PI * 2;
+      const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+      const large = (a1 - a0) > Math.PI ? 1 : 0; a0 = a1;
+      return `<path d="M${cx},${cy} L${x0.toFixed(3)},${y0.toFixed(3)} A${r},${r} 0 ${large},1 ${x1.toFixed(3)},${y1.toFixed(3)} Z" fill="${s.color}" stroke="#fff" stroke-width="0.6"/>`;
+    }).join('');
+    return `<svg viewBox="0 0 100 100" class="pie">${paths}</svg>`;
+  }
+
+  function fmtDatePdf(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso == null ? '' : iso));
+    return m ? (m[3] + '/' + m[2] + '/' + m[1].slice(2)) : String(iso == null ? '' : iso);
+  }
+  function buildOverviewPdfHtml(part, o, rows, range, theme) {
+    const m = o.money;
+    const fmtOwed = (v) => (v < 0 ? 'Overpaid by ' + fmtRs(-v) : fmtRs(v));
+    const rangeLabel = (range.start || range.end) ? `${fmtDatePdf(range.start) || '…'} to ${fmtDatePdf(range.end) || '…'}` : 'All transactions';
+    const slices = pdfSlices(o);
+    const incl = (s) => (s === 'included' ? 'Yes' : 'No');
+
+    const figuresBlock = () => {
+      const figs = [
+        ['Total contract (A)', m.totalContractPaise], ['Paid to contractors (B)', m.paidToContractorsPaise],
+        ['Spent by self (C)', m.spentBySelfPaise], ['Total spent (D)', m.totalSpentPaise],
+        ['Loan received (E)', m.loanReceivedPaise], ['Owed to contractors (F)', m.owedToContractorsPaise],
+      ];
+      return '<h2>Headline figures</h2><div class="figs">' +
+        figs.map(([k, v]) => `<div class="fig"><div class="k">${pdfEsc(k)}</div><div class="v ${v < 0 ? 'neg' : ''}">${k.startsWith('Owed') ? fmtOwed(v) : fmtRs(v)}</div></div>`).join('') + '</div>';
+    };
+    const owedBlock = () => {
+      if (!o.contracts.length) return '<h2>Owed on the contract</h2><p class="muted">No contract yet.</p>';
+      return '<h2>Owed on the contract</h2><table><thead><tr><th>Contractor</th><th>Area · Ledger</th><th class="num">Stated</th><th class="num">Paid</th><th class="num">Owed</th></tr></thead><tbody>' +
+        o.contracts.map((c) => `<tr><td>${pdfEsc(c.contractorName || '—')}</td><td>${pdfEsc([c.areaOfWork, c.ledger].filter(Boolean).join(' · ')) || '—'}</td><td class="num">${fmtRs(c.statedPaise)}</td><td class="num">${fmtRs(c.paidPaise)}</td><td class="num ${c.owedPaise < 0 ? 'neg' : ''}">${fmtOwed(c.owedPaise)}</td></tr>`).join('') +
+        `</tbody><tfoot><tr><td colspan="4">Owed to contractors (F)</td><td class="num">${fmtOwed(m.owedToContractorsPaise)}</td></tr></tfoot></table>`;
+    };
+    const budgetBlock = () => {
+      if (o.budgetPaise == null) return '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>' + fmtRs(m.totalSpentPaise) + '</b>.</p>';
+      const diff = o.budgetPaise - m.totalSpentPaise;
+      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(m.totalSpentPaise)}</b> · ${diff < 0 ? 'Over by <b class="neg">' + fmtRs(-diff) + '</b>' : '<b>' + fmtRs(diff) + '</b> left'}.</p>`;
+    };
+    const pieBlock = () => {
+      if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';
+      return '<h2>Spending by Ledger</h2><div class="pie-wrap">' + pdfPieSvg(slices) +
+        '<div class="legend">' + slices.map((s) => `<div class="lg"><span class="sw" style="background:${s.color}"></span><span class="l">${pdfEsc(s.label)}</span><span class="v">${fmtRs(s.value)}</span></div>`).join('') + '</div></div>';
+    };
+    const ledgerTableBlock = () => {
+      if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';
+      return '<h2>Spending by Ledger</h2><table><thead><tr><th>Ledger</th><th class="num">Amount</th></tr></thead><tbody>' +
+        slices.map((s) => `<tr><td>${pdfEsc(s.label)}</td><td class="num">${fmtRs(s.value)}</td></tr>`).join('') +
+        `</tbody><tfoot><tr><td>Total spent (D)</td><td class="num">${fmtRs(m.totalSpentPaise)}</td></tr></tfoot></table>`;
+    };
+    const txTableBlock = () => {
+      if (!rows.length) return '<h2>Transactions</h2><p class="muted">No outflow entries in this range.</p>';
+      const total = rows.reduce((a, e) => a + e.amountPaise, 0);
+      return '<h2>Transactions</h2><table><thead><tr><th class="num">#</th><th>Date</th><th class="num">Amount</th><th>By</th><th>Ledger</th><th>Remark</th><th>Contract Included</th><th class="num">Contract Stated</th></tr></thead><tbody>' +
+        rows.map((e, i) => `<tr><td class="num">${i + 1}</td><td>${e.txDate ? pdfEsc(fmtDatePdf(e.txDate)) : '—'}</td><td class="num">${fmtRs(e.amountPaise)}</td><td>${pdfEsc(e.by)}</td><td>${pdfEsc(e.ledger)}</td><td>${e.reason ? pdfEsc(e.reason) : '—'}</td><td>${incl(e.contractScope)}</td><td class="num">${e.contractScope === 'included' && e.contractStatedPaise != null ? fmtRs(e.contractStatedPaise) : '—'}</td></tr>`).join('') +
+        `</tbody><tfoot><tr><td colspan="2">Total (${rows.length})</td><td class="num">${fmtRs(total)}</td><td colspan="5"></td></tr></tfoot></table>`;
+    };
+
+    const TITLE = { full: 'Overview', summary: 'Overview — summary', pie: 'Spending by Ledger — chart', table: 'Transactions', ledger: 'Spending by Ledger' };
+    let body;
+    if (part === 'pie') body = pieBlock();
+    else if (part === 'table') body = txTableBlock();
+    else if (part === 'ledger') body = ledgerTableBlock();
+    else if (part === 'summary') body = figuresBlock() + owedBlock() + budgetBlock() + pieBlock() + ledgerTableBlock();
+    else body = figuresBlock() + owedBlock() + budgetBlock() + pieBlock() + txTableBlock();
+
+    const dark = theme === 'dark';
+    const C = dark
+      ? { bg: '#15161a', text: '#ececee', sub: '#a9aab0', head: '#f6b352', accent: '#f5b45b', line: '#2c2d33', line2: '#3a3b42', muted: '#9a9ba1', figB: '#3a3020', neg: '#f87171', swB: 'rgba(255,255,255,0.25)' }
+      : { bg: '#ffffff', text: '#1a1a1a', sub: '#555555', head: '#7c3f12', accent: '#b45309', line: '#eeeeee', line2: '#dddddd', muted: '#888888', figB: '#eadfce', neg: '#b91c1c', swB: 'rgba(0,0,0,0.15)' };
+
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: ${C.text}; background: ${C.bg}; margin: 0; padding: 6px 2px; font-size: 12px; }
+    .hdr { display: flex; align-items: baseline; justify-content: space-between; border-bottom: 2px solid #f59e0b; padding-bottom: 8px; margin-bottom: 16px; }
+    .brand { font-size: 22px; font-weight: 800; letter-spacing: 0.02em; color: ${C.text}; }
+    .brand span { color: ${C.accent}; }
+    .sub { font-size: 12px; color: ${C.sub}; text-align: right; }
+    .sub b { color: ${C.text}; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: ${C.head}; border-bottom: 1px solid ${C.line}; padding-bottom: 4px; margin: 20px 0 10px; }
+    .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .fig { border: 1px solid ${C.figB}; border-radius: 4px; padding: 8px 10px; }
+    .fig .k { font-size: 10.5px; color: ${C.muted}; text-transform: uppercase; letter-spacing: 0.04em; }
+    .fig .v { font-size: 17px; font-weight: 700; margin-top: 3px; color: ${C.accent}; }
+    .fig .v.neg, .neg { color: ${C.neg}; }
+    table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+    th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid ${C.line}; }
+    th { text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; color: ${C.muted}; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    tfoot td { font-weight: 700; border-top: 2px solid ${C.line2}; border-bottom: none; }
+    .muted { color: ${C.muted}; }
+    .pie-wrap { display: flex; gap: 22px; align-items: center; }
+    .pie { width: 200px; height: 200px; flex: none; }
+    .legend { flex: 1 1 auto; }
+    .lg { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+    .sw { width: 12px; height: 12px; flex: none; border: 1px solid ${C.swB}; }
+    .lg .l { flex: 1 1 auto; }
+    .lg .v { font-weight: 600; white-space: nowrap; }
+  </style></head><body>
+    <div class="hdr">
+      <div class="brand">Plann<span>r</span></div>
+      <div class="sub">${pdfEsc(TITLE[part] || 'Overview')}<br>Date range: <b>${pdfEsc(rangeLabel)}</b></div>
+    </div>
+    ${body}
+  </body></html>`;
+  }
+
+  function base64ToBytes(base64) {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  localApp.get('/api/overview/pdf', async (req, res) => {
+    const s = parseIsoDate(req.query.start); if (s.error) return res.status(400).json({ error: 'Invalid start date (YYYY-MM-DD).' });
+    const e = parseIsoDate(req.query.end); if (e.error) return res.status(400).json({ error: 'Invalid end date (YYYY-MM-DD).' });
+    if (s.date && e.date && s.date > e.date) return res.status(400).json({ error: 'Start date must be on or before the end date.' });
+    const part = ['full', 'pie', 'table', 'ledger'].includes(String(req.query.part)) ? String(req.query.part) : 'full';
+    const theme = String(req.query.theme) === 'dark' ? 'dark' : 'light';
+
+    if (!Capacitor.isNativePlatform()) {
+      return res.status(503).json({ error: 'PDF export needs the Android app — this browser preview cannot generate one.' });
+    }
+
+    const range = { start: s.date, end: e.date };
+    const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
+    const o = computeOverview(range);
+    const rows = LEDGER_CRUDS.cash_out.list().map(cashOutRow).filter((r) => inR(r.txDate));
+    const html = buildOverviewPdfHtml(part, o, rows, range, theme);
+
+    try {
+      const result = await PdfGenerator.fromData({ data: html, type: 'base64', documentSize: 'A4', fileName: `plannr-overview-${part}.pdf` });
+      if (result.type !== 'base64' || !result.base64) return res.status(500).json({ error: 'PDF generation did not return any data.' });
+      res.send(base64ToBytes(result.base64));
+    } catch (err) {
+      res.status(500).json({ error: 'Could not generate the PDF: ' + (err && err.message ? err.message : 'unknown error') });
+    }
   });
 
   // ---------------------------------------------------------------------------
