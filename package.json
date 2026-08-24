@@ -2,7 +2,7 @@
   "name": "plannr",
   "version": "0.1.0",
   "private": true,
-  "description": "Plannr — login/register system (Express + SQLite)",
+  "description": "Plannr — a single-user offline construction-spend ledger, built as an Android app with Capacitor",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

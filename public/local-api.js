@@ -29,8 +29,11 @@
 import { db, isStorageFullError } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
-import { Capacitor } from '@capacitor/core';
-import { PdfGenerator } from '@capgo/capacitor-pdf-generator';
+// Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
+// static import here was loaded unconditionally by every page (local-bootstrap.js pulls this whole
+// file in on every navigation) even though only the Overview page's PDF button ever needs them —
+// same "only import.js on demand" pattern @capacitor/share and @capacitor/filesystem already use
+// elsewhere in this codebase. Dynamically imported inside the handler instead.
 
 export function installFetchShim(repo) {
   const originalFetch = window.fetch.bind(window);
@@ -1101,14 +1104,9 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   // Overview PDF (Phase 6a) — ported verbatim from server.js: same fmtRs/pdfEsc/PDF_PALETTE/
   // pdfSlices/pdfPieSvg/fmtDatePdf/buildOverviewPdfHtml, same HTML, same layout. Only the render
-  // BACKEND differs (the print-adapter plugin's WebView instead of Playwright's).
+  // BACKEND differs (the print-adapter plugin's WebView instead of Playwright's). fmtRs() is already
+  // declared above (Phase 12: this was a byte-identical redundant re-declaration in the same scope).
   // ---------------------------------------------------------------------------
-  function fmtRs(paise) {
-    const neg = paise < 0; paise = Math.abs(paise);
-    const rupees = Math.floor(paise / 100);
-    const p = String(paise % 100).padStart(2, '0');
-    return (neg ? '-' : '') + '₹' + rupees.toLocaleString('en-IN') + '.' + p;
-  }
   const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // Phase 10a: 24 main ledgers now (was 23, and this palette had only 20) — 4 more so no ledger
@@ -1271,6 +1269,7 @@ export function installFetchShim(repo) {
     const part = ['full', 'pie', 'table', 'ledger'].includes(String(req.query.part)) ? String(req.query.part) : 'full';
     const theme = String(req.query.theme) === 'dark' ? 'dark' : 'light';
 
+    const { Capacitor } = await import('@capacitor/core');
     if (!Capacitor.isNativePlatform()) {
       return res.status(503).json({ error: 'PDF export needs the Android app — this browser preview cannot generate one.' });
     }
@@ -1279,6 +1278,7 @@ export function installFetchShim(repo) {
       // failure mode below — a real possibility the on-screen message must be able to name outright.
       return res.status(500).json({ error: `PDF export: the PdfGenerator plugin is not available on this platform (${Capacitor.getPlatform()}). It may not have registered correctly.` });
     }
+    const { PdfGenerator } = await import('@capgo/capacitor-pdf-generator');
 
     const range = { start: s.date, end: e.date };
     const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
