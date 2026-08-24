@@ -858,6 +858,36 @@ export function installFetchShim(repo) {
     res.json({ budgetPaise: paise });
   });
 
+  // Phase 6b — up to 5 daily local-notification times ("HH:MM", 24h), ported verbatim from
+  // server.js's identical route. Reuses the old daily_report_times settings key (inert since the
+  // Phase 1.3 email-report scheduler was deleted). Scheduling itself is client-side
+  // (notifications.js) — this is just persistence, same as budget above.
+  const NOTIF_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+  function normalizeNotificationTimes(raw) {
+    if (!Array.isArray(raw) || raw.length > 5) return null;
+    const seen = new Set(); const out = [];
+    for (const t of raw) {
+      const s = String(t ?? '').trim();
+      if (!NOTIF_TIME_RE.test(s)) return null;
+      if (!seen.has(s)) { seen.add(s); out.push(s); }
+    }
+    return out.sort();
+  }
+  function getNotificationTimes() {
+    const r = db.prepare("SELECT value FROM settings WHERE key = 'daily_report_times'").get();
+    if (!r || r.value == null) return [];
+    try { return normalizeNotificationTimes(JSON.parse(r.value)) || []; } catch { return []; }
+  }
+
+  localApp.get('/api/notification-times', (req, res) => { res.json({ times: getNotificationTimes() }); });
+
+  localApp.put('/api/notification-times', (req, res) => {
+    const times = normalizeNotificationTimes(req.body.times);
+    if (times === null) return res.status(400).json({ error: 'Send up to 5 unique times as "HH:MM" (24h).' });
+    db.prepare("INSERT INTO settings (key, value) VALUES ('daily_report_times', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(times));
+    res.json({ times });
+  });
+
   const CUSTOM_GROUP_NAME = 'Custom / Uncategorized';
 
   function computeOverview(range) {
