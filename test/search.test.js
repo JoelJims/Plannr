@@ -29,9 +29,9 @@ after(async () => { await H.stopApp(); });
 beforeEach(() => {
   H.clearLedger();
   // 4 live rows + 1 soft-deleted (must never appear).
-  ins({ amountPaise: 10000, txDate: '2026-01-10', byUserId: A.user.id, ledgerCode: '4.0', subledgerCode: '4.2', reason: 'Cement bags' });
-  ins({ amountPaise: 50000, txDate: '2026-02-15', byUserId: A.user.id, ledgerCode: '4.0', subledgerCode: '4.1', reason: 'Steel rods' });
-  ins({ amountPaise: 200000, txDate: '2026-03-20', byUserId: A.user.id, ledgerCode: '5.0', subledgerCode: '5.1', reason: 'Foundation labour' });
+  ins({ amountPaise: 10000, txDate: '2026-01-10', byUserId: A.user.id, ledgerCode: '6.0', subledgerCode: '6.1', reason: 'Cement bags' });
+  ins({ amountPaise: 50000, txDate: '2026-02-15', byUserId: A.user.id, ledgerCode: '6.0', subledgerCode: '6.2', reason: 'Steel rods' });
+  ins({ amountPaise: 200000, txDate: '2026-03-20', byUserId: A.user.id, ledgerCode: '12.0', subledgerCode: '12.2', reason: 'Foundation labour' });
   ins({ amountPaise: 1000000, txDate: '2026-06-01', byUserId: A.user.id, ledgerCode: 'CUSTOM', ledgerCustomName: 'Scaffolding', reason: 'monthly rent' });
   ins({ amountPaise: 5000, txDate: '2026-06-05', byUserId: A.user.id, ledgerCode: '9.0', reason: 'wiring bits', deletedAt: "2026-06-06 00:00:00" });
 });
@@ -54,8 +54,8 @@ test('text search spans remark AND custom names, case-insensitive', async () => 
 });
 
 test('ledger + sub-ledger equality', async () => {
-  assert.strictEqual((await search(A.cookie, 'ledger=4.0')).json.entries.length, 2);
-  assert.deepStrictEqual(reasons((await search(A.cookie, 'ledger=4.0&subledger=4.2')).json), ['Cement bags']);
+  assert.strictEqual((await search(A.cookie, 'ledger=6.0')).json.entries.length, 2);
+  assert.deepStrictEqual(reasons((await search(A.cookie, 'ledger=6.0&subledger=6.1')).json), ['Cement bags']);
   assert.deepStrictEqual(reasons((await search(A.cookie, 'ledger=CUSTOM')).json), ['monthly rent']);
 });
 
@@ -70,10 +70,10 @@ test('date range (inclusive)', async () => {
 });
 
 test('composed filters AND together', async () => {
-  // ledger 4.0 AND from Feb → only Steel rods (Cement bags is Jan 10, excluded).
-  assert.deepStrictEqual(reasons((await search(A.cookie, 'ledger=4.0&start=2026-02-01')).json), ['Steel rods']);
+  // ledger 6.0 AND from Feb → only Steel rods (Cement bags is Jan 10, excluded).
+  assert.deepStrictEqual(reasons((await search(A.cookie, 'ledger=6.0&start=2026-02-01')).json), ['Steel rods']);
   // text AND ledger.
-  assert.deepStrictEqual(reasons((await search(A.cookie, 'q=labour&ledger=5.0')).json), ['Foundation labour']);
+  assert.deepStrictEqual(reasons((await search(A.cookie, 'q=labour&ledger=12.0')).json), ['Foundation labour']);
 });
 
 test('bad filters are rejected with 400', async () => {
@@ -83,13 +83,13 @@ test('bad filters are rejected with 400', async () => {
 });
 
 test('filtered edit-mode save touches ONLY the rows it is given (not rows outside the filter)', async () => {
-  // Fetch the ledger=4.0 subset, edit ONE of them via batch, and confirm rows OUTSIDE the filter are untouched.
-  const subset = (await search(A.cookie, 'ledger=4.0')).json.entries;
+  // Fetch the ledger=6.0 subset, edit ONE of them via batch, and confirm rows OUTSIDE the filter are untouched.
+  const subset = (await search(A.cookie, 'ledger=6.0')).json.entries;
   const target = subset.find((e) => e.reason === 'Cement bags');
-  const outside = (await search(A.cookie, 'ledger=5.0')).json.entries[0]; // Foundation labour — not in the filter
+  const outside = (await search(A.cookie, 'ledger=12.0')).json.entries[0]; // Foundation labour — not in the filter
   const beforeOutside = H.db.prepare('SELECT amount_paise, updated_at FROM cash_out WHERE id = ?').get(outside.id);
 
-  const res = await H.post('/api/cash-out/batch', { rows: [{ id: target.id, amountRupees: '123.45', txDate: target.txDate, byType: 'user', byUserId: A.user.id, ledgerCode: '4.0', subledgerCode: '4.2', contractScope: 'extra' }] }, { cookie: A.cookie });
+  const res = await H.post('/api/cash-out/batch', { rows: [{ id: target.id, amountRupees: '123.45', txDate: target.txDate, byType: 'user', byUserId: A.user.id, ledgerCode: '6.0', subledgerCode: '6.1', contractScope: 'extra' }] }, { cookie: A.cookie });
   assert.strictEqual(res.status, 200);
   assert.strictEqual(res.json.saved, 1);
 

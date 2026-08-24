@@ -5,7 +5,7 @@ const H = require('../test/helpers');
 const { chromium } = require('playwright');
 
 const BIG_PAISE = 123456789;           // ₹12,34,567.89 — the unclipped-render case
-const LEDGERS = Array.from({ length: 23 }, (_, i) => (i + 1) + '.0');
+const LEDGERS = Array.from({ length: 24 }, (_, i) => (i + 1) + '.0');
 
 let failures = 0;
 const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
@@ -13,7 +13,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
 (async () => {
   await H.startApp();
   const base = (await H.startApp()).base;
-  // Seed: a logged-in user, 23 ledgers (one debit each) + the big-amount row, a contract + payment, a budget.
+  // Seed: a logged-in user, 24 ledgers (one debit each) + the big-amount row, a contract + payment, a budget.
   const { user, cookie } = H.seedLoggedIn();
   const token = cookie.split('=')[1];
   for (const code of LEDGERS) H.seedCashOut({ amountPaise: 250000 + (code.length * 1234) % 90000, byUserId: user.id, ledgerCode: code });
@@ -31,7 +31,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.goto(base + '/overview', { waitUntil: 'networkidle' });
   await page.waitForTimeout(1000);
   const swatches1 = await page.$$eval('.ov-swatch', (els) => els.map((e) => getComputedStyle(e).backgroundColor));
-  check('23 pie legend swatches, all with distinct colours', swatches1.length === 23 && new Set(swatches1).size === 23, `${swatches1.length} swatches, ${new Set(swatches1).size} distinct`);
+  check('24 pie legend swatches, all with distinct colours', swatches1.length === 24 && new Set(swatches1).size === 24, `${swatches1.length} swatches, ${new Set(swatches1).size} distinct`);
 
   // re-render: expand a ledger row, then apply an all-dates range
   await page.locator('.ov-legend-row.expandable').first().click().catch(() => {});
@@ -40,7 +40,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.click('#ovRangeAll').catch(() => {});
   await page.waitForTimeout(1000);
   const swatches2 = await page.$$eval('.ov-swatch', (els) => els.map((e) => getComputedStyle(e).backgroundColor));
-  check('swatch colours survive a re-render (expand + range apply)', swatches2.length === 23 && new Set(swatches2).size === 23 && swatches2.every((c) => c && c !== 'rgba(0, 0, 0, 0)'), `${new Set(swatches2).size} distinct after re-render`);
+  check('swatch colours survive a re-render (expand + range apply)', swatches2.length === 24 && new Set(swatches2).size === 24 && swatches2.every((c) => c && c !== 'rgba(0, 0, 0, 0)'), `${new Set(swatches2).size} distinct after re-render`);
 
   // table width == container, gap 0 — read mode
   const widthCheck = () => page.$eval('.tx-table', (t) => { const wrap = t.closest('.tx-scroll') || t.parentElement; return { table: Math.round(t.getBoundingClientRect().width), cont: Math.round(wrap.clientWidth), collapse: getComputedStyle(t).borderCollapse }; });

@@ -44,6 +44,10 @@ const dbPath = path.join(os.tmpdir(), `plannr-tenmig-${process.pid}-${crypto.ran
   for (let i = 0; i < 3; i++) d.prepare("INSERT INTO cash_out(amount_paise,tx_date,by_type,by_user_id,ledger_code,contract_scope) VALUES (?,?,?,?,?,?)").run(1000 * (i + 1), '2025-03-0' + (i + 1), 'user', 1, '4.0', 'extra');
   d.exec("UPDATE sqlite_sequence SET seq=17 WHERE name='cash_out'");
   d.prepare("INSERT INTO settings(key,value) VALUES ('budget_paise', ?)").run('4200000');
+  // Phase 10a: this fixture is testing TENANCY collapse mechanics (schema shape, sqlite_sequence
+  // preservation), not the ledger-taxonomy migration — pre-mark that migration done so init() doesn't
+  // ALSO wipe these 3 manually-seeded cash_out rows out from under the unrelated assertions below.
+  d.prepare("INSERT INTO settings(key,value) VALUES ('_migrated_ledger_taxonomy_v1', '1')").run();
   d.close();
 }
 

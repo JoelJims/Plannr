@@ -273,7 +273,7 @@ export function init() {
 
     -- 5. loans: one-time loan record. NO EMI/repayment logic. interest_rate is INFORMATIONAL only
     --    (drives no calculation). Interest actually PAID is recorded as an ordinary cash_out row under
-    --    ledger 20.0, sub-ledger 20.3 (Loan interest) — see public/ledgers.js — so it counts in spend.
+    --    ledger 22.0, sub-ledger 22.5 (Loan interest) — see public/ledgers.js — so it counts in spend.
     CREATE TABLE IF NOT EXISTS loans (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise  INTEGER,                     -- paise (₹1=100)
@@ -1010,6 +1010,36 @@ export function init() {
     // chain retries next boot).
     const fkViol = db.prepare('PRAGMA foreign_key_check').all();
     if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
+  }
+
+  // Phase 10a — the 23-category ledger taxonomy (public/ledgers.js) was replaced with a fresh
+  // 24-category one derived from the real contract and the owner's tracking spreadsheet. The old
+  // and new taxonomies reuse the SAME "N.M" code shape with DIFFERENT meanings per code (old 4.2 =
+  // Cement, new 4.2 = Demolition) — so "does this code still exist" is not a safe survival test: a
+  // stale row could coincidentally collide with an unrelated new category and silently display the
+  // wrong thing forever, which is worse than an obviously-broken one.
+  //
+  // cash_out.ledger_code is NOT NULL (every debit needs a real category), so a stale row can't be
+  // repaired by clearing the tag — and every existing row is seeded mock data; no real payment has
+  // ever been entered against the old taxonomy (confirmed with the household). Wiping the table
+  // outright loses nothing of value and leaves nothing mislabeled.
+  //
+  // contract.ledger_code/subledger_code and contractor_payments.ledger_code/subledger_code are
+  // OPTIONAL — the same stale-code risk applies, but clearing just the tag (not the row) is enough
+  // since the contract/payment record itself is still otherwise valid. CUSTOM-tagged rows are left
+  // alone: their free-text name never depended on the fixed taxonomy.
+  //
+  // Gated on a DEDICATED settings marker, NOT the shared `userVersion < N` counter every migration
+  // above uses: several test fixtures (migration-guard, tenancy-collapse) deliberately reset
+  // user_version to simulate an old database while testing a DIFFERENT migration's behaviour — a
+  // shared "< N" gate would re-fire this one every time they do that, wiping cash_out rows those
+  // tests insert for unrelated reasons and need to survive. This migration only cares "has THIS
+  // cleanup run yet", independent of whatever the version counter is otherwise made to say.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'").get()) {
+    db.exec('DELETE FROM cash_out');
+    db.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    db.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Schema-version marker (Phase 11B) — stamped ONLY here, after every migration above has succeeded,
