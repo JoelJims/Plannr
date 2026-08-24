@@ -32,25 +32,26 @@ const iso = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => new Date(d.getTime() + n * 86400000);
 
 // Per-ledger spend profiles: [code, weight, ₹min, ₹max, labour?]. Cement/labour/transport/sand dominate
-// (realistic repetition); steel/kitchen/flooring are big + sparse. Covers 22 of 23 ledgers (all but the
-// rare 22.x post-completion), well past the "≥18" bar.
+// (realistic repetition); steel/kitchen/flooring are big + sparse. Covers 20 of 24 ledgers (missing only
+// 3 APPROVALS & STATUTORY FEES, 5 TEMPORARY SITE SETUP, 23 POST-COMPLETION & HANDOVER, and 24
+// CONTINGENCY & UNPLANNED — all rare/late-phase), well past the "≥18" bar.
 const P = (code, w, mn, mx, labour) => ({ code, w, mn, mx, labour: !!labour });
 // Weights favour SMALL rows heavily — a real ledger's row COUNT is daily labour + transport + small
 // buys; big deliveries (steel in lakhs, kitchen, flooring) are rare. Keeps the total realistic for a
 // fully-itemised ₹25L-contract build (owner-supplied materials on top) instead of ballooning to crores.
 const PROFILES = [
   // small / labour / transport — dominant by count (hundreds to low-thousands)
-  P('5.1', 70, 300, 900, 1), P('5.2', 70, 350, 1300, 1), P('10.1', 35, 400, 1200, 1),
-  P('23.2', 45, 300, 2500), P('10.3', 18, 500, 2500, 1), P('9.2', 12, 500, 4000), P('23.1', 30, 1000, 8000),
+  P('12.2', 70, 300, 900, 1), P('12.7', 70, 350, 1300, 1), P('13.1', 35, 400, 1200, 1),
+  P('21.3', 45, 300, 2500), P('13.3', 18, 500, 2500, 1), P('9.3', 12, 500, 4000), P('21.1', 30, 1000, 8000),
   // materials — thousands to low tens-of-thousands
-  P('4.2', 12, 4000, 24000), P('4.3', 9, 6000, 16000), P('4.4', 7, 5000, 14000), P('4.5', 5, 8000, 26000),
-  P('9.1', 4, 2000, 14000), P('8.1', 4, 2000, 14000), P('6.1', 2, 6000, 20000), P('7.1', 2, 5000, 18000),
-  P('14.1', 2, 8000, 26000), P('8.2', 2, 5000, 25000), P('3.3', 2, 4000, 18000), P('20.2', 2, 2000, 12000),
-  P('15.1', 2, 3000, 18000), P('17.1', 1, 3000, 15000), P('21.1', 1, 8000, 25000),
+  P('6.1', 12, 4000, 24000), P('6.3', 9, 6000, 16000), P('6.5', 7, 5000, 14000), P('7.2', 5, 8000, 26000),
+  P('14.1', 4, 2000, 14000), P('8.1', 4, 2000, 14000), P('18.5', 2, 6000, 20000), P('13.7', 2, 5000, 18000),
+  P('18.1', 2, 8000, 26000), P('8.5', 2, 5000, 25000), P('4.4', 2, 4000, 18000), P('20.2', 2, 2000, 12000),
+  P('19.1', 2, 3000, 18000), P('20.1', 1, 3000, 15000), P('22.6', 1, 8000, 25000),
   // big / rare — steel in lakhs, kitchen/flooring/doors, low weight so they stay ~1% of rows
-  P('4.1', 3, 70000, 150000), P('11.1', 2, 15000, 65000), P('11.2', 2, 8000, 30000), P('12.1', 2, 8000, 44000),
-  P('12.2', 2, 8000, 40000), P('13.2', 1, 40000, 100000), P('2.1', 1, 25000, 70000), P('1.2', 1, 40000, 100000),
-  P('18.1', 1, 10000, 55000), P('19.1', 1, 15000, 50000), P('16.1', 1, 15000, 40000),
+  P('6.2', 3, 70000, 150000), P('11.1', 2, 15000, 65000), P('11.2', 2, 8000, 30000), P('15.1', 2, 8000, 44000),
+  P('15.2', 2, 8000, 40000), P('18.2', 1, 40000, 100000), P('2.1', 1, 25000, 70000), P('1.2', 1, 40000, 100000),
+  P('16.1', 1, 10000, 55000), P('17.1', 1, 15000, 50000), P('10.6', 1, 15000, 40000),
 ];
 const topLevel = (code) => code.split('.')[0];
 const nameFor = (code) => { const t = topLevel(code); const L = LEDGERS.find((x) => x.code === t + '.0'); if (!L) return code; const sub = L.subLedgers.find((s) => s.code === code); return sub ? sub.name : L.name; };
@@ -87,14 +88,14 @@ try {
   const contractId = Number(db.prepare(
     `INSERT INTO contract (contractor_name, area_of_work, ledger_code, subledger_code, price_of_contract_paise, date_signed, contract_end_date, created_at, updated_at)
      VALUES (?,?,?,?,?,?,?,?,?)`
-  ).run('Rajan & Sons Builders', '2,400 sqft — G+1 residential, Thrissur', '5.0', '5.2', rupees(2500000), '2025-01-15', '2026-06-30', nowIso, nowIso).lastInsertRowid);
+  ).run('Rajan & Sons Builders', '2,400 sqft — G+1 residential, Thrissur', '12.0', '12.7', rupees(2500000), '2025-01-15', '2026-06-30', nowIso, nowIso).lastInsertRowid);
 
   // ---- 7 contractor payments across ~12 months (partial — leaves genuine dues) ----
   const payDates = ['2025-02-10', '2025-04-05', '2025-06-12', '2025-08-20', '2025-10-15', '2025-12-18', '2026-02-25'];
   const payAmts = [300000, 250000, 300000, 250000, 300000, 200000, 150000]; // ₹ — sums to ₹17,50,000 of the ₹25,00,000
   const insPayDate = db.prepare('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?,?)');
   const insPay = db.prepare(`INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, ledger_code, subledger_code, remarks, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`);
-  payDates.forEach((d, i) => { insPayDate.run(contractId, d); insPay.run(contractId, d, rupees(payAmts[i]), '5.0', '5.2', i === 0 ? 'Mobilisation advance on signing' : null, nowIso, nowIso); });
+  payDates.forEach((d, i) => { insPayDate.run(contractId, d); insPay.run(contractId, d, rupees(payAmts[i]), '12.0', '12.7', i === 0 ? 'Mobilisation advance on signing' : null, nowIso, nowIso); });
 
   // ---- cash_out: clustered, gappy, repeated combos ----
   const insOut = db.prepare(
@@ -115,7 +116,7 @@ try {
       const p = chance(0.7) ? dom : wpick(PROFILES);         // 70% repeat the same combo (realistic)
       const amt = rupees(ri(p.mn, p.mx));
       const t = topLevel(p.code);
-      const canInclude = ['4', '5', '6', '7', '8', '9'].includes(t);
+      const canInclude = ['6', '7', '8', '9', '10', '11', '12', '13', '14'].includes(t);
       // reconcile: far fewer included rows so Σ offsets + Σ payments stays under the ₹25L contract.
       const isInc = chance(canInclude ? (RECONCILE ? 0.05 : 0.5) : (RECONCILE ? 0 : 0.08));
       const stated = isInc ? Math.round(amt * (0.85 + rnd() * 0.3)) : null;
@@ -165,7 +166,7 @@ try {
   console.log('\n[seed] DONE — realistic Kerala G+1 build seeded (profile: ' + (RECONCILE ? 'RECONCILE — offsets under contract, reconciliation.ok=true' : 'OVER-OFFSET — reconciliation.ok=false, banner shows') + '):');
   console.log(`  contract:            ${fmt(rupees(2500000))} (Rajan & Sons Builders)`);
   console.log(`  contractor payments: ${payTot.c} rows, ${fmt(payTot.s)} paid`);
-  console.log(`  cash_out (debits):   ${q1.c} rows, ${fmt(q1.s)} spent, across ${ledgerCount} of 23 ledgers`);
+  console.log(`  cash_out (debits):   ${q1.c} rows, ${fmt(q1.s)} spent, across ${ledgerCount} of 24 ledgers`);
   console.log(`  · included (offset): ${included} rows   · long remarks (100–200c): ${longRemarks} rows`);
   console.log(`  cash_in (inflow):    ${inTot.c} rows, ${fmt(inTot.s)}`);
   console.log(`  loans:               2   · budget: ${fmt(budgetPaise)}  (total spent incl. payments: ${fmt(spentSoFar)})`);

@@ -1404,9 +1404,11 @@ function fmtRs(paise) {
 const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Amber-family palette (same idea as the on-screen pie); Custom = deep amber.
+// Phase 10a: 24 main ledgers now (was 23, and this palette had only 20) — 4 more so no ledger wraps
+// around to reuse an earlier one's colour.
 const PDF_PALETTE = ['#f59e0b', '#fbbf24', '#b45309', '#d97706', '#fcd34d', '#92400e', '#ef8a4b',
   '#eab308', '#a16207', '#f4a06a', '#c2703d', '#facc15', '#7c3f12', '#fdba74', '#9a6a2f', '#e0a800',
-  '#ffcf70', '#8a5a2b', '#f6b352', '#6f4518'];
+  '#ffcf70', '#8a5a2b', '#f6b352', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#eab676'];
 function pdfSlices(o) {
   return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => ({
     label: L.name, value: L.totalPaise,

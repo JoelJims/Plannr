@@ -478,10 +478,12 @@
     // bright enough to read on the dark panel. Colour is stable per ledger (fixed index);
     // Custom / Uncategorized uses a neutral light grey that stands apart from the hues.
     const CUSTOM_CODE = 'CUSTOM';
+    // Phase 10a: 24 main ledgers now (was 23) — one more colour so every ledger still gets a
+    // distinct swatch instead of the 24th wrapping around to reuse the 1st.
     const LEDGER_PALETTE = [
       '#e6194b', '#42d4f4', '#ffe119', '#b23fe0', '#3cb44b', '#f58231', '#4f8cff', '#f032e6',
       '#bfef45', '#ff69b4', '#2dd4bf', '#6a4cff', '#dcbeff', '#9acd32', '#00bfff', '#ffb347',
-      '#c56bff', '#aaffc3', '#c9a66b', '#a0e7ff', '#fabed4', '#fff29a', '#7cf5a0'];
+      '#c56bff', '#aaffc3', '#c9a66b', '#a0e7ff', '#fabed4', '#fff29a', '#7cf5a0', '#8b4513'];
     const colorByCode = (code) => {
       if (code === CUSTOM_CODE) return '#cbd5e1';
       const i = LEDGERS.findIndex((l) => l.code === code);
