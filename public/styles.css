@@ -335,6 +335,7 @@ input:-webkit-autofill {
   border-left: 3px solid var(--text-faint);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+  white-space: pre-line; /* Phase 12b: step-by-step native-save traces use \n; plain single-line messages are unaffected */
 }
 .msg.show { display: block; }
 .msg.error   { border-left-color: var(--accent); background: var(--accent-soft); color: #f8dca6; }
@@ -493,42 +494,39 @@ input:-webkit-autofill {
 .tx-table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
 .tx-table th, .tx-table td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: anywhere; }
 .tx-table th { font-family: var(--font-head); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; color: var(--text-dim); font-weight: 600; }
-/* Genuine relative column proportions (table-layout: fixed honours these widths). The 10th column
-   (Contract Stated) sits at position 9, before actions; Ledger/Sub-ledger/Remark are
-   the compressible ones, Amount (5) and Contract Stated (9) both keep room for rupee figures.
+/* Genuine relative column proportions (table-layout: fixed honours these widths). The Contract
+   Stated column was removed with the reimbursement offset, so there are NINE columns now and its
+   10% went back to the compressible ones (Ledger/Sub-ledger/Remark) plus a point each to Amount
+   and By. Amount (5) keeps room for rupee figures.
    1 Serial · 2 Date · 3 Ledger · 4 Sub-ledger · 5 Amount · 6 By · 7 Remark · 8 Contract Included ·
-   9 Contract Stated · 10 actions.  Sums to 100%. */
+   9 actions.  Sums to 100%. */
 .tx-table th:nth-child(1),  .tx-table td:nth-child(1)  { width: 5%; }
 .tx-table th:nth-child(2),  .tx-table td:nth-child(2)  { width: 10%; }
-.tx-table th:nth-child(3),  .tx-table td:nth-child(3)  { width: 14%; }
-.tx-table th:nth-child(4),  .tx-table td:nth-child(4)  { width: 9%; }
-.tx-table th:nth-child(5),  .tx-table td:nth-child(5)  { width: 12%; text-align: right; }
-.tx-table th:nth-child(6),  .tx-table td:nth-child(6)  { width: 10%; }
-.tx-table th:nth-child(7),  .tx-table td:nth-child(7)  { width: 9%; }
+.tx-table th:nth-child(3),  .tx-table td:nth-child(3)  { width: 17%; }
+.tx-table th:nth-child(4),  .tx-table td:nth-child(4)  { width: 12%; }
+.tx-table th:nth-child(5),  .tx-table td:nth-child(5)  { width: 13%; text-align: right; }
+.tx-table th:nth-child(6),  .tx-table td:nth-child(6)  { width: 11%; }
+.tx-table th:nth-child(7),  .tx-table td:nth-child(7)  { width: 11%; }
 .tx-table th:nth-child(8),  .tx-table td:nth-child(8)  { width: 12%; }
-.tx-table th:nth-child(9),  .tx-table td:nth-child(9)  { width: 10%; }
-.tx-table th:nth-child(10), .tx-table td:nth-child(10) { width: 9%; }
-/* Contract Stated data (col 9): right-aligned + tabular-nums like Amount, but NOT the amber
-   accent — it is the contract's STATED figure, visually distinct from the amount actually spent.
-   Applied to the td only (not th) so each page's header alignment rule still wins with no fight. */
-.tx-table td.tx-cstated { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tx-table th:nth-child(9),  .tx-table td:nth-child(9)  { width: 9%; }
 /* Amount anti-truncation — the finding, so nobody re-adds a useless rule (empirical):
    a min-width on a table CELL is IGNORED under `table-layout: fixed` at EVERY width — injecting
    `min-width: 148px` on column 5 at a 768px viewport changed its rendered width by 0px. Only a
    min-width on the TABLE element is honoured (it widened col 5 and forced an x-scroll). There is
    therefore NO cell-level floor here on purpose; the base widths are pure proportional %.
    Threshold arithmetic for ₹12,34,567.89 (80.3px text + 10px×2 padding): the Amount cell content
-   box must be ≥ 80.3px. EDIT mode (col 5 = 12% of the table): 0.12·W − 20 ≥ 80.3 → table W ≥ 836px.
-   READ mode (col 5 ≈ 13.3% once the actions column is display:none'd): 0.133·W − 20 ≥ 80.3 → W ≥ ~752px.
+   box must be ≥ 80.3px. EDIT mode (col 5 = 13% of the table): 0.13·W − 20 ≥ 80.3 → table W ≥ 772px.
+   READ mode (col 5 ≈ 14.3% once the actions column is display:none'd): 0.143·W − 20 ≥ 80.3 → W ≥ ~702px.
+   (Both thresholds dropped when the Contract Stated column was removed and its width redistributed.)
    Below those table widths the read-mode value overflows LEFT (right-aligned + overflow:visible,
    into Sub-ledger whitespace, NOT into By) and the edit-mode <input> clips internally — neither
    collides with a neighbour, so no floor was added. If one is ever wanted, put min-width on
    `.tx-table` (~836px) + `overflow-x:auto` on its wrapper — NOT min-width on a cell. */
-/* Read mode: the "actions" column (the 10th) is empty (both consumers
+/* Read mode: the "actions" column (the 9th) is empty (both consumers
    pass deleteInEditMode: true), so the component adds .tx-actions-collapsed and that column is
-   removed with display:none. table-layout:fixed then rebuilds the grid from the 9 remaining cells
+   removed with display:none. table-layout:fixed then rebuilds the grid from the 8 remaining cells
    and the freed width redistributes proportionally — edge-to-edge, no reserved empty column,
-   header borders end flush at column 9 (Contract Stated).
+   header borders end flush at column 8 (Contract Included).
 
    Why display:none and NOT width:0 (do not "simplify" this back): the table is
    `border-collapse: collapse` + `table-layout: fixed`. Under that combination a zero-WIDTH column
@@ -537,14 +535,14 @@ input:-webkit-autofill {
    two columns a collapsed edge) `width:0` left the actions column at its full share instead of 0,
    and the other columns never grew. Money Debited, with no header border, happened to collapse fine
    with width:0 — which is exactly why the two pages diverged. display:none removes the column from
-   the grid entirely (border and all), so fixed-layout rebuilds from the 9 remaining cells and both
+   the grid entirely (border and all), so fixed-layout rebuilds from the 8 remaining cells and both
    pages redistribute identically.
-   Edit mode removes the class and column 10 reappears for the Delete button + per-row error text.
+   Edit mode removes the class and column 9 reappears for the Delete button + per-row error text.
    Desktop only: the ≤760px block below re-blocks every cell (display/width overrides), so mobile
    is untouched. */
 @media (min-width: 761px) {
-  .tx-table.tx-actions-collapsed th:nth-child(10),
-  .tx-table.tx-actions-collapsed td:nth-child(10) { display: none; }
+  .tx-table.tx-actions-collapsed th:nth-child(9),
+  .tx-table.tx-actions-collapsed td:nth-child(9) { display: none; }
 }
 .tx-table td.tx-amount { color: var(--accent); font-weight: 600; white-space: nowrap; overflow: visible; font-family: var(--font-head); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
 /* Read rows: single-line + ellipsis -> evenly-built, consistent row heights.

@@ -323,22 +323,88 @@
           reader.readAsDataURL(blob);
         });
       }
-      // Delivers `blob` to the user as `fname` and only resolves once that has actually happened (or
-      // throws with a specific reason). Native Android: Filesystem.writeFile + Share.share, same as
-      // the Overview PDF path. Browser: the existing blob-link download().
-      async function saveFile(blob, fname, dialogTitle) {
+      // Delivers `blob` to the user as `fname`, reporting every step LIVE into `msg` (the only
+      // diagnostic channel available on a device with no adb access) and never claiming success
+      // without proof. Native Android: Filesystem.writeFile + Share.share, same as the Overview PDF
+      // path. Browser: the existing blob-link download().
+      //
+      // A prior version of this function reported success as soon as writeFile()/Share.share()
+      // resolved without throwing — but "resolved without throwing" is not proof anything happened;
+      // it's also exactly what the browser-download fallback does if it's reached by mistake (native
+      // detection failing, an import silently resolving to the wrong module, etc.), which is
+      // indistinguishable on screen from success. Every step below is shown as it happens, and the
+      // write is independently verified with Filesystem.stat() before this is ever called done.
+      //
+      // Phase 15: an encrypted full backup (fname ends ".db.enc" — the main "Download encrypted
+      // backup" button AND the Ledger List CSV import's automatic safety backup both produce one, and
+      // both are equally real, restorable snapshots) marks /api/backup/mark-exported right at the
+      // point each path treats the file as actually existing — post-Filesystem.stat() on native, post-
+      // download-trigger in the browser fallback (there's no stat to wait for there). Best-effort: a
+      // failed recording must never fail an otherwise-successful backup.
+      const markBackupExported = () => fetch('/api/backup/mark-exported', { method: 'POST' }).catch(() => {});
+      async function saveFile(blob, fname, dialogTitle, msg) {
+        const steps = [];
+        const report = (type) => msg.show(steps.join('\n'), type);
+        const ok = (s) => { steps.push('✓ ' + s); report('info'); };
+        const bail = (s, err) => {
+          steps.push('✗ ' + s + (err ? ': ' + errText(err) : ''));
+          report('error');
+          const e = new Error(steps.join(' / '));
+          e.alreadyShown = true;
+          throw e;
+        };
+
+        ok('starting save: ' + fname);
+
         let Capacitor;
         try { ({ Capacitor } = await import('@capacitor/core')); }
-        catch (err) { throw new Error('Could not load the native bridge: ' + errText(err)); }
+        catch (err) { bail('could not load @capacitor/core', err); }
+        ok('@capacitor/core loaded');
 
-        if (Capacitor.isNativePlatform()) {
-          const [{ Filesystem, Directory }, { Share }] = await Promise.all([import('@capacitor/filesystem'), import('@capacitor/share')]);
-          const base64Data = await blobToBase64(blob);
-          const written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the file');
-          await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }), 20000, 'Opening the share sheet');
+        const native = Capacitor.isNativePlatform();
+        ok((native ? 'native platform detected: ' : 'not a native platform (browser fallback): ') + Capacitor.getPlatform());
+
+        if (!native) {
+          try { download(blob, fname); }
+          catch (err) { bail('browser download() threw', err); }
+          ok('browser download() triggered — cannot verify a file actually landed from in-page JS');
+          if (fname.endsWith('.db.enc')) await markBackupExported();
+          report('success');
           return;
         }
-        download(blob, fname);
+
+        let Filesystem, Directory, Share;
+        try { ({ Filesystem, Directory } = await import('@capacitor/filesystem')); }
+        catch (err) { bail('could not load @capacitor/filesystem', err); }
+        ok('@capacitor/filesystem loaded');
+        try { ({ Share } = await import('@capacitor/share')); }
+        catch (err) { bail('could not load @capacitor/share', err); }
+        ok('@capacitor/share loaded');
+
+        let base64Data;
+        try { base64Data = await blobToBase64(blob); }
+        catch (err) { bail('base64 conversion failed', err); }
+        ok(`file converted to base64 (${base64Data.length} chars)`);
+
+        let written;
+        try { written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the file'); }
+        catch (err) { bail('Filesystem.writeFile threw', err); }
+        if (!written || !written.uri) bail('Filesystem.writeFile returned no uri (got ' + JSON.stringify(written) + ')');
+        ok('writeFile returned uri: ' + written.uri);
+
+        // Proof, not trust: writeFile resolving is not proof the file exists. Independently stat it.
+        let info;
+        try { info = await withTimeout(Filesystem.stat({ path: fname, directory: Directory.Cache }), 10000, 'Verifying the saved file'); }
+        catch (err) { bail('could not verify the file exists after writing (Filesystem.stat failed)', err); }
+        if (!info || typeof info.size !== 'number') bail('Filesystem.stat returned no usable size (got ' + JSON.stringify(info) + ')');
+        ok(`file verified on disk: ${info.size} bytes`);
+        if (fname.endsWith('.db.enc')) await markBackupExported();
+
+        try { await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }), 20000, 'Opening the share sheet'); }
+        catch (err) { bail('Share.share threw', err); }
+        ok('share sheet invoked');
+
+        report('success');
       }
 
       const today = () => {
@@ -364,10 +430,9 @@
           const res = await fetch('/api/backup/export' + (includeContacts ? '?includeContacts=1' : ''));
           if (!res.ok) { jsonMsg.show('Could not build the backup. Please try again.', 'error'); return; }
           const data = await res.json();
-          await saveFile(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `plannr-backup-${today()}.json`, 'Save backup');
-          jsonMsg.show('Backup saved. Keep this file somewhere safe.', 'success');
+          await saveFile(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `plannr-backup-${today()}.json`, 'Save backup', jsonMsg);
         } catch (err) {
-          jsonMsg.show('Could not save the backup: ' + errText(err), 'error');
+          if (!err.alreadyShown) jsonMsg.show('Could not save the backup: ' + errText(err), 'error');
         } finally {
           downloadJsonBtn.disabled = false;
         }
@@ -448,11 +513,10 @@
             return;
           }
           const blob = await res.blob();
-          await saveFile(blob, `plannr-backup-${today()}.db.enc`, 'Save encrypted backup');
+          await saveFile(blob, `plannr-backup-${today()}.db.enc`, 'Save encrypted backup', encExportMsg);
           encExportPass.value = '';
-          encExportMsg.show('Encrypted backup saved. Keep the passphrase somewhere separate from the file.', 'success');
         } catch (err) {
-          encExportMsg.show('Could not save the encrypted backup: ' + errText(err), 'error');
+          if (!err.alreadyShown) encExportMsg.show('Could not save the encrypted backup: ' + errText(err), 'error');
         } finally {
           encExportBtn.disabled = false;
         }
@@ -541,10 +605,10 @@
 
           // Cash Outflow
           files.push([`plannr-cash-outflow-${stamp}.csv`, toCsv(
-            ['Sl.No', 'Date', 'Amount (₹)', 'By', 'Ledger / Sub-ledger', 'Remark', 'Contract Included', 'Contract Stated (₹)'],
-            // Phase 5-follow-up: contract's stated amount for the item (reimbursement offset) in
-            // rupees via the same rupees() converter; blank for 'extra' rows (rupees(null) === '').
-            (co.entries || []).map((e, i) => [i + 1, fmtDate(e.txDate), rupees(e.amountPaise), e.by, e.ledger, e.reason, scopeLabel(e.contractScope), rupees(e.contractStatedPaise)]),
+            // The Contract Stated column went with the reimbursement offset: nothing writes that
+            // amount any more, so exporting a permanently-blank column would be noise.
+            ['Sl.No', 'Date', 'Amount (₹)', 'By', 'Ledger / Sub-ledger', 'Remark', 'Contract Included'],
+            (co.entries || []).map((e, i) => [i + 1, fmtDate(e.txDate), rupees(e.amountPaise), e.by, e.ledger, e.reason, scopeLabel(e.contractScope)]),
           )]);
 
           // Loans
@@ -602,10 +666,9 @@
         try {
           const res = await fetch('/api/ledgers/csv');
           if (!res.ok) { const d = await res.json().catch(() => ({})); ledgerCsvMsg.show(d.error || 'Could not build the Ledger List CSV.', 'error'); return; }
-          await saveFile(await res.blob(), `plannr-ledger-list-${today()}.csv`, 'Save Ledger List CSV');
-          ledgerCsvMsg.show('Ledger List saved.', 'success');
+          await saveFile(await res.blob(), `plannr-ledger-list-${today()}.csv`, 'Save Ledger List CSV', ledgerCsvMsg);
         } catch (err) {
-          ledgerCsvMsg.show('Could not save the Ledger List CSV: ' + errText(err), 'error');
+          if (!err.alreadyShown) ledgerCsvMsg.show('Could not save the Ledger List CSV: ' + errText(err), 'error');
         } finally {
           downloadLedgerCsvBtn.disabled = false;
         }
@@ -643,9 +706,9 @@
 
           const backupFname = `plannr-backup-${today()}.db.enc`;
           try {
-            await saveFile(backupBlob, backupFname, 'Save safety backup');
+            await saveFile(backupBlob, backupFname, 'Save safety backup', ledgerCsvMsg);
           } catch (err) {
-            ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
+            if (!err.alreadyShown) ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
             return;
           }
 
@@ -703,7 +766,8 @@
         if (t === 'cash_in') return `${fp(e.amountPaise)} — ${esc(e.by) || '—'}${e.reason ? ' · ' + esc(e.reason) : ''}`;
         if (t === 'cash_out') return `${fp(e.amountPaise)} — ${esc(e.ledger) || '—'} · ${esc(e.by) || '—'}`;
         if (t === 'loans') return `${fp(e.amountPaise)} — ${esc(e.bankName) || 'loan'}`;
-        if (t === 'contract') return `${esc(e.contractorName) || '—'} — ${esc(e.areaOfWork) || '—'} · stated ${fp(e.statedAmountPaise)}`;
+        // statedAmountPaise is optional now — say so rather than printing a misleading ₹0.00.
+        if (t === 'contract') return `${esc(e.contractorName) || '—'} — ${esc(e.areaOfWork) || '—'} · ${e.statedAmountPaise == null ? 'no stated value' : 'stated ' + fp(e.statedAmountPaise)}`;
         if (t === 'contractor_payments') return `${fp(e.amountPaise)} to ${esc(e.contractorName) || '—'} · ${esc(fmtDate(e.payDate))}`;
         return '';
       }

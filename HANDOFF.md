@@ -1,6 +1,6 @@
 # Plannr — System Reference
 
-Core reference for how Plannr works: what it is, the schema and its invariants, the reimbursement
+Core reference for how Plannr works: what it is, the schema and its invariants, the dues
 mechanic, the backup/recovery paths, the deliberate decisions and why, the known limitations, and
 troubleshooting by symptom. `README.md` is the fuller feature/setup reference; this file is the model
 and the operational knowledge.
@@ -56,9 +56,11 @@ See `README.md` for the full table list. The ones worth extra context here:
 - **One live contract.** `idx_contract_single_live` (partial unique index on
   `contract WHERE deleted_at IS NULL`) makes a second live contract fail at INSERT/UPDATE.
   Soft-deleted contracts may coexist with the one live row.
-- **One service, one offset.** `idx_cash_out_service_live` (partial unique index on
+- **One service, one live debit.** `idx_cash_out_service_live` (partial unique index on
   `cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL`) makes
-  at most one live debit link any given `contract_services` row.
+  at most one live debit link any given `contract_services` row. It existed to stop one service
+  offsetting the dues twice; with the reimbursement offset removed (§3) the link is pure provenance,
+  so the index now guards a bookkeeping rule rather than a figure. Kept as-is.
 - **Soft-delete everywhere.** The five Recycle Bin tables (`cash_in`, `cash_out`, `loans`, `contract`,
   `contractor_payments`) carry `deleted_at` (NULL = live); "delete" sets it, the Recycle Bin restores
   or permanently removes. Hard-deleting a contract is blocked while any live `contractor_payments` OR
@@ -68,28 +70,38 @@ See `README.md` for the full table list. The ones worth extra context here:
 
 ---
 
-## 3. The reimbursement mechanic (Option C) — the one non-obvious money rule
-
-A debit marked **Contract Included: Yes** carries `contract_stated_paise` — what the contract *stated*
-for that item, distinct from what was actually spent. It reduces the contractor's dues while the real
-spend still counts as spending, so the gap falls out automatically:
+## 3. Dues (owed), and the reimbursement offset that was REMOVED
 
 ```
-owed (F) = contract.price_of_contract_paise
-         − Σ contractor_payments.amount_paise                                  (cumulative)
-         − Σ cash_out.contract_stated_paise WHERE contract_scope = 'included'  (cumulative)
+owed (F) = contract.price_of_contract_paise            (0 when no price is stated)
+         − Σ contractor_payments.amount_paise         (cumulative)
 ```
 
-**Worked example.** Contract stated **₹25,00,000**; a payment of **₹5,00,000**; an included debit that
-the contract stated **₹40,000** for but only **₹32,000** was spent → **owed = ₹19,60,000**
-(25,00,000 − 5,00,000 − 40,000). Spent-by-self (C) shows the real **₹32,000**; the **₹8,000** gap
-between stated and spent falls out on its own. Reconciliation stays quiet because the data is
-consistent. `owed` is never clamped — if the contractor is overpaid relative to the contract, it goes
-negative and the UI presents that as "Overpaid by ₹X" rather than a due amount.
+**Worked example.** Contract stated **₹25,00,000**; a payment of **₹5,00,000**; a debit of **₹32,000**
+marked *Contract Included: Yes* → **owed = ₹20,00,000** (25,00,000 − 5,00,000). Spent-by-self (C)
+shows the real **₹32,000** and Total spent (D) includes it, but the included debit does **not** reduce
+owed. `owed` is never clamped — if the contractor is overpaid relative to the contract it goes negative
+and the UI presents that as "Overpaid by ₹X" rather than a due amount.
 
-**Cumulative vs range-scoped (critical).** The offset and paid totals are a *balance* — summed over
-the full set. The pie, Paid-to-contractors (B) and Spent-by-self (C) are scoped to the selected date
-range. A date range that excludes the included debit still leaves owed unchanged.
+**What changed, and why it is all-or-nothing.** Phase 5E's "Option C" offset had an included debit also
+carry `contract_stated_paise` (what the contract stated for that item), subtracted from owed. That
+third term is gone:
+
+- The Cash Outflow form no longer asks for a stated amount, and no code path writes the column.
+- **Legacy rows that still hold a value do not contribute either.** Owed must not depend on whether a
+  row was entered before or after the change; a half-live offset is worse than no offset.
+- `contract_stated_paise` remains in the schema, nullable and unused. Backups still round-trip it and
+  editing a legacy row leaves it untouched (the column is simply not in the CRUD write list), so the
+  history survives. Dropping a column in SQLite is a full table rebuild — not worth it for dead data.
+- **Contract Included (Yes/No) stays** — as a descriptive label. It changes no figure.
+
+**Two contract fields, both optional now.** `price_of_contract_paise` (Total contract value) is also
+optional: a contract with no stated price contributes 0 to Total contract (A) and 0 to owed, while its
+payments still count in B/D/pie.
+
+**Cumulative vs range-scoped (critical).** Owed and paid totals are a *balance* — summed over the full
+set. The pie, Paid-to-contractors (B) and Spent-by-self (C) are scoped to the selected date range. A
+date range that excludes a payment still leaves owed unchanged.
 
 ---
 
@@ -100,21 +112,22 @@ D `totalSpentPaise` = B + C (range), E `loanReceivedPaise` (cumulative), F `owed
 (cumulative, unclamped). Plus `ledgers` (the pie rollup — 24 distinctly-coloured mains, a
 "Custom/Uncategorized" bucket for `CUSTOM` spend, and an algorithmically-generated colour for any
 main added past the 24th via the Ledger List CSV import so it never reuses an existing colour),
-`contracts` (the contract's stated/paid/offset/owed), and `budgetPaise`.
+`contracts` (the contract's stated/paid/owed), and `budgetPaise`.
 
 **Where the figures surface:** the on-screen `/overview` summary bar shows **Spent-by-self (C),
 Paid-to-contractors (B), Total (D), and Owed to contractors (F)** — the same F value the PDF prints.
 Total Contract (A) and Loan Received (E) are **not** broken out as their own on-screen figures (A
 gates whether the Owed block renders at all). The downloadable PDF shows the full set of six.
-Contractor Payments shows a *simple* "Remaining = stated − Σ payments" that **deliberately excludes**
-the reimbursement offset — it is not the same number as owed (F).
+Contractor Payments shows "Remaining = stated − Σ payments", which is now the SAME formula as owed
+(F) — with the reimbursement offset gone the two figures agree.
 
 ### `reconciliation` — flags, never silent corrections
 Every figure is reported as-is; these only detect + report (and log) inconsistencies:
 `ok` (false if any trip), `orphanedContractorPayments` (payments whose contract is soft-deleted/gone),
-`includedDebitsMissingOffset` (`included` debits with NULL/0 offset — reachable via an older import),
-`overOffset` (payments + offsets exceed the contract value). When `ok` is false a banner shows on
-`/overview`; the numbers themselves are never changed.
+`overOffset` (contractor payments exceed the contract value — the name is a holdover; with the offset
+gone `appliedPaise` is just the payments total). `includedDebitsMissingOffset` was **removed**: it
+fired on any `included` debit with a NULL/0 stated amount, which is now every ordinary entry. When
+`ok` is false a banner shows on `/overview`; the numbers themselves are never changed.
 
 ---
 

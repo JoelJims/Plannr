@@ -102,44 +102,50 @@ end to end through the real routes on a live temp DB.
 | table | holds |
 |---|---|
 | `users` | exactly one row: the fixed local owner. `password_hash` is dormant (kept for schema stability; there is no login). |
-| `contract` | the single building contract: contractor, area, headline ledger tag, `price_of_contract_paise` (REQUIRED stated amount — dues math starts here), optional free-form amount, date signed, optional end date. |
+| `contract` | the single building contract: contractor, area, headline ledger tag, `price_of_contract_paise` (OPTIONAL stated amount — dues math starts here; NULL = no stated price, contributing 0 to A and 0 to owed), optional free-form amount, date signed, optional end date. |
 | `contract_payment_dates` | a contract's scheduled payment dates (0..many); offered as the date dropdown on the Contractor Payments page. Cascades if the contract is hard-deleted. |
-| `contract_services` | a contract's line-item services (a name + an OPTIONAL price). Informational — they never enter the dues maths; their only downstream job is to supply `cash_out.contract_stated_paise` on the debit form. Soft-delete; cascades if the contract is hard-deleted. |
+| `contract_services` | a contract's line-item services (a name + an OPTIONAL price). Informational — they never enter the dues maths. Their only downstream job is to be NAMED by a debit via `cash_out.contract_service_id` (provenance: "which service was this spend for"). Soft-delete; cascades if the contract is hard-deleted. |
 | `ledger_mains` / `ledger_subs` | the ledger taxonomy — 24 main categories and their sub-ledgers, `code` as the primary key. Seeded once from root `ledgers.js` on first boot; from then on the DB is the source of truth. User-editable: export/import as CSV from Data Backup → "Ledger List" (see below). |
 | `ledger_customs` | a saved list of custom ledger names typed by hand, so a typed custom is selectable after first use. |
 | `contractor_payments` | money PAID to the contractor, each tied to the contract. Ledger fields are an optional *display* tag and do NOT drive dues. |
 | `cash_in` | money credited (inflow): amount, `by_type` (`user`/`relative`/`custom`) + attribution, reason. |
-| `cash_out` | money debited (outflow): amount, tx_date, `by_type` (`user`/`custom`) + who paid, ledger/sub-ledger (or `CUSTOM`), `contract_scope` (`included`/`extra`), `contract_stated_paise` (the reimbursement offset — see below), and `contract_service_id` (the linked `contract_services` row — provenance + the one-offset guard key; NULL when 'extra' or typed manually). `phase`/`subpart` are dormant, stored but unused. |
+| `cash_out` | money debited (outflow): amount, tx_date, `by_type` (`user`/`custom`) + who paid, ledger/sub-ledger (or `CUSTOM`), `contract_scope` (`included`/`extra`, a descriptive label only), and `contract_service_id` (the linked `contract_services` row — provenance; NULL when 'extra' or when no service is picked). `contract_stated_paise` is RETIRED: the column is kept nullable so historical values and backups survive, but nothing writes or reads it (see below). `phase`/`subpart` are dormant, stored but unused. |
 | `loans` | one-time loan records: amount, bank, interest rate, tenure. `interest_rate` is informational (drives no calculation); interest actually *paid* is a `cash_out` row under ledger 22.5 (Loan interest). |
 | `settings` | key/value app options (budget, notification times). Composite `(tenant_id, key)` PK is a holdover from an earlier multi-household design; in this single-owner app it's always keyed to the one owner. |
 
 ## Invariants enforced in the DATABASE (not just app code)
 
 - **One live contract.** `idx_contract_single_live` — a partial unique index on `contract WHERE deleted_at IS NULL` — makes a second live contract fail at INSERT/UPDATE. Soft-deleted contracts coexist with the one live row.
-- **One service, one offset.** `idx_cash_out_service_live` — a partial unique index on `cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL` — makes at most one LIVE debit link any given `contract_services` row, so a single substitution can never offset the contractor's dues twice. Enforced in the DB, not only in app code (the app adds a naming 409 on create/edit/restore).
+- **One service, one live debit.** `idx_cash_out_service_live` — a partial unique index on `cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL` — makes at most one LIVE debit link any given `contract_services` row. Enforced in the DB, not only in app code (the app adds a naming 409 on create/edit/restore). NOTE: this index was built to stop a single service offsetting the contractor's dues twice. With the reimbursement offset removed the link is pure provenance and the index now guards a bookkeeping rule ("record each service once"), not a figure. It is kept because it still reads as a sensible rule and dropping a unique index is a schema change with no upside.
 - **Soft-delete everywhere.** The five Recycle Bin tables (`cash_in`, `cash_out`, `loans`, `contract`, `contractor_payments`) carry `deleted_at TEXT` (NULL = live); "delete" sets it, the Recycle Bin restores or permanently removes. The JSON backup keeps soft-deleted rows; the "CSV for Excel" export shows live rows only.
 - **Integer paise.** All `*_paise` columns are INTEGER; money is never a float.
 
-## The reimbursement mechanic (Option C)
-
-A debit marked **Contract Included: Yes** carries `contract_stated_paise` — what the contract
-*stated* for that item (distinct from the amount actually spent). It reduces the contractor's
-dues while the real spend still counts as spending, so the difference falls out automatically:
+## Dues (owed) — and the reimbursement offset that was REMOVED
 
 ```
-owed (F) = contract.price_of_contract_paise
-         − Σ contractor_payments.amount_paise                                  (cumulative)
-         − Σ cash_out.contract_stated_paise WHERE contract_scope = 'included'  (cumulative)
+owed (F) = contract.price_of_contract_paise            (0 when no price is stated)
+         − Σ contractor_payments.amount_paise         (cumulative)
 ```
 
 **Worked example.** Contract stated ₹1,00,000; a payment of ₹40,000; a debit of ₹32,000 marked
-included with `contract_stated_paise` = ₹40,000 → **owed = ₹20,000** (100000 − 40000 − 40000),
-spent-by-self = ₹32,000, and Total spent (D) includes the real ₹32,000. The ₹8,000 gap between
-stated and spent falls out on its own.
+Contract Included: Yes → **owed = ₹60,000** (100000 − 40000). Spent-by-self = ₹32,000 and
+Total spent (D) includes the real ₹32,000, but the included debit does **not** reduce owed.
 
-**Cumulative vs range-scoped (critical).** The offset and the paid totals are a *balance* — always
-summed over the full set. The pie, Paid-to-contractors (B) and Spent-by-self (C) are scoped to the
-selected date range. So a date range that excludes the included debit still leaves owed unchanged.
+**What changed.** Phase 5E's "Option C" reimbursement offset had a debit marked *Contract Included:
+Yes* also carry `contract_stated_paise` — what the contract stated for that item — which was
+subtracted from owed. That third term is gone, deliberately and **all-or-nothing**:
+
+- The Cash Outflow form no longer asks for a stated amount, and nothing writes `contract_stated_paise`.
+- Legacy rows that still hold a value do **not** contribute either. Owed must not depend on whether a
+  row was entered before or after the change — a half-live offset is worse than none.
+- The column stays in the schema, nullable and unused, and backups still round-trip it, so historical
+  values survive. (Dropping a column in SQLite is a table rebuild; not worth the risk for dead data.)
+- **Contract Included (Yes/No) stays** as a label. It records whether the item was in the contract; it
+  changes no figure.
+
+**Cumulative vs range-scoped (critical).** Owed and the paid totals are a *balance* — always summed
+over the full set. The pie, Paid-to-contractors (B) and Spent-by-self (C) are scoped to the selected
+date range. So a date range that excludes a payment still leaves owed unchanged.
 
 ## Overview money model (`GET /api/overview`)
 
@@ -149,7 +155,7 @@ selected date range. So a date range that excludes the included debit still leav
 `ledgers` (the pie rollup, 24 main categories each with a distinct colour, plus a "Custom /
 Uncategorized" bucket for `CUSTOM`-ledger spend; a 25th+ main added via CSV import gets an
 algorithmically generated colour rather than reusing an existing one), `contracts` (the one
-contract's stated/paid/offset/owed), and `budgetPaise`.
+contract's stated/paid/owed), and `budgetPaise`.
 
 ### `reconciliation` key — flags, never silent corrections
 
@@ -157,9 +163,9 @@ The response also carries `reconciliation`. Every figure above is reported **as-
 *detect and report* inconsistencies:
 
 - `ok` — false if any check below trips.
-- `orphanedContractorPayments` `{count, amountPaise, contractIds}` — live payments whose parent contract is soft-deleted/missing. Their ₹ is still in B/D/pie but not offset in A/F.
-- `includedDebitsMissingOffset` `{count, amountPaise}` — `included` debits with a NULL/0 `contract_stated_paise` (an offset that does nothing; reachable via an older backup import).
-- `overOffset` `{over, contractPaise, appliedPaise, excessPaise}` — payments + offsets exceed the contract value.
+- `orphanedContractorPayments` `{count, amountPaise, contractIds}` — live payments whose parent contract is soft-deleted/missing. Their ₹ is still in B/D/pie but not counted in A/F.
+- `overOffset` `{over, contractPaise, appliedPaise, excessPaise}` — contractor payments exceed the contract value. (Named from the removed offset; with the offset gone `appliedPaise` is just the payments total.)
+- `includedDebitsMissingOffset` was **removed**. It fired on any `included` debit with a NULL/0 `contract_stated_paise` — which, with the offset gone, is every ordinary entry.
 
 ## Exports & backup (`/data-backup`)
 

@@ -43,9 +43,10 @@
        palette (no new colour). border-collapse shares edges, so column widths are unchanged;
        the absolutely-positioned resize grips sit above the border (z-index) and stay grabbable.
        Phase 3B: border ALL header cells (not a hard-coded -n+8) so the boxes track the last
-       VISIBLE column in both modes — in read mode the actions column (now column 10, Phase 5F)
-       is collapsed via display:none in the shared .tx-actions-collapsed rule, so the boxes end
-       flush at column 9 (Contract Stated); in edit mode column 10 reappears and gets its box too. */
+       VISIBLE column in both modes — in read mode the actions column (column 9, since the
+       Contract Stated column was removed with the reimbursement offset) is collapsed via
+       display:none in the shared .tx-actions-collapsed rule, so the boxes end flush at column 8
+       (In Contract?); in edit mode column 9 reappears and gets its box too. */
     .tx-table thead th { border: 1px solid var(--line-strong); }
 
     /* Change 2 — tooltips (work on hover AND tap). Headers carry a plain-language concept
@@ -442,8 +443,8 @@
               <th>S.No</th><th>Date</th>
               <th data-tip="The broad budget category this expense belongs to (one of 23 fixed categories).">Ledger</th>
               <th data-tip="The specific item within that ledger category.">Sub-ledger</th>
-              <th>Amount</th><th>By</th><th>Remark</th><th>In Contract?</th>
-              <th data-tip="What the contract stated for this item (the reimbursement offset that reduces the contractor's dues) — not the amount actually spent.">Contract Stated</th><th></th>
+              <th>Amount</th><th>By</th><th>Remark</th>
+              <th data-tip="Whether this item was part of the contract. A label only — it does not change any figure.">In Contract?</th><th></th>
             </tr>
           </thead>
           <tbody id="ovEntries"></tbody>
@@ -626,8 +627,7 @@
       if (!rc || rc.ok) { el.hidden = true; el.textContent = ''; return; }
       const issues = [];
       if (rc.orphanedContractorPayments && rc.orphanedContractorPayments.count) issues.push(rc.orphanedContractorPayments.count + ' contractor payment(s) attributed to a contract that no longer exists');
-      if (rc.includedDebitsMissingOffset && rc.includedDebitsMissingOffset.count) issues.push(rc.includedDebitsMissingOffset.count + ' "included" debit(s) with no contract-stated offset (dues don’t drop for that spend)');
-      if (rc.overOffset && rc.overOffset.over) issues.push('payments + offsets exceed the contract value by ' + fmtPaise(rc.overOffset.excessPaise) + ' (over-offset)');
+      if (rc.overOffset && rc.overOffset.over) issues.push('contractor payments exceed the contract value by ' + fmtPaise(rc.overOffset.excessPaise) + ' (over-offset)');
       el.textContent = '⚠ Reconciliation: ' + (issues.join('; ') || 'figures do not reconcile') + '. Figures are shown as-is, not adjusted.';
       el.hidden = false;
     }

@@ -46,6 +46,14 @@ function buildPreTenancyFixture() {
   for (let i = 0; i < 3; i++) d.prepare("INSERT INTO cash_out(amount_paise,tx_date,by_type,by_user_id,ledger_code,contract_scope) VALUES (?,?,?,?,?,?)").run(1000 * (i + 1), '2025-03-0' + (i + 1), 'user', 1, '4.0', 'extra');
   d.exec("UPDATE sqlite_sequence SET seq=17 WHERE name='cash_out'");
   d.prepare("INSERT INTO settings(key,value) VALUES ('budget_paise', ?)").run('4200000');
+  // Phase 10a: this fixture tests the user_version CARRY-OVER through a restore (does init() migrate a
+  // restored pre-tenancy snapshot up to current?), not the ledger-taxonomy migration. Pre-mark that
+  // migration done - exactly as test/_tenancy-migrate-fixture.js does, and for the same reason - so it
+  // doesn't act on these 3 manually-seeded cash_out rows out from under the unrelated assertions below.
+  // WITHOUT this the taxonomy block owns the outcome: before the data-loss guard it silently DELETEd
+  // all 3 (which is why the "data survived" check below was failing); with the guard it refuses to
+  // boot instead. Either way the assertions here would be measuring the wrong migration.
+  d.prepare("INSERT INTO settings(key,value) VALUES ('_migrated_ledger_taxonomy_v1', '1')").run();
   d.exec('PRAGMA journal_mode = DELETE'); // Phase 4a: WASM builds can't open a WAL-stamped file
   d.close();
   const bytes = fs.readFileSync(dbPath);

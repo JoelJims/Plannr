@@ -158,26 +158,17 @@
     });
     els.subSelect.addEventListener('change', () => syncCustom(els.subSelect, els.subCustomWrap, els.subCustom));
     els.bySelect.addEventListener('change', () => { els.customWrap.hidden = els.bySelect.value !== 'custom'; });
-    // Phase 5F: the contract-stated field (optional els) appears only when Contract Included = Yes.
-    // Services phase (Part C): the service picker (also optional els) appears in the SAME condition, so
-    // a non-contract ('extra') row shows NEITHER — the everyday entry path keeps its Phase-4 tap cost.
+    // The contract-stated field is GONE (the reimbursement offset was removed), so the only thing
+    // the 'included' scope reveals is the service picker — which now records PROVENANCE (which
+    // contract service this spend was for), not an offset amount. A non-contract ('extra') row shows
+    // neither, so the everyday entry path keeps its Phase-4 tap cost.
     let pricedServices = []; // [{ id, name, pricePaise }] — priced + selectable, set by setServices()
     function syncScope() {
       const on = els.scopeSelect.value === 'included';
-      if (els.contractStatedWrap) els.contractStatedWrap.hidden = !on;
-      if (els.contractStated && !on) els.contractStated.value = '';
       if (els.serviceWrap) els.serviceWrap.hidden = !on;
       if (els.serviceSelect && !on) els.serviceSelect.value = '';
     }
-    if (els.contractStated || els.contractStatedWrap || els.serviceWrap) els.scopeSelect.addEventListener('change', syncScope);
-    // Picking a service FILLS the stated amount from its price (a shortcut). The field stays fully
-    // editable afterwards — typing an amount directly must keep working exactly as before.
-    if (els.serviceSelect) {
-      els.serviceSelect.addEventListener('change', () => {
-        const svc = pricedServices.find((s) => String(s.id) === els.serviceSelect.value);
-        if (svc && svc.pricePaise != null && els.contractStated) els.contractStated.value = paiseToInput(svc.pricePaise);
-      });
-    }
+    if (els.serviceWrap || els.serviceSelect) els.scopeSelect.addEventListener('change', syncScope);
 
     buildLedgers();
     buildSubs('');
@@ -231,14 +222,13 @@
         if (e.subledgerCode === CUSTOM_CODE) els.subCustom.value = e.subledgerCustomName || '';
         els.reason.value = e.reason || '';
         els.scopeSelect.value = e.contractScope;
-        if (els.contractStated) els.contractStated.value = (e.contractScope === 'included' && e.contractStatedPaise != null) ? paiseToInput(e.contractStatedPaise) : '';
         syncScope();
       },
       // Phase 4A — reset({ keepLedger:true }) carries the ledger + sub-ledger (and their Custom…
       // inputs + the built sub options) across a save, so a cluster of same-ledger entries needs only
-      // the amount. Everything else — date (→today), amount, remark, By, scope, Contract Stated — always
-      // clears; those are per-entry and carrying them risks silently duplicating a figure. A plain
-      // reset() (Cancel, and every non-cash-outflow caller) clears the ledger too, exactly as before.
+      // the amount. Everything else — date (→today), amount, remark, By, scope — always clears;
+      // those are per-entry and carrying them risks silently duplicating a figure. A plain reset()
+      // (Cancel, and every non-cash-outflow caller) clears the ledger too, exactly as before.
       reset(opts = {}) {
         lastTxDate = null;
         if (datePicker) datePicker.reset(); // back to today
@@ -248,7 +238,6 @@
         els.bySelect.selectedIndex = 0;
         els.customWrap.hidden = true;
         els.scopeSelect.value = '';
-        if (els.contractStated) els.contractStated.value = '';
         if (els.serviceSelect) els.serviceSelect.value = '';
         syncScope();
         if (!opts.keepLedger) {
@@ -273,14 +262,11 @@
         if (els.ledgerSelect.value === CUSTOM_CODE) { body.ledgerCustomName = els.ledgerCustom.value.trim(); if (!body.ledgerCustomName) return { error: 'Enter a name for the custom ledger.' }; }
         if (els.subSelect.value === CUSTOM_CODE) { body.subledgerCustomName = els.subCustom.value.trim(); if (!body.subledgerCustomName) return { error: 'Enter a name for the custom sub-ledger.' }; }
         if (!els.scopeSelect.value) return { error: 'Select whether the work is included in the contract (Yes or No).' };
-        // Phase 5F: contract stated amount REQUIRED (> 0) when included; omitted when extra.
-        if (els.contractStated && els.scopeSelect.value === 'included') {
-          const cs = els.contractStated.value.trim().replace(/,/g, '');
-          if (!/^\d+(\.\d{1,2})?$/.test(cs) || Number(cs) <= 0) return { error: 'Enter the contract’s stated amount for this item (greater than 0, up to 2 decimals).' };
-          body.contractStatedRupees = cs;
-          // Services phase (Part C): record WHICH service was picked (provenance + the one-offset key).
-          // Only sent when a service is chosen; typing the amount manually sends no link (stays valid).
-          if (els.serviceSelect && els.serviceSelect.value) body.contractServiceId = Number(els.serviceSelect.value);
+        // Services phase (Part C): record WHICH service this spend was for (provenance). No longer
+        // gated on a stated amount — that field is gone. Only sent when a service is chosen;
+        // picking none sends no link, which stays perfectly valid.
+        if (els.serviceSelect && els.scopeSelect.value === 'included' && els.serviceSelect.value) {
+          body.contractServiceId = Number(els.serviceSelect.value);
         }
         return { body };
       },
@@ -468,7 +454,7 @@
   //   · flag(id,msg) · markSaved(id)
   // Validation strings mirror createCashOutForm.readBody (single source of rules).
   // ---------------------------------------------------------------------------
-  const TX_COLSPAN = 10; // Phase 5F: Serial,Date,Ledger,Sub-ledger,Amount,By,Remark,Contract Included,Contract Stated,(actions)
+  const TX_COLSPAN = 9; // Serial,Date,Ledger,Sub-ledger,Amount,By,Remark,Contract Included,(actions)
   function createEditableCashOutTable(opts) {
     const LEDGERS = root.LEDGERS || [];
     const tbody = opts.tbody;
@@ -489,7 +475,7 @@
     const deleteInEdit = !!opts.deleteInEditMode;
 
     const inclText = (s) => (s === 'included' ? 'Yes' : 'No'); // "Contract Included" display
-    const FIELDS = ['date', 'amount', 'by', 'byLabel', 'ledger', 'ledgerCustom', 'sub', 'subCustom', 'reason', 'scope', 'contractStated'];
+    const FIELDS = ['date', 'amount', 'by', 'byLabel', 'ledger', 'ledgerCustom', 'sub', 'subCustom', 'reason', 'scope'];
 
     // Ledger and sub-ledger resolved to display names for their SEPARATE columns.
     function ledgerName(e) {
@@ -517,9 +503,6 @@
         subCustom: e.subledgerCode === CUSTOM_CODE ? (e.subledgerCustomName || '') : '',
         reason: e.reason || '',
         scope: e.contractScope || 'extra',
-        // Phase 5F: the contract's STATED amount for this item (reimbursement offset), only for
-        // 'included' rows; '' otherwise so an 'extra' row's baseline matches its disabled input.
-        contractStated: (e.contractScope === 'included' && e.contractStatedPaise != null) ? paiseToInput(e.contractStatedPaise) : '',
       };
     }
     function ledgerOptions(sel) {
@@ -545,7 +528,6 @@
         <td data-label="By">${escapeHtml(e.by)}</td>
         <td data-label="Remark">${e.reason ? escapeHtml(e.reason) : dash}</td>
         <td data-label="In Contract?">${inclText(e.contractScope)}</td>
-        <td data-label="Contract Stated" class="tx-cstated">${(e.contractScope === 'included' && e.contractStatedPaise != null) ? formatPaise(e.contractStatedPaise) : dash}</td>
         <td class="tx-actions">${deleteInEdit ? '' : `<button type="button" class="tx-btn del" data-del="${e.id}">Delete</button>`}</td>
       </tr>`;
     }
@@ -590,9 +572,6 @@
             <option value="extra"${v.scope === 'extra' ? ' selected' : ''}>No</option>
           </select>
         </td>
-        <td data-label="Contract Stated">
-          <input type="text" inputmode="decimal" class="tx-in tx-num" data-f="contractStated" placeholder="Stated ₹" value="${escapeHtml(v.contractStated)}"${v.scope === 'included' ? '' : ' disabled'}>
-        </td>
         <td class="tx-actions">${deleteInEdit ? `<button type="button" class="tx-btn del" data-del="${e.id}">Delete</button>` : ''}<span class="tx-rowmsg" data-msg></span></td>
       </tr>`;
     }
@@ -628,11 +607,6 @@
         tr.querySelector('[data-f="subCustom"]').hidden = ev.target.value !== CUSTOM_CODE;
       } else if (f === 'by') {
         tr.querySelector('[data-f="byLabel"]').hidden = ev.target.value !== 'custom';
-      } else if (f === 'scope') {
-        // Phase 5F: the contract-stated offset only applies to 'included' rows — enable it there,
-        // disable + clear it otherwise so a flipped scope can't submit a stale offset.
-        const cs = tr.querySelector('[data-f="contractStated"]');
-        if (cs) { cs.disabled = ev.target.value !== 'included'; if (cs.disabled) cs.value = ''; }
       }
       updateRowDirty(tr); onDirty(isDirty());
     });
@@ -674,13 +648,8 @@
       if (v.ledger === CUSTOM_CODE) { body.ledgerCustomName = v.ledgerCustom.trim(); if (!body.ledgerCustomName) return { error: 'Enter a name for the custom ledger.' }; }
       if (v.sub === CUSTOM_CODE) { body.subledgerCustomName = v.subCustom.trim(); if (!body.subledgerCustomName) return { error: 'Enter a name for the custom sub-ledger.' }; }
       if (!v.scope) return { error: 'Select whether the work is included in the contract (Yes or No).' };
-      // Phase 5F: contract stated amount REQUIRED (> 0) when included; omitted when extra (server
-      // stores NULL). Mirrors the server-side rule so a bad row is held back, not silently saved.
-      if (v.scope === 'included') {
-        const cs = (v.contractStated || '').trim().replace(/,/g, '');
-        if (!/^\d+(\.\d{1,2})?$/.test(cs) || Number(cs) <= 0) return { error: 'Enter the contract’s stated amount for this item (greater than 0, up to 2 decimals).' };
-        body.contractStatedRupees = cs;
-      }
+      // The contract-stated amount is gone: 'included' is now just a label. The PUT deliberately omits
+      // contractServiceId, which tells the server to PRESERVE an existing service link on edit.
       return { body };
     }
     function setRowMsg(tr, msg) {

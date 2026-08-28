@@ -301,18 +301,18 @@
     }
     function syncCustomDate() { payCustomWrap.hidden = payDateSelect.value !== CUSTOM; }
 
-    // SIMPLE remaining = contract.stated − Σ(live payments for it). Reimbursement /
-    // self-coverage is deliberately NOT factored in here — that is Phase 4's dues math.
+    // remaining = contract.stated − Σ(live payments for it) — the SAME formula Owed (F) on the
+    // Overview uses now that the reimbursement offset is gone. The two figures agree.
     function updateRemaining() {
       const c = contracts.find((x) => String(x.id) === cpContract.value);
       if (!c) { remainingEl.className = 'cp-remaining'; remainingEl.textContent = ''; return; }
       const paid = payments.filter((p) => p.contractId === c.id).reduce((t, p) => t + (p.amountPaise || 0), 0);
       const rem = (c.statedAmountPaise || 0) - paid;
       remainingEl.className = 'cp-remaining show';
-      // Labelled explicitly as a DIFFERENT quantity from Owed (F) on the Overview: this is cash still to
-      // pay the contractor BEFORE reimbursement offsets; Owed applies those offsets. They intentionally differ.
       // Phase 4C — a negative remaining (paid > stated) renders as "Overpaid by ₹X", not a negative "to pay".
-      remainingEl.innerHTML = `Remaining to pay, before reimbursements: <b>${window.PlannrUI.formatOwed(rem)}</b> <span>(contract value ${fmtPaise(c.statedAmountPaise || 0)} − paid ${fmtPaise(paid)}; reimbursement offsets reduce <b>Owed</b> on the Overview, not this figure)</span>`;
+      // A contract with no stated value reads as 0, so this shows the whole paid amount as overpaid.
+      const noStated = c.statedAmountPaise == null;
+      remainingEl.innerHTML = `Remaining to pay: <b>${window.PlannrUI.formatOwed(rem)}</b> <span>(${noStated ? 'no total contract value set, so this counts as ' + fmtPaise(0) : 'contract value ' + fmtPaise(c.statedAmountPaise)} − paid ${fmtPaise(paid)}; this matches <b>Owed</b> on the Overview)</span>`;
     }
 
     cpContract.addEventListener('change', () => { buildDateOptions(); updateRemaining(); });

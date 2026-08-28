@@ -434,7 +434,7 @@ export function installFetchShim(repo) {
       ledger: ledgerLabel(r.ledger_code, r.subledger_code, r.ledger_custom_name, r.subledger_custom_name),
       reason: r.reason || '',
       contractScope: r.contract_scope,
-      contractStatedPaise: r.contract_stated_paise,
+      contractStatedPaise: r.contract_stated_paise, // LEGACY (Phase 5E offset). No longer written or used in any maths.
       contractServiceId: r.contract_service_id,
       createdAt: r.created_at,
     };
@@ -447,6 +447,8 @@ export function installFetchShim(repo) {
   };
 
   function cashOutServiceFinalize(values, { existing }) {
+    // With the reimbursement offset removed the link is pure PROVENANCE - which contract service
+    // this spend was for. 'extra' still forces NULL so a stale link can't linger.
     if (values.contract_scope !== 'included') { values.contract_service_id = null; return; }
     let sid = values.contract_service_id;
     if (sid === undefined) sid = existing ? existing.contract_service_id : null;
@@ -456,7 +458,7 @@ export function installFetchShim(repo) {
     if (svc.price_paise == null) return { status: 400, error: 'That service has no price set, so it cannot be linked — add a price to it, or type the amount directly.' };
     const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
     if (other) {
-      return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can offset only one debit — unlink it there first, or pick another service.` };
+      return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
     }
     values.contract_service_id = sid;
   }
@@ -474,7 +476,9 @@ export function installFetchShim(repo) {
     byIdWhere: 'WHERE c.id = ?',
     searchCols: { date: 'tx_date', amount: 'amount_paise', ledger: 'ledger_code', subledger: 'subledger_code', text: ['reason', 'ledger_custom_name', 'subledger_custom_name'] },
     shape: cashOutRow,
-    columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id'],
+    // contract_stated_paise is deliberately ABSENT: new rows get NULL, and an edit of a legacy row
+    // leaves its stored value untouched (the column is never in the UPDATE ... SET list).
+    columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id'],
     validate: (req, existingByUserId) => {
       const amountPaise = parsePaise(req.body.amountRupees);
       if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
@@ -493,11 +497,8 @@ export function installFetchShim(repo) {
       const contractScope = str(req.body.contractScope);
       if (!CONTRACT_SCOPES.has(contractScope)) return { error: 'Select whether the work is included in the contract (Yes or No).' };
 
-      let contractStatedPaise = null;
-      if (contractScope === 'included') {
-        contractStatedPaise = parsePaise(req.body.contractStatedRupees);
-        if (contractStatedPaise === null) return { error: 'Enter the contract’s stated amount for this item (greater than 0, up to 2 decimals).' };
-      }
+      // The Phase 5E reimbursement offset is GONE: contractStatedRupees is no longer read and
+      // contract_stated_paise is no longer written. A body that still sends it is silently ignored.
 
       let contractServiceId;
       if ('contractServiceId' in req.body) {
@@ -519,7 +520,6 @@ export function installFetchShim(repo) {
           subledger_custom_name: subledgerCustomName,
           reason: str(req.body.reason).slice(0, REASON_MAX),
           contract_scope: contractScope,
-          contract_stated_paise: contractStatedPaise,
           contract_service_id: contractServiceId,
         },
       };
@@ -620,8 +620,9 @@ export function installFetchShim(repo) {
     const amount = parsePriceOptional(req.body.amountRupees);
     if (amount.error) return { error: amount.error };
 
-    const statedAmountPaise = parsePaise(req.body.statedAmountRupees);
-    if (statedAmountPaise === null) return { error: 'Enter a valid stated contract amount greater than 0 (up to 2 decimals).' };
+    // OPTIONAL: blank -> NULL. An unstated contract contributes 0 to figure A and 0 to owed.
+    const stated = parsePriceOptional(req.body.statedAmountRupees);
+    if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
 
     const signed = parseIsoDate(req.body.dateSigned);
     if (signed.error) return { error: signed.error };
@@ -649,7 +650,7 @@ export function installFetchShim(repo) {
         ledger_custom_name: led.ledgerCustomName,
         subledger_custom_name: led.subledgerCustomName,
         amount_paise: amount.paise,
-        price_of_contract_paise: statedAmountPaise,
+        price_of_contract_paise: stated.paise,
         contract_end_date: ends.date,
         date_signed: signed.date,
         company: company || null,
@@ -943,9 +944,9 @@ export function installFetchShim(repo) {
     const bounded = !!(start || end);
     const lo = start || '0000-01-01', hi = end || '9999-12-31';
 
-    const cum = repo.overview.cashoutCumulative();
-    const includedOffset = cum.offset;
-    const missingOffset = { count: cum.missCount, amountPaise: cum.missSum };
+    // The Phase 5E reimbursement offset is REMOVED, all-or-nothing: no 'included' debit reduces
+    // owed, whatever contract_stated_paise a legacy row still holds. The cumulative 'included' scan
+    // that fed it (and its missing-offset check) is gone with it.
 
     const contractRows = repo.overview.contracts();
     const liveContractIds = new Set(contractRows.map((c) => c.id));
@@ -959,19 +960,20 @@ export function installFetchShim(repo) {
       if (!liveContractIds.has(g.contract_id)) { orphan.count += g.c; orphan.amountPaise += g.s; orphan.contractIds.push(g.contract_id); }
     }
 
+    // owed(C) = stated - Sum(paid). An UNSTATED contract reads as stated = 0: nothing in A, nothing
+    // in owed - but its payments still count in B/D/pie.
     let totalContract = 0, owedToContractors = 0;
-    const contracts = contractRows.map((c, idx) => {
+    const contracts = contractRows.map((c) => {
       const stated = c.price_of_contract_paise || 0;
       const paid = paidByContract.get(c.id) || 0;
-      const offset = idx === 0 ? includedOffset : 0;
-      const owed = stated - paid - offset;
+      const owed = stated - paid;
       totalContract += stated; owedToContractors += owed;
       return {
         id: c.id,
         contractorName: c.contractor_name || '',
         areaOfWork: c.area_of_work || '',
         ledger: c.ledger_code ? ledgerLabel(c.ledger_code, c.subledger_code, c.ledger_custom_name, c.subledger_custom_name) : '',
-        statedPaise: stated, paidPaise: paid, offsetPaise: offset, owedPaise: owed,
+        statedPaise: stated, paidPaise: paid, owedPaise: owed,
       };
     });
 
@@ -1033,7 +1035,10 @@ export function installFetchShim(repo) {
     const mainsSumToTotal = ledgers.reduce((a, L) => a + L.totalPaise, 0) === totalSpent;
     const subsSumToMains = ledgers.every((L) => L.subs.reduce((a, s) => a + s.totalPaise, 0) + L.noSub.totalPaise === L.totalPaise);
 
-    const appliedAgainstContract = cumulativePaid + includedOffset;
+    // The over-offset check is RETAINED. With the offset gone it now reads as "contractor payments
+    // exceed the contract value". The missing-offset check is REMOVED: a NULL/0 stated amount on an
+    // 'included' debit is the normal case now, so it would fire on every hand.
+    const appliedAgainstContract = cumulativePaid;
     const overOffset = { over: totalContract > 0 && appliedAgainstContract > totalContract, contractPaise: totalContract, appliedPaise: appliedAgainstContract, excessPaise: Math.max(0, appliedAgainstContract - totalContract) };
 
     if (!splitSumsToTotal || !mainsSumToTotal || !subsSumToMains) {
@@ -1042,11 +1047,8 @@ export function installFetchShim(repo) {
     if (orphan.count > 0) {
       console.warn(`Overview reconciliation: ${orphan.count} live contractor payment(s) totalling ${orphan.amountPaise} paise reference a soft-deleted or missing contract (contract ids: ${orphan.contractIds.join(', ')}). Counted in B/D/pie but not offset in A/F — figures reported AS-IS, not adjusted. Restore or reassign those payments' contract to rebalance.`);
     }
-    if (missingOffset.count > 0) {
-      console.warn(`Overview reconciliation: ${missingOffset.count} 'included' debit(s) totalling ${missingOffset.amountPaise} paise have a NULL or zero contract_stated_paise — a reimbursement offset that does nothing (dues don't drop for that spend). Likely a pre-Phase-5 backup import or direct SQL. Set the contract's stated amount on those debits to rebalance. Reported AS-IS.`);
-    }
     if (overOffset.over) {
-      console.warn(`Overview reconciliation: payments + included offsets (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
+      console.warn(`Overview reconciliation: contractor payments (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
     }
 
     return {
@@ -1063,9 +1065,8 @@ export function installFetchShim(repo) {
       contracts,
       upcomingPayments: computeUpcomingPayments(),
       reconciliation: {
-        ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && missingOffset.count === 0 && !overOffset.over,
+        ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over,
         orphanedContractorPayments: orphan,
-        includedDebitsMissingOffset: missingOffset,
         overOffset: overOffset,
       },
     };
@@ -1188,8 +1189,10 @@ export function installFetchShim(repo) {
     const txTableBlock = () => {
       if (!rows.length) return '<h2>Transactions</h2><p class="muted">No outflow entries in this range.</p>';
       const total = rows.reduce((a, e) => a + e.amountPaise, 0);
-      return '<h2>Transactions</h2><table><thead><tr><th class="num">#</th><th>Date</th><th class="num">Amount</th><th>By</th><th>Ledger</th><th>Remark</th><th>Contract Included</th><th class="num">Contract Stated</th></tr></thead><tbody>' +
-        rows.map((e, i) => `<tr><td class="num">${i + 1}</td><td>${e.txDate ? pdfEsc(fmtDatePdf(e.txDate)) : '—'}</td><td class="num">${fmtRs(e.amountPaise)}</td><td>${pdfEsc(e.by)}</td><td>${pdfEsc(e.ledger)}</td><td>${e.reason ? pdfEsc(e.reason) : '—'}</td><td>${incl(e.contractScope)}</td><td class="num">${e.contractScope === 'included' && e.contractStatedPaise != null ? fmtRs(e.contractStatedPaise) : '—'}</td></tr>`).join('') +
+      // The Contract Stated column is gone with the reimbursement offset — the number it printed is
+      // no longer written or used. Contract Included (Yes/No) stays: that label is still recorded.
+      return '<h2>Transactions</h2><table><thead><tr><th class="num">#</th><th>Date</th><th class="num">Amount</th><th>By</th><th>Ledger</th><th>Remark</th><th>Contract Included</th></tr></thead><tbody>' +
+        rows.map((e, i) => `<tr><td class="num">${i + 1}</td><td>${e.txDate ? pdfEsc(fmtDatePdf(e.txDate)) : '—'}</td><td class="num">${fmtRs(e.amountPaise)}</td><td>${pdfEsc(e.by)}</td><td>${pdfEsc(e.ledger)}</td><td>${e.reason ? pdfEsc(e.reason) : '—'}</td><td>${incl(e.contractScope)}</td></tr>`).join('') +
         `</tbody><tfoot><tr><td colspan="2">Total (${rows.length})</td><td class="num">${fmtRs(total)}</td><td colspan="5"></td></tr></tfoot></table>`;
     };
 
@@ -1555,6 +1558,69 @@ export function installFetchShim(repo) {
       return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.' });
     }
     res.json({ ok: true });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 15 — backup-overdue reminder, ported verbatim from server.js's identical routes.
+  // last_encrypted_export_at is stamped only by a VERIFIED encrypted full backup (see saveFile() in
+  // data-backup.html, gated on the .db.enc filename) — a JSON export or a Ledger List CSV is not a
+  // complete restore point, so neither touches this. backup_reminder_days is the user's overdue
+  // threshold: unset = the default (7), the literal string 'off' = disabled, otherwise a whole
+  // number of days.
+  // ---------------------------------------------------------------------------
+  const BACKUP_REMINDER_DEFAULT_DAYS = 7;
+  const BACKUP_REMINDER_MIN_DAYS = 1;
+  const BACKUP_REMINDER_MAX_DAYS = 365;
+
+  function getLastExportAt() {
+    const r = db.prepare("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'").get();
+    return (r && r.value) ? r.value : null;
+  }
+
+  function getBackupReminderDays() {
+    const r = db.prepare("SELECT value FROM settings WHERE key = 'backup_reminder_days'").get();
+    if (!r || r.value == null) return BACKUP_REMINDER_DEFAULT_DAYS;
+    if (r.value === 'off') return null;
+    const n = Number(r.value);
+    return Number.isInteger(n) && n >= BACKUP_REMINDER_MIN_DAYS && n <= BACKUP_REMINDER_MAX_DAYS ? n : BACKUP_REMINDER_DEFAULT_DAYS;
+  }
+
+  // Whole days elapsed since `utc` ('YYYY-MM-DD HH:MM:SS', same shape as every other *_at column) —
+  // floored, so "6 days and 23 hours" reads as 6 rather than rounding up to a false "7 days ago".
+  function daysSinceUtc(utc) {
+    const then = new Date(String(utc).replace(' ', 'T') + 'Z').getTime();
+    return Math.max(0, Math.floor((Date.now() - then) / 86400000));
+  }
+
+  function getBackupReminderStatus() {
+    const lastExportAt = getLastExportAt();
+    const reminderDays = getBackupReminderDays();
+    const since = lastExportAt ? daysSinceUtc(lastExportAt) : null;
+    const overdue = reminderDays != null && (since === null || since > reminderDays);
+    return { lastExportAt, reminderDays, daysSince: since, overdue };
+  }
+
+  localApp.get('/api/backup/reminder', (req, res) => { res.json(getBackupReminderStatus()); });
+
+  localApp.put('/api/backup/reminder', (req, res) => {
+    const raw = req.body.days;
+    if (raw === null || raw === 'off') {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('backup_reminder_days', 'off') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+      return res.json(getBackupReminderStatus());
+    }
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < BACKUP_REMINDER_MIN_DAYS || n > BACKUP_REMINDER_MAX_DAYS) {
+      return res.status(400).json({ error: `Enter a whole number of days between ${BACKUP_REMINDER_MIN_DAYS} and ${BACKUP_REMINDER_MAX_DAYS}, or turn it off.` });
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('backup_reminder_days', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(n));
+    res.json(getBackupReminderStatus());
+  });
+
+  // Called only after the encrypted backup file is verified to actually exist (Filesystem.stat() on
+  // native, the closest browser equivalent otherwise) — see saveFile() in data-backup.html.
+  localApp.post('/api/backup/mark-exported', (req, res) => {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('last_encrypted_export_at', datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+    res.json(getBackupReminderStatus());
   });
 
   repo.configure({ contractCols: CONTRACT_COLS, backupTables: BACKUP_TABLES, backupCols: BACKUP_COLS });

@@ -99,6 +99,25 @@
     .notif-msg.error { color: #ff6b6b; }
     .notif-msg.info { opacity: 0.75; }
 
+    /* ---- Backup-overdue banner (Phase 15) — a notification can be dismissed or muted; this can't
+       be missed. Only shown while a backup is actually overdue; gone the next time this page loads
+       after a successful export. ---- */
+    .backup-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      padding: 12px 16px;
+      background: rgba(255, 107, 107, 0.12);
+      border: 1px solid #ff6b6b;
+      color: #ff6b6b;
+      font-size: 13.5px;
+    }
+    .backup-banner a { color: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; }
+    #backupReminderSettings select { margin-left: 8px; background: var(--panel); color: inherit; border: 1px solid var(--accent-line); padding: 6px 8px; font-family: inherit; }
+    #backupReminderSettings label { font-size: 13px; }
+
     /* Brand column (the contained Prism box was removed): on desktop the shared
        style anchors the tagline to the bottom to fill space the box used to take —
        with the box gone, group the header content at the top so there's no empty
@@ -118,6 +137,11 @@
   </div>
 
   <div class="home-stack">
+    <div class="backup-banner" id="backupBanner" role="status" aria-live="polite" hidden>
+      <span id="backupBannerText"></span>
+      <a href="/data-backup.html">Back up now</a>
+    </div>
+
     <nav class="home-nav" aria-label="Sections">
       <button type="button" class="navbtn" data-target="flow" data-href="/cash-flow.html">Cash flow</button>
       <button type="button" class="navbtn" data-target="overview" data-href="/overview.html">Overview</button>
@@ -160,6 +184,20 @@
             <button type="button" id="notifAddBtn" class="notif-btn-sm">Add</button>
           </div>
           <p class="notif-msg" id="notifMsg" hidden></p>
+        </div>
+
+        <div class="notif-settings" id="backupReminderSettings">
+          <p class="lead">Backup reminder</p>
+          <p class="notif-hint">Nags (in-app and, on Android, as a notification) if the encrypted full backup on Data Backup is overdue. A JSON export or Ledger List CSV doesn't count — only a full encrypted backup is a complete restore point.</p>
+          <label for="backupReminderSelect">Remind me if overdue by</label>
+          <select id="backupReminderSelect">
+            <option value="off">Off</option>
+            <option value="3">3 days</option>
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+          </select>
+          <p class="notif-msg" id="backupReminderMsg" hidden></p>
         </div>
       </section>
     </main>
@@ -324,6 +362,67 @@
       renderNotifList();
       return notif.onAppStart(notifTimes); // reapply on launch; never prompts for permission
     });
+
+    // ---------------------------------------------------------------------------
+    // Phase 15 — backup-overdue reminder. The banner can't be dismissed or muted the way a
+    // notification can, so it's the reliable surface; the notification (native only, via the same
+    // plugin as the daily reports above) is a bonus nudge. Both come from /api/backup/reminder, which
+    // computes "overdue" from the last VERIFIED encrypted full backup and the configured threshold.
+    // ---------------------------------------------------------------------------
+    const backupBanner = document.getElementById('backupBanner');
+    const backupBannerText = document.getElementById('backupBannerText');
+    const backupReminderSelect = document.getElementById('backupReminderSelect');
+    const backupReminderMsg = document.getElementById('backupReminderMsg');
+
+    function renderBackupStatus(status) {
+      if (!status.overdue) { backupBanner.hidden = true; return; }
+      backupBannerText.textContent = status.daysSince === null
+        ? 'Plannr — you have never backed up. Export one to keep your ledger safe.'
+        : `Plannr — your last backup was ${status.daysSince} day${status.daysSince === 1 ? '' : 's'} ago. Export one to keep your ledger safe.`;
+      backupBanner.hidden = false;
+    }
+
+    function applyBackupReminderSelect(reminderDays) {
+      const v = reminderDays === null ? 'off' : String(reminderDays);
+      backupReminderSelect.value = v;
+      // The API allows any 1-365 value, not just the fixed options above (e.g. set some other way) —
+      // rather than silently showing the wrong one, add it as a temporary extra option.
+      if (backupReminderSelect.value !== v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = `${reminderDays} days`;
+        backupReminderSelect.appendChild(opt);
+        backupReminderSelect.value = v;
+      }
+    }
+
+    async function refreshBackupReminder() {
+      const status = await fetch('/api/backup/reminder').then((r) => r.json());
+      renderBackupStatus(status);
+      applyBackupReminderSelect(status.reminderDays);
+      await notif.checkBackupReminder(status.overdue ? (status.daysSince === null ? 'never' : status.daysSince) : null);
+    }
+
+    backupReminderSelect.addEventListener('change', async () => {
+      const val = backupReminderSelect.value;
+      const res = await fetch('/api/backup/reminder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: val === 'off' ? null : Number(val) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        backupReminderMsg.textContent = data.error || 'Could not save — try again.';
+        backupReminderMsg.className = 'notif-msg error';
+        backupReminderMsg.hidden = false;
+        return;
+      }
+      backupReminderMsg.hidden = true;
+      renderBackupStatus(data);
+      await notif.checkBackupReminder(data.overdue ? (data.daysSince === null ? 'never' : data.daysSince) : null);
+    });
+
+    refreshBackupReminder();
 
   });
   </script>

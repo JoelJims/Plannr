@@ -146,9 +146,10 @@ export function init() {
     --    (created at the end of init), not by app code. Soft-deleted rows may coexist with the one
     --    live row (the Recycle Bin). The old multi-contract list and the per-contract
     --    contract_services table were both removed in Phase 5 (contract_services dropped child-first
-    --    after cash_out lost its FK). price_of_contract_paise is the REQUIRED stated amount that dues
-    --    math starts from; contract_end_date is the optional "date ends". ledger_* is a HEADLINE
-    --    CATEGORY tag for the whole contract.
+    --    after cash_out lost its FK). price_of_contract_paise is the OPTIONAL stated amount that dues
+    --    math starts from (NULL = no stated price: the contract contributes 0 to Total contract and 0
+    --    to owed); contract_end_date is the optional "date ends". ledger_* is a HEADLINE CATEGORY tag
+    --    for the whole contract.
     CREATE TABLE IF NOT EXISTS contract (
       id                      INTEGER PRIMARY KEY AUTOINCREMENT,
       contractor_name         TEXT,
@@ -158,7 +159,7 @@ export function init() {
       ledger_custom_name      TEXT,             -- typed ledger name when ledger_code = 'CUSTOM'
       subledger_custom_name   TEXT,             -- typed sub-ledger name when subledger_code = 'CUSTOM'
       amount_paise            INTEGER,          -- OPTIONAL free-form amount, paise (₹1=100) or NULL
-      price_of_contract_paise INTEGER,          -- REQUIRED stated amount, paise (dues math starts here)
+      price_of_contract_paise INTEGER,          -- OPTIONAL stated amount, paise (dues math starts here); NULL = unstated
       contract_end_date       TEXT,             -- OPTIONAL 'date ends', ISO 'YYYY-MM-DD' or NULL
       date_signed             TEXT,             -- Phase 2: required, ISO 'YYYY-MM-DD'
       created_at              TEXT NOT NULL DEFAULT (datetime('now')),
@@ -183,10 +184,10 @@ export function init() {
     -- 2b. contractor_payments: money PAID to a contractor, tied to a specific
     --     contract (Phase 3). Replaces the old design where contractor spend was a
     --     cash_out row (removed in Phase 1). Ledger fields are an OPTIONAL DISPLAY tag (same
-    --     'CUSTOM' convention as cash_out) and do NOT drive dues math — CONFIRMED still true under
-    --     Option C: owed = stated − Σ amount_paise (payments) − Σ cash_out.contract_stated_paise
-    --     (the reimbursement offset). A payment's ledger tag only feeds the pie/Spending-by-Ledger
-    --     rollup, never the owed balance.
+    --     'CUSTOM' convention as cash_out) and do NOT drive dues math: owed = stated − Σ amount_paise
+    --     (payments). (The Phase 5E "Option C" reimbursement offset that used to subtract a third term,
+    --     Σ cash_out.contract_stated_paise, has been REMOVED.) A payment's ledger tag only feeds the
+    --     pie/Spending-by-Ledger rollup, never the owed balance.
     CREATE TABLE IF NOT EXISTS contractor_payments (
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id           INTEGER NOT NULL REFERENCES contract(id), -- required parent contract
@@ -206,8 +207,9 @@ export function init() {
     );
 
     -- 2c. contract_services: a contract's line-item services (Services phase, Part A). RETURNS after
-    --     Phase 5 dropped it, but NOT as a second offset mechanism: its ONLY job is to supply the
-    --     number that goes in cash_out.contract_stated_paise (the Option C reimbursement offset). A
+    --     Phase 5 dropped it, but NOT as an offset mechanism. Its job WAS to supply the number that
+    --     went in cash_out.contract_stated_paise; with that offset removed, a service is simply
+    --     something a debit can NAME (cash_out.contract_service_id) as what the spend was for. A
     --     service is a NAME and an OPTIONAL price. Services need NOT sum to the contract total —
     --     price_of_contract_paise stays the single source of truth for owed; services are informational
     --     (the remainder line, Part B) and a pick-list for the debit form (Part C). Soft-delete.
@@ -255,20 +257,24 @@ export function init() {
       subledger_custom_name TEXT,                -- typed sub-ledger name when subledger_code = 'CUSTOM'
       reason              TEXT,
       contract_scope      TEXT    NOT NULL,      -- 'included' | 'extra'
-      contract_stated_paise INTEGER,             -- Phase 5E (Option C): when contract_scope='included',
-                                                 -- the contract's STATED amount for this item (paise) — the
-                                                 -- reimbursement offset against dues. NULL when 'extra'.
+      contract_stated_paise INTEGER,             -- RETIRED (was Phase 5E "Option C": the contract's STATED
+                                                 -- amount for an 'included' item, offset against dues). The
+                                                 -- offset is gone; NOTHING writes or reads this column now.
+                                                 -- Kept nullable, NOT dropped: dropping a column in SQLite is
+                                                 -- a full table rebuild, and historical values + backups are
+                                                 -- worth preserving. New rows are always NULL.
       phase               INTEGER,               -- OPTIONAL: a positive whole number (>=1), or NULL
       subpart             TEXT,                  -- OPTIONAL: a single lowercase letter a-z, or NULL
       created_at          TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at          TEXT,                  -- soft-delete: NULL = live
       tenant_id           INTEGER NOT NULL REFERENCES users(id), -- Tenancy Phase 2: owning household (a users.id)
-      -- Services phase (Part C/D): the contract_services row this debit's contract_stated_paise was
-      -- sourced from — provenance, and the key for the ONE-SERVICE-ONE-OFFSET guard. NULL when the
-      -- debit is 'extra' or the stated amount was typed manually. A partial UNIQUE index
-      -- (idx_cash_out_service_live, WHERE deleted_at IS NULL) enforces that at most one LIVE debit
-      -- links any given service, so a single substitution can never offset dues twice.
+      -- Services phase (Part C/D): which contract_services row this debit was for — PROVENANCE, and
+      -- the key for the one-live-debit-per-service guard. NULL when the debit is 'extra' or no service
+      -- was picked. A partial UNIQUE index (idx_cash_out_service_live, WHERE deleted_at IS NULL)
+      -- enforces that at most one LIVE debit links any given service. That index was built to stop a
+      -- service offsetting dues twice; with the offset removed it now guards a bookkeeping rule
+      -- ("record each service once") rather than any figure, and is kept for that reason.
       contract_service_id INTEGER REFERENCES contract_services(id)
     );
 
@@ -1087,6 +1093,45 @@ export function init() {
   // tests insert for unrelated reasons and need to survive. This migration only cares "has THIS
   // cleanup run yet", independent of whatever the version counter is otherwise made to say.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'").get()) {
+    // ---- DATA-LOSS GUARD (added after this block silently wiped a real ledger) -------------------
+    // The DELETE below removes EVERY cash_out row, and this block is MARKER-gated, not version-gated
+    // (see the note above for why). So `user_version` is no warning at all: a database already
+    // stamped at the current SCHEMA_VERSION still runs this on its first pass. Installing an update
+    // onto any database that predates Phase 10a therefore wipes the whole Money Debited history with
+    // no prompt and no error. A silent DELETE of a construction ledger is the worst failure this app
+    // can have, so: if there is anything to lose, REFUSE TO BOOT and say why.
+    //
+    // The common paths are untouched — a fresh install and any database that never held
+    // pre-taxonomy rows both have an empty cash_out here, so the cleanup proceeds exactly as before.
+    // The guard only fires where data would actually be destroyed.
+    //
+    // Approving it deliberately, AFTER exporting a backup (both are checked; either is enough):
+    //   Node / desktop : PLANNR_ALLOW_TAXONOMY_WIPE=1
+    //   any build      : INSERT INTO settings (key, value) VALUES ('_taxonomy_wipe_approved', '1');
+    // The settings key exists because the Android/browser build has no environment variables, and an
+    // env-only escape hatch would leave an affected device permanently unable to start.
+    //
+    // Throwing here leaves the marker UNSET, so the refusal is stable and repeats on every boot
+    // rather than being a one-shot the user can miss.
+    const doomed = db.prepare('SELECT COUNT(*) n FROM cash_out').get().n;
+    const approved = (isNode && process.env.PLANNR_ALLOW_TAXONOMY_WIPE === '1')
+      || !!db.prepare("SELECT 1 FROM settings WHERE key = '_taxonomy_wipe_approved' AND value = '1'").get();
+    if (doomed > 0 && !approved) {
+      throw new Error(
+        `Plannr stopped to protect your data.\n\n`
+        + `This database still needs the ledger-taxonomy cleanup, and completing it DELETES every `
+        + `Money Debited (cash_out) row. There are ${doomed} here.\n\n`
+        + `Those rows use the OLD ledger codes, whose meanings changed in the current 24-category `
+        + `list (old 4.2 = Cement, new 4.2 = Demolition), so they cannot be carried across safely `
+        + `and the cleanup removes them rather than leave them mislabelled.\n\n`
+        + `Your ${doomed} Money Debited row(s) are still intact - this check deleted nothing.\n\n`
+        + `EXPORT A BACKUP FIRST (Data Backup → Export). Then approve the cleanup and start again:\n`
+        + `  · Node / desktop: set PLANNR_ALLOW_TAXONOMY_WIPE=1\n`
+        + `  · any build:      INSERT INTO settings (key, value) VALUES ('_taxonomy_wipe_approved', '1');\n\n`
+        + `Until one of those is set, Plannr will keep refusing to start and your rows stay untouched.`
+      );
+    }
+    // ---- end guard -------------------------------------------------------------------------------
     db.exec('DELETE FROM cash_out');
     db.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
     db.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
