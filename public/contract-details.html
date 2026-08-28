@@ -258,12 +258,16 @@
           <input id="cSubCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a sub-ledger name">
         </div>
 
-        <!-- DRIVING field first: price_of_contract_paise. This is the value the dues math (owed) uses. -->
+        <!-- DRIVING field first: price_of_contract_paise. This is the value the dues math (owed) uses.
+             OPTIONAL since the contract-amount change: leaving it blank is allowed, and means the
+             contract contributes nothing to Total contract and nothing to Owed. -->
         <div class="field">
-          <label for="cStated">Total contract value (₹)</label>
+          <label for="cStated">Total contract value (₹) <span class="cd-optional">(optional)</span></label>
           <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
-            <input id="cStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required></div>
-          <p class="cd-hint">The full value of the contract. The contractor's <b>owed</b> is calculated from this.</p>
+            <input id="cStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
+          <p class="cd-hint">The full value of the contract. The contractor's <b>owed</b> is calculated from this.
+            Leave it blank if there is no stated price — this contract then adds nothing to <b>Total contract</b>
+            and nothing to <b>Owed to contractors</b>.</p>
         </div>
 
         <!-- DORMANT field: amount_paise. Stored (kept like phase/subpart) but feeds NO calculation. -->
@@ -449,14 +453,14 @@
       if (led.error) { contractMsg.show(led.error, 'error'); return; }
       const statedStr = cStated.value.trim().replace(/,/g, '');
       const amountStr = cAmount.value.trim().replace(/,/g, '');
-      // Exact-mistake guard: the contract value belongs in "Total contract value" (it drives owed). If
-      // that's empty/zero but the dormant "Reference amount" holds a value, the user filled the wrong
-      // field — it would save cleanly and compute owed as if the contract were ₹0. Catch it specifically.
-      if (parsePaise(statedStr) === null && amountStr !== '' && parsePaise(amountStr) !== null) {
-        contractMsg.show('The contract value must go in “Total contract value (₹)” — you’ve entered it in “Reference amount”, which is not used in any calculation. Move it to Total contract value.', 'error'); return;
-      }
-      if (parsePaise(statedStr) === null) { contractMsg.show('Enter the total contract value (greater than 0, up to 2 decimals).', 'error'); return; }
+      // The total contract value is OPTIONAL now, so a blank one can no longer be treated as a
+      // mistake and blocked. (The old guard rejected "blank stated + a filled Reference amount" as a
+      // wrong-field slip; that combination is a legitimate choice today, so it only warns.) A
+      // NON-BLANK value must still be a valid positive amount.
+      if (statedStr !== '' && parsePaise(statedStr) === null) { contractMsg.show('Total contract value must be greater than 0 (up to 2 decimals), or left blank.', 'error'); return; }
       if (amountStr !== '' && parsePaise(amountStr) === null) { contractMsg.show('Reference amount must be greater than 0 (up to 2 decimals), or left blank.', 'error'); return; }
+      // Kept as a nudge, appended to the success message below rather than blocking the save.
+      const statedBlankWithRef = statedStr === '' && amountStr !== '' && parsePaise(amountStr) !== null;
 
       const body = {
         ...led.body,
@@ -481,7 +485,7 @@
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           await loadContracts(); // now 1 contract exists -> loadContracts re-enters edit-in-place
-          contractMsg.show(editing ? 'Contract updated.' : 'Contract added.', 'success');
+          contractMsg.show((editing ? 'Contract updated.' : 'Contract added.') + (statedBlankWithRef ? ' Note: no total contract value was set, so this contract adds nothing to Total contract or Owed — if that amount was meant to be the contract value, move it out of “Reference amount”.' : ''), 'success');
         } else {
           contractMsg.show(data.error || 'Could not save the contract.', 'error');
         }

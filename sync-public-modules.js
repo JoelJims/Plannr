@@ -73,13 +73,22 @@ function pruneUnreachable(dir) {
   for (const name of PRUNE_ROOT_METADATA) fs.rmSync(path.join(dir, name), { force: true });
 }
 
+// A Capacitor plugin's own android/ (or ios/) folder is a live Gradle/Xcode module — building the
+// app (locally, or on CI) populates android/build/ and android/.gradle/ with that plugin's compiled
+// .class/.kotlin_module output, right inside node_modules. None of that is ever reachable by a
+// browser/WebView (it's JVM bytecode), but a naive recursive copy grabs it anyway — caught because a
+// single local build had inflated three plugins' android/build/ to ~31MB combined, which then rode
+// straight into the shipped APK's web assets (14MB actual vs. a previously-measured ~6.5MB). Always
+// exclude these, regardless of whether a build has populated them at copy time.
+const BUILD_ARTIFACT_RE = /[\\/](android|ios)[\\/](build|\.gradle|Pods|DerivedData)([\\/]|$)/;
+
 const publicNodeModules = path.join(PUBLIC, 'node_modules');
 fs.mkdirSync(publicNodeModules, { recursive: true });
 for (const pkg of VENDOR_PACKAGES) {
   const src = path.join(ROOT, 'node_modules', pkg);
   const dest = path.join(publicNodeModules, pkg);
   fs.rmSync(dest, { recursive: true, force: true });
-  fs.cpSync(src, dest, { recursive: true });
+  fs.cpSync(src, dest, { recursive: true, filter: (p) => !BUILD_ARTIFACT_RE.test(p) });
   pruneUnreachable(dest);
   for (const rel of PRUNE_EXTRA[pkg] || []) fs.rmSync(path.join(dest, rel), { recursive: true, force: true });
   console.log(`[sync-public-modules] copied node_modules/${pkg}`);

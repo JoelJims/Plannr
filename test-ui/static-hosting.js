@@ -176,7 +176,9 @@ function attachErrorCollector(page) {
 
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#downloadLedgerCsvBtn')]);
     const exportedCsv = fs.readFileSync(await dl.path(), 'utf8').replace(/^﻿/, '');
-    check('Ledger List export: correct header', exportedCsv.split(/\r?\n/)[0] === 'Code,Main ledger,Sub-code,Sub-ledger', exportedCsv.slice(0, 60));
+    const exportedLines = exportedCsv.split(/\r?\n/);
+    check('Ledger List export: leading comment warns codes are immutable', /^#/.test(exportedLines[0]) && /code/i.test(exportedLines[0]) && /not.*edit|cannot.*edit/i.test(exportedLines[0]), exportedLines[0]);
+    check('Ledger List export: correct header (after the comment line)', exportedLines[1] === 'Code,Main ledger,Sub-code,Sub-ledger', exportedLines.slice(0, 2).join(' | '));
     check('Ledger List export: contains a known ledger', exportedCsv.includes('6.0,MATERIALS — STRUCTURAL'), '');
     check('Ledger List export path: no console/page errors', errors.length === 0, errors.join(' | '));
 
@@ -204,6 +206,11 @@ function attachErrorCollector(page) {
     );
     const ownerId = await page.evaluate(() => fetch('/api/me').then((r) => r.json()).then((d) => d.user.id));
 
+    // The exported file (with its leading immutability-note comment row) must round-trip through
+    // the real import endpoint unmodified — proves the comment line doesn't break parsing.
+    const roundTripRes = await postLedgerCsv(exportedCsv);
+    check('Ledger List import: re-uploading the exported CSV (with its comment line) unmodified succeeds', roundTripRes.status === 200, JSON.stringify(roundTripRes.body));
+
     // ---- Rename (same code, new name) — historical spend stays attached to the CODE, not the name ----
     const seed1 = await seedDebit(ownerId, '6.0', '6.1');
     check('Ledger List test setup: seeded a debit against 6.1 (Cement)', seed1.status === 201, JSON.stringify(seed1.body));
@@ -225,6 +232,20 @@ function attachErrorCollector(page) {
     const afterAdd = await page.evaluate(() => fetch('/api/ledgers').then((r) => r.json()));
     check('Ledger List addition: new main appears', afterAdd.ledgers.some((l) => l.code === '25.0' && l.name === 'TEST ADDITION'), '');
 
+    // ---- Deleting a genuinely unused code succeeds (Phase 14) — a throwaway code (26.0), never
+    // referenced by any row, added then immediately removed; 25.0 is left alone since a later check
+    // relies on it still being present. ----
+    rows = await fetchLedgerRows();
+    rows.push(['26.0', 'TEMP UNUSED', '', '']);
+    const addTempRes = await postLedgerCsv(toLedgerCsv(rows));
+    check('Ledger List test setup: added a throwaway unused code (26.0)', addTempRes.status === 200, JSON.stringify(addTempRes.body));
+    rows = await fetchLedgerRows();
+    rows = rows.filter((r) => r[0] !== '26.0');
+    const deleteUnusedRes = await postLedgerCsv(toLedgerCsv(rows));
+    check('Ledger List import: deleting an unused code succeeds', deleteUnusedRes.status === 200, JSON.stringify(deleteUnusedRes.body));
+    const afterDeleteUnused = await page.evaluate(() => fetch('/api/ledgers').then((r) => r.json()));
+    check('Ledger List deletion: unused code 26.0 is gone', !afterDeleteUnused.ledgers.some((l) => l.code === '26.0'), '');
+
     // ---- Rejections: each must reject the WHOLE file with a clear reason, changing nothing ----
     const dupRes = await postLedgerCsv(toLedgerCsv([['1.0', 'A', '', ''], ['1.0', 'A', '', '']]));
     check('Ledger List import: duplicate code rejected', dupRes.status === 400 && /duplicated/i.test(JSON.stringify(dupRes.body)), JSON.stringify(dupRes.body));
@@ -244,10 +265,84 @@ function attachErrorCollector(page) {
     const flags1p1 = (removedRes.body.rowErrors || []).some((e) => e.message.includes('"1.1"'));
     check('Ledger List import: removing a code still in use is rejected', removedRes.status === 400 && flags1p1 && /still used/i.test(removedRes.body.error || ''), JSON.stringify(removedRes.body));
 
+    // ---- Altering a code (editing the Code cell itself, keeping the same name) is rejected (Phase
+    // 14) — distinct from a plain rename (same code, new name, which succeeds above) and from a
+    // plain deletion (row dropped entirely, tested above/below): here the row survives but under a
+    // different code, which the app can't tell apart from "1.1 was deleted" — so it's rejected the
+    // same way, since 1.1 is still in use. ----
+    rows = await fetchLedgerRows();
+    rows = rows.map((r) => (r[2] === '1.1' ? [r[0], r[1], '1.9', r[3]] : r));
+    const alterRes = await postLedgerCsv(toLedgerCsv(rows));
+    const flagsAltered1p1 = (alterRes.body.rowErrors || []).some((e) => e.message.includes('"1.1"'));
+    check('Ledger List import: altering a code (not just its name) is rejected', alterRes.status === 400 && flagsAltered1p1 && /still used/i.test(alterRes.body.error || ''), JSON.stringify(alterRes.body));
+
     // None of the rejected imports actually changed anything.
     const finalLedgers = await page.evaluate(() => fetch('/api/ledgers').then((r) => r.json()));
     check('Ledger List: rejected imports left the taxonomy untouched (25.0 still present)', finalLedgers.ledgers.some((l) => l.code === '25.0'), '');
     check('Ledger List section: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    // ---------------------------------------------------------------------------------------------
+    // Backup reminder (Phase 15) — never-exported starts overdue (banner shown + specific copy), a
+    // REAL encrypted export via the actual button clears it (proves saveFile()'s browser-fallback
+    // path, the one this static host exercises, actually records the mark), and the interval setting
+    // persists across a reload in both directions (off, then a number).
+    // ---------------------------------------------------------------------------------------------
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+
+    const bannerVisible = () => page.$eval('#backupBanner', (el) => !el.hidden).catch(() => false);
+    const bannerText = () => page.$eval('#backupBannerText', (el) => el.textContent).catch(() => '');
+    const reminderStatus = () => page.evaluate(() => fetch('/api/backup/reminder').then((r) => r.json()));
+
+    check('home.html: backup banner shown for a never-exported install', await bannerVisible(), await bannerText());
+    check('home.html: never-exported banner text names no false day count', /never backed up/i.test(await bannerText()) && !/days ago/i.test(await bannerText()), await bannerText());
+
+    let backupStatus = await reminderStatus();
+    check('/api/backup/reminder: never-exported reports overdue with no lastExportAt', backupStatus.overdue === true && backupStatus.lastExportAt === null && backupStatus.daysSince === null, JSON.stringify(backupStatus));
+    check('/api/backup/reminder: default threshold is 7 days', backupStatus.reminderDays === 7, JSON.stringify(backupStatus));
+
+    // ---- A real encrypted export, via the actual button, clears the overdue state ----
+    await page.goto(BASE + '/data-backup.html', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+    await page.fill('#encExportPass', 'correct horse battery staple');
+    const [encDl] = await Promise.all([page.waitForEvent('download'), page.click('#encExportBtn')]);
+    check('Encrypted export: download fired', !!encDl, '');
+    await page.waitForTimeout(300);
+
+    backupStatus = await reminderStatus();
+    check('/api/backup/reminder: a real encrypted export clears overdue', backupStatus.overdue === false && !!backupStatus.lastExportAt && backupStatus.daysSince === 0, JSON.stringify(backupStatus));
+    check('Encrypted export path: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+    check('home.html: backup banner is gone after a successful export', !(await bannerVisible()), await bannerText());
+
+    // ---- Interval setting: off persists across a reload, and so does a number afterward ----
+    await page.selectOption('#backupReminderSelect', 'off');
+    await page.waitForTimeout(300);
+    backupStatus = await reminderStatus();
+    check('Backup reminder interval: "off" persists server-side', backupStatus.reminderDays === null, JSON.stringify(backupStatus));
+
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(300);
+    let selVal = await page.$eval('#backupReminderSelect', (el) => el.value);
+    check('Backup reminder interval: "off" reloads correctly', selVal === 'off', selVal);
+
+    await page.selectOption('#backupReminderSelect', '3');
+    await page.waitForTimeout(300);
+    backupStatus = await reminderStatus();
+    check('Backup reminder interval: "3" persists server-side', backupStatus.reminderDays === 3, JSON.stringify(backupStatus));
+
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    errors.length = 0;
+    await page.waitForTimeout(300);
+    selVal = await page.$eval('#backupReminderSelect', (el) => el.value);
+    check('Backup reminder interval: "3" reloads correctly', selVal === '3', selVal);
+    check('home.html: banner still hidden (last export was moments ago, well inside 3 days)', !(await bannerVisible()), await bannerText());
+    check('Backup reminder section: no console/page errors', errors.length === 0, errors.join(' | '));
   } finally {
     await browser.close();
     server.kill();

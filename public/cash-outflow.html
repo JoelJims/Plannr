@@ -280,24 +280,13 @@
           </select>
         </div>
 
-        <!-- 7b. Service picker (Part C) — offered only when the item is in the contract. Selecting a priced
-             service fills the stated amount below. Shortcut only; typing the amount directly still works. -->
+        <!-- 7b. Service picker (Part C) — offered only when the item is in the contract. It records WHICH
+             contract service the spend was for (provenance). It no longer fills any amount: the
+             "contract stated amount" field, and the reimbursement offset behind it, were removed. -->
         <div class="field" id="serviceWrap" hidden>
-          <label for="serviceSelect">Contract service <span class="co-dim">(optional shortcut)</span></label>
+          <label for="serviceSelect">Contract service <span class="co-dim">(optional)</span></label>
           <select id="serviceSelect" name="serviceSelect"></select>
-          <small class="co-hint">Pick a priced service to fill the stated amount below, or leave as “none” and type it.</small>
-        </div>
-
-        <!-- 8. Contract stated amount (₹) — Phase 5F (Option C): the amount the CONTRACT stated for
-             this item, i.e. the reimbursement offset against the contractor's dues. Shown only when
-             the item is in the contract. This is deliberately NOT the amount actually spent (field 4). -->
-        <div class="field" id="contractStatedWrap" hidden>
-          <label for="contractStated">Contract stated amount for this item (₹)</label>
-          <div class="amount-wrap">
-            <span class="rupee" aria-hidden="true">₹</span>
-            <input id="contractStated" name="contractStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
-          </div>
-          <small class="co-hint">What the contract stated for this item (reduces the contractor's dues) — not the amount actually spent above.</small>
+          <small class="co-hint">Which contract service was this for? Leave as “none” if it doesn't map to one.</small>
         </div>
 
         <div class="co-actions-row">
@@ -322,7 +311,7 @@
         <thead>
           <tr>
             <th>S.No</th><th>Date</th><th>Ledger</th><th>Sub-ledger</th>
-            <th>Amount</th><th>By</th><th>Remark</th><th>In Contract?</th><th>Contract Stated</th><th></th>
+            <th>Amount</th><th>By</th><th>Remark</th><th>In Contract?</th><th></th>
           </tr>
         </thead>
         <tbody id="coList"></tbody>
@@ -348,7 +337,6 @@
           ledgerCustomWrap = $('ledgerCustomWrap'), ledgerCustom = $('ledgerCustom'),
           subSelect = $('subSelect'), subCustomWrap = $('subCustomWrap'), subCustom = $('subCustom'),
           reason = $('reason'), scopeSelect = $('scopeSelect'),
-          contractStated = $('contractStated'), contractStatedWrap = $('contractStatedWrap'),
           slno = $('slno'), saveBtn = $('saveBtn'),
           cancelBtn = $('cancelBtn'), listBody = $('coList');
 
@@ -366,7 +354,7 @@
       amount, bySelect, customWrap, byCustom, ledgerSelect, ledgerCustomWrap, ledgerCustom,
       subSelect, subCustomWrap, subCustom,
       dateDay, dateMonth, dateYear,
-      reason, scopeSelect, contractStated, contractStatedWrap,
+      reason, scopeSelect,
       serviceSelect: $('serviceSelect'), serviceWrap: $('serviceWrap'), ledgerCustomList: $('ledgerCustomList'),
     });
 
@@ -420,7 +408,7 @@
     }
 
     // Services phase (Part C) — the in-contract service picker offers this contract's PRICED services,
-    // MINUS any already claimed by a live debit (one service → one offset), computed from the loaded
+    // MINUS any already claimed by a live debit (one service → one live debit), computed from the loaded
     // entries. Refreshed after every add so a just-claimed service drops out of the list.
     async function loadServices() {
       try {

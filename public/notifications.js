@@ -14,6 +14,9 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 // just as correct: it's how "cancel and reschedule rather than accumulating duplicates" is satisfied.
 const SLOT_IDS = [101, 102, 103, 104, 105];
 
+// Phase 15 — the backup-overdue reminder. A single fixed id, well clear of SLOT_IDS above.
+const BACKUP_REMINDER_ID = 201;
+
 function toScheduleOn(hhmm) {
   const [hour, minute] = hhmm.split(':').map(Number);
   return { hour, minute }; // hour+minute with no day/month = repeats daily (Capacitor's cron-like `on`)
@@ -31,12 +34,14 @@ async function scheduleAll(times) {
   });
 }
 
-// Tapping a notification should always land on Overview, regardless of whatever page happened to be
-// open when the app was backgrounded or killed. Registered once, unconditionally — a no-op add on a
-// plugin whose native side doesn't exist outside a real Capacitor WebView.
+// Tapping a notification opens whatever page it's about — Overview for the daily-report reminders,
+// Data Backup for the backup-overdue one (Phase 15) — via the `extra.openTarget` every schedule()
+// call below sets. Registered once, unconditionally — a no-op add on a plugin whose native side
+// doesn't exist outside a real Capacitor WebView.
 if (Capacitor.isNativePlatform()) {
-  LocalNotifications.addListener('localNotificationActionPerformed', () => {
-    location.href = '/overview.html';
+  LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
+    const target = action && action.notification && action.notification.extra && action.notification.extra.openTarget;
+    location.href = target === 'data-backup' ? '/data-backup.html' : '/overview.html';
   });
 }
 
@@ -65,4 +70,23 @@ export async function onTimesChanged(times) {
   if (perm.display !== 'granted') return { scheduled: false, reason: 'permission-denied' };
   await scheduleAll(times);
   return { scheduled: true };
+}
+
+// Phase 15 — called on app start with the current overdue state (home.html computes it from
+// /api/backup/reminder). `daysSince` is null when not overdue (reminder off, or last export within
+// the configured window) — cancel and stop. Otherwise the literal string 'never' or a day count.
+// Same rule as onAppStart above: launch is never the moment to prompt for permission — only fires if
+// already granted from an earlier "set a time" action; the in-app banner is the fallback otherwise.
+export async function checkBackupReminder(daysSince) {
+  if (!Capacitor.isNativePlatform()) return;
+  await LocalNotifications.cancel({ notifications: [{ id: BACKUP_REMINDER_ID }] });
+  if (daysSince == null) return;
+  const perm = await LocalNotifications.checkPermissions();
+  if (perm.display !== 'granted') return;
+  const body = daysSince === 'never'
+    ? 'You have never backed up. Export one to keep your ledger safe.'
+    : `Your last backup was ${daysSince} day${daysSince === 1 ? '' : 's'} ago. Export one to keep your ledger safe.`;
+  await LocalNotifications.schedule({
+    notifications: [{ id: BACKUP_REMINDER_ID, title: 'Plannr', body: 'Plannr — ' + body, extra: { openTarget: 'data-backup' } }],
+  });
 }

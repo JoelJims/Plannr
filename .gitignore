@@ -39,8 +39,15 @@ PLANNR-AUDIT-LIVE.md
 /android/app/build/
 /android/build/
 /android/.gradle/
+/android/.kotlin/
 /android/local.properties
-/android/capacitor-cordova-android-plugins/build/
+/android/capacitor-cordova-android-plugins/
+# Android Studio project config — machine-specific (last-deployed device serial, JDK pin, absolute
+# paths in workspace.xml). Studio regenerates it on first open; never check it in.
+/android/.idea/
+# `npx cap sync android` output — regenerated from public/ on every sync.
+/android/app/src/main/assets/
+/android/app/src/main/res/xml/config.xml
 
 *.keystore
 keystore.properties

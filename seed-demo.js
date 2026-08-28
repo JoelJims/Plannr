@@ -25,10 +25,13 @@ const rupees = (rs) => Math.round(rs) * 100;                              // ₹
 function wpick(items) { const tot = items.reduce((s, x) => s + x.w, 0); let r = rnd() * tot; for (const x of items) { if ((r -= x.w) <= 0) return x; } return items[items.length - 1]; }
 
 const TARGET = Number(process.env.PLANNR_SEED_ROWS || 1800);               // rows (default 1800; PLANNR_SEED_ROWS for a baseline)
-// Phase 4E — two reproducible reconciliation states. Default 'overoffset' keeps the existing dataset
-// whose included offsets exceed the ₹25L contract (reconciliation.ok = false — exercises the banner).
-// PLANNR_SEED_PROFILE=reconcile drops the included ratio so offsets stay well under the contract and
-// reconciliation.ok = true. Both are worth having; a seed that trips the banner isn't a bug to tidy away.
+// Phase 4E introduced two profiles that differed by how many debits were marked 'included', because
+// each one carried a reimbursement offset against the contract. THAT OFFSET HAS BEEN REMOVED, so the
+// ratio no longer moves any figure and NEITHER profile trips the reconciliation banner any more
+// (over-offset now needs ₹25L of contractor PAYMENTS, and the seed pays ₹17.5L). The switch is kept
+// because the two datasets still differ in how many rows carry the 'included' label. If a seed that
+// deliberately trips the banner is wanted again, raise the seeded contractor payments above the
+// contract value instead.
 const RECONCILE = (process.env.PLANNR_SEED_PROFILE || 'overoffset').toLowerCase() === 'reconcile';
 const START = new Date(Date.UTC(2025, 0, 6));                              // 18 months: Jan 2025 → Jun 2026
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -102,8 +105,8 @@ try {
 
   // ---- cash_out: clustered, gappy, repeated combos ----
   const insOut = db.prepare(
-    `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, reason, contract_scope, contract_stated_paise, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, reason, contract_scope, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
   );
   let day = new Date(START);
   const END = new Date(Date.UTC(2026, 5, 28));
@@ -120,16 +123,17 @@ try {
       const amt = rupees(ri(p.mn, p.mx));
       const t = topLevel(p.code);
       const canInclude = ['6', '7', '8', '9', '10', '11', '12', '13', '14'].includes(t);
-      // reconcile: far fewer included rows so Σ offsets + Σ payments stays under the ₹25L contract.
+      // 'included' is a descriptive label only now (the reimbursement offset was removed), so the
+      // proportion no longer affects whether the demo data reconciles — only Σ payments vs the
+      // contract value does. The RECONCILE split is kept so the demo still shows a realistic mix.
       const isInc = chance(canInclude ? (RECONCILE ? 0.05 : 0.5) : (RECONCILE ? 0 : 0.08));
-      const stated = isInc ? Math.round(amt * (0.85 + rnd() * 0.3)) : null;
       let reason = null;
       if (longRemarks < wantLong && chance(0.03)) { reason = LONG_REMARKS[longRemarks % LONG_REMARKS.length]; longRemarks++; }
       else if (p.labour && chance(0.5)) reason = `Daily labour — ${ri(3, 9)} workers`;
       else if (chance(0.06)) reason = nameFor(p.code).split('(')[0].trim();
       const custom = chance(0.08);
       insOut.run(amt, iso(day), custom ? 'custom' : 'user', custom ? null : ownerId, custom ? wpick([{ w: 1, code: 'Site supervisor' }, { w: 1, code: 'Mestri (cash)' }, { w: 1, code: 'Relative on site' }]).code : null,
-        t + '.0', p.code, reason, isInc ? 'included' : 'extra', stated, nowIso, nowIso);
+        t + '.0', p.code, reason, isInc ? 'included' : 'extra', nowIso, nowIso);
       if (isInc) included++;
       byLedger[t] = (byLedger[t] || 0) + 1;
       n++;
@@ -166,11 +170,11 @@ try {
   const payTot = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(amount_paise),0) s FROM contractor_payments').get();
   const inTot = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(amount_paise),0) s FROM cash_in').get();
   const fmt = (paise) => '₹' + (paise / 100).toLocaleString('en-IN');
-  console.log('\n[seed] DONE — realistic Kerala G+1 build seeded (profile: ' + (RECONCILE ? 'RECONCILE — offsets under contract, reconciliation.ok=true' : 'OVER-OFFSET — reconciliation.ok=false, banner shows') + '):');
+  console.log('\n[seed] DONE — realistic Kerala G+1 build seeded (profile: ' + (RECONCILE ? 'RECONCILE — few included rows' : 'OVER-OFFSET — many included rows; NOTE the offset is removed, so this no longer trips the banner') + '):');
   console.log(`  contract:            ${fmt(rupees(2500000))} (Rajan & Sons Builders)`);
   console.log(`  contractor payments: ${payTot.c} rows, ${fmt(payTot.s)} paid`);
   console.log(`  cash_out (debits):   ${q1.c} rows, ${fmt(q1.s)} spent, across ${ledgerCount} of 24 ledgers`);
-  console.log(`  · included (offset): ${included} rows   · long remarks (100–200c): ${longRemarks} rows`);
+  console.log(`  · included (label):  ${included} rows   · long remarks (100–200c): ${longRemarks} rows`);
   console.log(`  cash_in (inflow):    ${inTot.c} rows, ${fmt(inTot.s)}`);
   console.log(`  loans:               2   · budget: ${fmt(budgetPaise)}  (total spent incl. payments: ${fmt(spentSoFar)})`);
   console.log(`  login:               username "demo"  password "DemoPass123!aa"`);

@@ -47,3 +47,38 @@ test('restoring a soft-deleted contract while one is live returns 409', async ()
   assert.match(r.json.error, /already live|single contract/i);
   assert.strictEqual(liveCount(), 1);
 });
+
+// ── The total contract value is OPTIONAL ─────────────────────────────────────────────────────────
+// A contract may now be saved with no stated price. It then contributes nothing to figure A (total
+// contract) and nothing to owed — the payments against it still count in B/D/pie. A contract that
+// DOES carry a price behaves exactly as it always did.
+test('a contract saves with NO stated amount, and stores NULL (not 0)', async () => {
+  const r = await H.post('/api/contracts', { contractorName: 'ACME', areaOfWork: 'Foundation', ledgerCode: '5.0', dateSigned: '2026-07-01' }, { cookie });
+  assert.strictEqual(r.status, 201, JSON.stringify(r.json));
+  assert.strictEqual(r.json.contract.statedAmountPaise, null, 'blank -> NULL, never 0');
+  assert.strictEqual(H.db.prepare('SELECT price_of_contract_paise p FROM contract WHERE id=?').get(r.json.contract.id).p, null);
+});
+
+test('an empty-string stated amount is accepted; a malformed or non-positive one is still 400', async () => {
+  assert.strictEqual((await H.post('/api/contracts', { contractorName: 'A', areaOfWork: 'F', ledgerCode: '5.0', dateSigned: '2026-07-01', statedAmountRupees: '' }, { cookie })).status, 201);
+  const live = H.db.prepare('SELECT id FROM contract WHERE deleted_at IS NULL').get();
+  assert.strictEqual((await H.put('/api/contracts/' + live.id, { contractorName: 'A', areaOfWork: 'F', ledgerCode: '5.0', dateSigned: '2026-07-01', statedAmountRupees: 'abc' }, { cookie })).status, 400, 'malformed is rejected');
+  assert.strictEqual((await H.put('/api/contracts/' + live.id, { contractorName: 'A', areaOfWork: 'F', ledgerCode: '5.0', dateSigned: '2026-07-01', statedAmountRupees: '0' }, { cookie })).status, 400, 'zero is rejected');
+});
+
+test('an unstated contract contributes 0 to figure A and 0 to owed; its payments still count in B', async () => {
+  const c = await H.post('/api/contracts', { contractorName: 'ACME', areaOfWork: 'Foundation', ledgerCode: '5.0', dateSigned: '2026-07-01' }, { cookie });
+  assert.strictEqual((await H.post('/api/contractor-payments', { contractId: c.json.contract.id, amountRupees: '40000.00', payDate: '2026-07-10' }, { cookie })).status, 201);
+  const m = (await H.get('/api/overview', { cookie })).json.money;
+  assert.strictEqual(m.totalContractPaise, 0, 'A = 0 — nothing stated');
+  assert.strictEqual(m.paidToContractorsPaise, 4000000, 'B still counts the payment');
+  assert.strictEqual(m.owedToContractorsPaise, -4000000, 'owed = 0 − 40,000, reported unclamped (overpaid)');
+});
+
+test('a contract WITH a price is unchanged: A and owed behave exactly as before', async () => {
+  const c = await create('ACME');                            // stated ₹1,00,000
+  assert.strictEqual((await H.post('/api/contractor-payments', { contractId: c.json.contract.id, amountRupees: '40000.00', payDate: '2026-07-10' }, { cookie })).status, 201);
+  const m = (await H.get('/api/overview', { cookie })).json.money;
+  assert.strictEqual(m.totalContractPaise, 10000000);
+  assert.strictEqual(m.owedToContractorsPaise, 6000000, 'owed = 1,00,000 − 40,000');
+});

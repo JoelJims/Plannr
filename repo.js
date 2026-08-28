@@ -101,12 +101,9 @@ function trash({ table, select, alias = '' }) {
 const OV_OUTS_COLS = 'amount_paise, by_type, ledger_code, subledger_code, subledger_custom_name';
 const OV_PAY_COLS = 'amount_paise, ledger_code, subledger_code, subledger_custom_name';
 const ov = {
-  cashoutCumulative: db.prepare(
-    "SELECT COALESCE(SUM(CASE WHEN contract_stated_paise > 0 THEN contract_stated_paise ELSE 0 END), 0) AS offset, " +
-    "COUNT(CASE WHEN contract_stated_paise IS NULL OR contract_stated_paise = 0 THEN 1 END) AS missCount, " +
-    "COALESCE(SUM(CASE WHEN contract_stated_paise IS NULL OR contract_stated_paise = 0 THEN amount_paise ELSE 0 END), 0) AS missSum " +
-    "FROM cash_out WHERE deleted_at IS NULL AND contract_scope = 'included'"
-  ),
+  // The 'included'-debit cumulative scan that fed the Phase 5E reimbursement offset (and its
+  // missing-offset reconciliation check) is gone with the offset itself — nothing reads
+  // cash_out.contract_stated_paise any more, so there is no aggregate over it here.
   contracts: db.prepare(
     `SELECT id, contractor_name, area_of_work, ledger_code, subledger_code, ledger_custom_name, subledger_custom_name, price_of_contract_paise
        FROM contract WHERE deleted_at IS NULL ORDER BY id ASC`
@@ -121,7 +118,6 @@ const ov = {
   outsSince: db.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
 };
 const overview = {
-  cashoutCumulative: () => ov.cashoutCumulative.get(),
   contracts: () => ov.contracts.all(),
   paidByContract: () => ov.paidByContract.all(),
   outsAll: () => ov.outsAll.all(),
@@ -242,6 +238,10 @@ const ledgerStmt = {
 const MAIN_CODE_RE = /^\d+\.0$/;
 const SUB_CODE_RE = /^(\d+)\.(\d+)$/;
 const LEDGER_CSV_HEADER = ['Code', 'Main ledger', 'Sub-code', 'Sub-ledger'];
+// Phase 14 — codes are the row identity (see ledgerUsageCounts/validateLedgerCsv below) and must
+// never be hand-edited; only the name columns are. Exported as a leading comment row so the note
+// travels with the file itself, not just the in-app copy on Data Backup.
+const LEDGER_CSV_NOTE = '# Do not edit the Code / Sub-code column — it is the permanent identity Plannr matches rows by. Only the Main ledger / Sub-ledger name text may be changed.';
 
 function ledgerList() {
   const subs = ledgerStmt.allSubs.all();
@@ -284,7 +284,7 @@ function ledgerReplaceAll(mains, subs) {
 
 function ledgerToCsv(list) {
   const esc = (v) => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  const rows = [LEDGER_CSV_HEADER];
+  const rows = [[LEDGER_CSV_NOTE], LEDGER_CSV_HEADER];
   for (const L of list) {
     rows.push([L.code, L.name, '', '']);
     for (const s of L.subLedgers) rows.push([L.code, L.name, s.code, s.name]);
@@ -319,6 +319,10 @@ function parseLedgerCsv(text) {
 function validateLedgerCsv(csvText) {
   let rows;
   try { rows = parseLedgerCsv(csvText); } catch (e) { return { ok: false, error: 'Could not parse the file as CSV: ' + e.message, rowErrors: [] }; }
+  if (!rows.length) return { ok: false, error: 'The file is empty.', rowErrors: [] };
+  // The export's leading "do not edit codes" note (Phase 14) — a single-cell comment row, optional
+  // on import so hand-built/older files without it still work.
+  if (rows[0].length === 1 && rows[0][0].trim().startsWith('#')) rows = rows.slice(1);
   if (!rows.length) return { ok: false, error: 'The file is empty.', rowErrors: [] };
 
   const header = rows[0].map((h) => h.trim().toLowerCase());
@@ -379,8 +383,8 @@ function validateLedgerCsv(csvText) {
     if (stillUsed.length) {
       return {
         ok: false,
-        error: 'Some codes removed from this file are still used by existing rows: ' + stillUsed.map((u) => `${u.code} (${u.rows} row${u.rows === 1 ? '' : 's'})`).join(', ') + '.',
-        rowErrors: stillUsed.map((u) => ({ row: null, message: `Code "${u.code}" is missing from the file but is still used by ${u.rows} existing row${u.rows === 1 ? '' : 's'}.` })),
+        error: 'Codes are permanent — some were removed or altered in this file but are still used by existing rows: ' + stillUsed.map((u) => `${u.code} (${u.rows} row${u.rows === 1 ? '' : 's'})`).join(', ') + '. Only the ledger/sub-ledger NAME can be changed; the code itself cannot.',
+        rowErrors: stillUsed.map((u) => ({ row: null, message: `Code "${u.code}" was removed or altered in this file, but is still used by ${u.rows} existing row${u.rows === 1 ? '' : 's'}. Codes cannot be changed once rows reference them — only the name can.` })),
       };
     }
   }

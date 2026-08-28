@@ -53,10 +53,10 @@ const BUDGET_STMT = db.prepare("SELECT value FROM settings WHERE key = 'budget_p
 // Phase 6C — computeOverview reads each ledger table BOTH cumulatively (a balance) and
 // range-scoped (a period figure), so the two are split into separate queries:
 //
-//  These eight statements live in repo.overview.*. computeOverview calls repo.overview.<x>():
-//  cashoutCumulative, contracts, paidByContract, outsAll/outsRange, paymentsAll/paymentsRange,
-//  loansSum. The cumulative aggregates are never range-filtered (the offset stays cumulative); the
-//  range forms use the open sentinels + partial indexes.
+//  These seven statements live in repo.overview.*. computeOverview calls repo.overview.<x>():
+//  contracts, paidByContract, outsAll/outsRange, paymentsAll/paymentsRange, loansSum. The
+//  cumulative aggregates are never range-filtered (owed is a running balance); the range forms
+//  use the open sentinels + partial indexes.
 // Phase 2: the user roster for the "By" attribution pickers (id + display name ONLY — never
 // username/hash), and an existence check for validating a chosen by_user_id. Single-user app: the
 // roster is just the one owner account.
@@ -566,7 +566,7 @@ function cashOutRow(r) {
     ledger: ledgerLabel(r.ledger_code, r.subledger_code, r.ledger_custom_name, r.subledger_custom_name), // resolved (fixed or custom)
     reason: r.reason || '',
     contractScope: r.contract_scope,
-    contractStatedPaise: r.contract_stated_paise, // Phase 5E: reimbursement offset (paise) when 'included', else null
+    contractStatedPaise: r.contract_stated_paise, // LEGACY (Phase 5E offset). No longer written or used in any maths.
     contractServiceId: r.contract_service_id,     // Services phase: the linked service (provenance), or null
     createdAt: r.created_at,
   };
@@ -582,14 +582,14 @@ const saveLedgerCustom = (values) => {
 };
 
 // Services phase (Part C/D) — resolve + guard cash_out.contract_service_id. Runs AFTER validate, BEFORE
-// the write, so it can MUTATE values and reject with a status. THE safety-critical piece: one service
-// may source at most one LIVE debit, so a single substitution can never offset the contractor's dues
-// twice. (The partial-unique index idx_cash_out_service_live is the DB backstop; this gives the clean,
-// naming 409.)
+// the write, so it can MUTATE values and reject with a status. One service may source at most one LIVE
+// debit. (The partial-unique index idx_cash_out_service_live is the DB backstop; this gives the clean,
+// naming 409.) NOTE: with the reimbursement offset removed the link is now pure PROVENANCE — "which
+// contract service was this spend for" — and the one-live-debit rule no longer guards any figure.
 // finalize runs with ctx.req present (single POST/PUT + the batch loop pass req).
 function cashOutServiceFinalize(values, { existing }) {
-  // Only an 'included' debit may carry a service link; 'extra' forces NULL (mirrors contract_stated_paise
-  // so a stale link can't keep counting if the scope flips back).
+  // Only an 'included' debit may carry a service link; 'extra' forces NULL so a stale link can't
+  // linger if the scope flips back.
   if (values.contract_scope !== 'included') { values.contract_service_id = null; return; }
   // undefined = the body did not send contractServiceId (the editable table doesn't) -> PRESERVE the
   // existing link on edit; on create there is no existing, so it's NULL (manual entry).
@@ -601,7 +601,7 @@ function cashOutServiceFinalize(values, { existing }) {
   if (svc.price_paise == null) return { status: 400, error: 'That service has no price set, so it cannot be linked — add a price to it, or type the amount directly.' };
   const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
   if (other) {
-    return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can offset only one debit — unlink it there first, or pick another service.` };
+    return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
   }
   values.contract_service_id = sid;
 }
@@ -621,7 +621,9 @@ makeLedgerCrud({
   // custom names; ledger/sub are equality; date + amount are ranges (sargable, sentinel-padded).
   searchCols: { date: 'tx_date', amount: 'amount_paise', ledger: 'ledger_code', subledger: 'subledger_code', text: ['reason', 'ledger_custom_name', 'subledger_custom_name'] },
   shape: cashOutRow,
-  columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id'],
+  // contract_stated_paise is deliberately ABSENT from this list: new rows get NULL, and an edit of a
+  // legacy row leaves its stored value untouched (the column is never in the UPDATE ... SET list).
+  columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id'],
   validate: (req, existingByUserId) => {
     const amountPaise = parsePaise(req.body.amountRupees);
     if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
@@ -645,20 +647,15 @@ makeLedgerCrud({
     const contractScope = str(req.body.contractScope);
     if (!CONTRACT_SCOPES.has(contractScope)) return { error: 'Select whether the work is included in the contract (Yes or No).' };
 
-    // Phase 5E — reimbursement offset (Option C). contract_stated_paise = the contract's STATED
-    // amount for this item; it reduces dues while the actual amount_paise stays recorded as real
-    // spending. REQUIRED (positive paise) when 'included'; forced NULL when 'extra' so a stale
-    // value can't keep counting if the scope flips back.
-    let contractStatedPaise = null;
-    if (contractScope === 'included') {
-      contractStatedPaise = parsePaise(req.body.contractStatedRupees);
-      if (contractStatedPaise === null) return { error: 'Enter the contract’s stated amount for this item (greater than 0, up to 2 decimals).' };
-    }
+    // The Phase 5E reimbursement offset is GONE: contractStatedRupees is no longer read, and
+    // contract_stated_paise is no longer written (see the `columns` note above). 'included' is now a
+    // purely descriptive label. A body that still sends contractStatedRupees is silently ignored
+    // rather than rejected, so an older client / stale tab cannot 400 on an otherwise valid entry.
 
-    // Services phase (Part C/D) — the picked service id. The picker fills contractStatedRupees above;
-    // this records WHICH service (provenance + the one-offset guard key). Manual entry stays valid: no
-    // contractServiceId means no link. undefined (key absent, e.g. the editable table) tells finalize()
-    // to PRESERVE the existing link on edit; null/'' clears it; a number is validated + guarded there.
+    // Services phase (Part C/D) — the picked service id, recorded as PROVENANCE (which service this
+    // spend was for). Manual entry stays valid: no contractServiceId means no link. undefined (key
+    // absent, e.g. the editable table) tells finalize() to PRESERVE the existing link on edit;
+    // null/'' clears it; a number is validated + guarded there.
     let contractServiceId; // undefined = not sent
     if ('contractServiceId' in req.body) {
       const raw = req.body.contractServiceId;
@@ -679,7 +676,6 @@ makeLedgerCrud({
         subledger_custom_name: subledgerCustomName,
         reason: str(req.body.reason).slice(0, REASON_MAX),
         contract_scope: contractScope,
-        contract_stated_paise: contractStatedPaise,
         contract_service_id: contractServiceId, // finalize() resolves/guards this (may be undefined)
       },
     };
@@ -693,7 +689,7 @@ makeLedgerCrud({
 // ---------------------------------------------------------------------------
 // Contract Details API. Logged-in only. Resource: contracts — a normal
 // add/edit/soft-delete list (/api/contracts). Each has contractor + area + a
-// headline ledger tag + an optional free-form amount + a REQUIRED stated amount +
+// headline ledger tag + an optional free-form amount + an OPTIONAL stated amount +
 // date signed + optional date ends + 0..many scheduled payment dates
 // (contract_payment_dates child). Money is INTEGER paise throughout.
 // ---------------------------------------------------------------------------
@@ -755,7 +751,7 @@ const AREA_MAX = 200;
 
 const serviceRow = (s) => ({ id: s.id, name: s.name, pricePaise: s.price_paise }); // pricePaise null = unpriced
 
-// Shape a contract row for the API: resolved headline ledger label, the REQUIRED stated amount, the
+// Shape a contract row for the API: resolved headline ledger label, the OPTIONAL stated amount, the
 // OPTIONAL free-form amount, both dates, the scheduled payment-date list, the OPTIONAL company (Part F),
 // the line-item services (Part A), and the informational REMAINDER (Part B): the stated total minus the
 // sum of PRICED services. remainderPaise is SIGNED (may be negative) — the UI shows "remains"/"over"
@@ -775,7 +771,7 @@ const contractRow = (r) => {
     subledgerCustomName: r.subledger_custom_name,
     ledger: r.ledger_code ? ledgerLabel(r.ledger_code, r.subledger_code, r.ledger_custom_name, r.subledger_custom_name) : '',
     amountPaise: r.amount_paise,                  // optional free-form amount or null
-    statedAmountPaise: r.price_of_contract_paise, // REQUIRED stated amount (single source of truth for owed)
+    statedAmountPaise: r.price_of_contract_paise, // OPTIONAL stated amount, null when unstated (single source of truth for owed)
     dateSigned: r.date_signed || '',
     dateEnds: r.contract_end_date || '',
     paymentDates: repo.contract.payDatesFor(r.id),
@@ -794,8 +790,8 @@ const CONTRACT_COLS = ['contractor_name', 'area_of_work', 'ledger_code', 'subled
 const COMPANY_MAX = 120; // Part F: optional company/firm name cap
 
 // Validate + normalise a contract request body -> { values, paymentDates } or { error }.
-// Required: contractorName, areaOfWork, a valid headline ledger, stated amount > 0,
-// date signed. Optional: free-form amount, date ends, and 0..many payment dates.
+// Required: contractorName, areaOfWork, a valid headline ledger, date signed.
+// Optional: stated amount, free-form amount, date ends, and 0..many payment dates.
 function readContractBody(req) {
   const contractorName = str(req.body.contractorName).slice(0, CONTRACTOR_MAX);
   if (!contractorName) return { error: 'Contractor name is required.' };
@@ -808,8 +804,10 @@ function readContractBody(req) {
   const amount = parsePriceOptional(req.body.amountRupees); // optional free-form; blank -> null
   if (amount.error) return { error: amount.error };
 
-  const statedAmountPaise = parsePaise(req.body.statedAmountRupees); // required > 0
-  if (statedAmountPaise === null) return { error: 'Enter a valid stated contract amount greater than 0 (up to 2 decimals).' };
+  // The stated total is OPTIONAL: blank -> NULL. A contract with no stated price contributes 0 to
+  // figure A (total contract) and 0 to owed; a contract that HAS one behaves exactly as before.
+  const stated = parsePriceOptional(req.body.statedAmountRupees);
+  if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
 
   const signed = parseIsoDate(req.body.dateSigned);
   if (signed.error) return { error: signed.error };
@@ -837,7 +835,7 @@ function readContractBody(req) {
       ledger_custom_name: led.ledgerCustomName,
       subledger_custom_name: led.subledgerCustomName,
       amount_paise: amount.paise,
-      price_of_contract_paise: statedAmountPaise,
+      price_of_contract_paise: stated.paise,
       contract_end_date: ends.date,
       date_signed: signed.date,
       company: company || null,
@@ -884,8 +882,9 @@ app.put('/api/contracts/:id', requireApiAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 // Contract services (Services phase, Part A). A contract's line-item services: a NAME + an OPTIONAL
 // price. Add / edit / soft-delete, nested under the parent contract so the id proves ownership.
-// A service's ONLY job downstream is to supply cash_out.contract_stated_paise on the debit form —
-// it is NOT a second offset mechanism and never enters the dues maths itself.
+// A service's only job downstream is to be NAMED by a debit (cash_out.contract_service_id) as the
+// thing that spend was for. It never enters the dues maths — nothing does but the contract's stated
+// value and the contractor payments.
 // ---------------------------------------------------------------------------
 const SERVICE_NAME_MAX = 120;
 const getServiceRow = (id) => repo.contract.serviceLive(id);
@@ -947,8 +946,8 @@ app.delete('/api/contracts/:id', requireApiAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 // Contractor Payments API (Phase 3). Money PAID to a contractor, each tied to a
 // specific contract. A normal add/edit/soft-delete list via makeLedgerCrud. The
-// ledger fields are an OPTIONAL DISPLAY tag; they do NOT drive dues math (confirmed under
-// Option C — owed uses amount_paise + cash_out.contract_stated_paise, never a payment's ledger).
+// ledger fields are an OPTIONAL DISPLAY tag; they do NOT drive dues math — owed is the contract's
+// stated value minus Σ amount_paise of its payments, never a payment's ledger.
 // ---------------------------------------------------------------------------
 
 // Like resolveLedger, but the ledger is OPTIONAL: an empty ledgerCode -> all NULL
@@ -1204,12 +1203,9 @@ function computeOverview(range) {
   const bounded = !!(start || end);              // any bound set -> range mode (dateless rows drop out)
   const lo = start || '0000-01-01', hi = end || '9999-12-31'; // open sentinels -> sargable col>=? AND col<=?
 
-  // --- CUMULATIVE aggregates (Phase 6C) — computed in SQL, NO rows fetched, and NEVER range-scoped.
-  // The reimbursement offset MUST stay cumulative: a date range must never zero it. NULL/0 stated is
-  // excluded from the offset (SUM ignores NULL) and separately counted by the missing-offset check.
-  const cum = repo.overview.cashoutCumulative();            // one scan of 'included' debits
-  const includedOffset = cum.offset;                        // Σ contract_stated_paise ('included', >0)
-  const missingOffset = { count: cum.missCount, amountPaise: cum.missSum }; // 'included' with NULL/0 offset
+  // The Phase 5E reimbursement offset is REMOVED, all-or-nothing: no 'included' debit reduces owed,
+  // whatever contract_stated_paise a legacy row still holds. Nothing reads that column any more, so
+  // the cumulative 'included' scan that fed the offset (and its missing-offset check) is gone too.
 
   // Live contract (single, Phase 5D). area_of_work + headline ledger label the owed row.
   const contractRows = repo.overview.contracts();
@@ -1227,24 +1223,22 @@ function computeOverview(range) {
     if (!liveContractIds.has(g.contract_id)) { orphan.count += g.c; orphan.amountPaise += g.s; orphan.contractIds.push(g.contract_id); }
   }
 
-  // Per-contract dues + A/F — all CUMULATIVE (unaffected by the range). Phase 5D holds the live
-  // contract count at 0 or 1, so the global reimbursement offset applies to that one contract.
-  //   owed(C) = stated − Σ paid − Σ included offset   (RAW; negative = overpaid, never clamped)
+  // Per-contract dues + A/F — all CUMULATIVE (unaffected by the range).
+  //   owed(C) = stated − Σ paid   (RAW; negative = overpaid, never clamped)
+  // An UNSTATED contract (price_of_contract_paise NULL) reads as stated = 0: it adds nothing to A
+  // and nothing to owed — but its payments still count in B/D/pie, exactly as before.
   let totalContract = 0, owedToContractors = 0;
-  const contracts = contractRows.map((c, idx) => {
+  const contracts = contractRows.map((c) => {
     const stated = c.price_of_contract_paise || 0;
     const paid = paidByContract.get(c.id) || 0;
-    // The offset isn't tied to a contract id (debits carry only a Yes/No flag); with one live
-    // contract it belongs to it. Apply to the single (idx 0) contract's owed.
-    const offset = idx === 0 ? includedOffset : 0;
-    const owed = stated - paid - offset;
+    const owed = stated - paid;
     totalContract += stated; owedToContractors += owed;
     return {
       id: c.id,
       contractorName: c.contractor_name || '',
       areaOfWork: c.area_of_work || '',
       ledger: c.ledger_code ? ledgerLabel(c.ledger_code, c.subledger_code, c.ledger_custom_name, c.subledger_custom_name) : '',
-      statedPaise: stated, paidPaise: paid, offsetPaise: offset, owedPaise: owed,
+      statedPaise: stated, paidPaise: paid, owedPaise: owed,
     };
   });
 
@@ -1313,14 +1307,15 @@ function computeOverview(range) {
   const mainsSumToTotal = ledgers.reduce((a, L) => a + L.totalPaise, 0) === totalSpent;
   const subsSumToMains = ledgers.every((L) => L.subs.reduce((a, s) => a + s.totalPaise, 0) + L.noSub.totalPaise === L.totalPaise);
 
-  // Reconciliation detections were computed as CUMULATIVE aggregates at the top (Phase 6C):
+  // Reconciliation detections (cumulative, computed from the aggregates above):
   //  · orphan (Phase 4D) — payments whose parent contract is soft-deleted/missing: their ₹ is still
-  //    in B/D/pie but not offset in A/F. From OV_PAID_BY_CONTRACT_STMT groups (contract_id not live).
-  //  · missingOffset (Phase 5E) — 'included' debits with a NULL/0 offset (does nothing). From
-  //    OV_MISSING_OFFSET_STMT. Reachable via a pre-Phase-5 backup import or direct SQL.
-  //  · overOffset (Phase 5E) — payments + included offset exceed the contract value.
-  // All three flag-and-log only; NO figure is adjusted (same discipline as Phase 4D).
-  const appliedAgainstContract = cumulativePaid + includedOffset;
+  //    in B/D/pie but not counted in A/F. From the paidByContract groups (contract_id not live).
+  //  · overOffset (Phase 5E, retained) — payments exceed the contract value. The 'included'-debit
+  //    offset no longer contributes, so this is now purely "paid more than the contract is worth".
+  // The Phase 5E missing-offset check is GONE: a NULL/0 contract_stated_paise on an 'included' debit
+  // is the normal case now, so the check would fire on every single hand.
+  // Both flag-and-log only; NO figure is adjusted (same discipline as Phase 4D).
+  const appliedAgainstContract = cumulativePaid;
   const overOffset = { over: totalContract > 0 && appliedAgainstContract > totalContract, contractPaise: totalContract, appliedPaise: appliedAgainstContract, excessPaise: Math.max(0, appliedAgainstContract - totalContract) };
 
   if (!splitSumsToTotal || !mainsSumToTotal || !subsSumToMains) {
@@ -1329,11 +1324,8 @@ function computeOverview(range) {
   if (orphan.count > 0) {
     console.warn(`Overview reconciliation: ${orphan.count} live contractor payment(s) totalling ${orphan.amountPaise} paise reference a soft-deleted or missing contract (contract ids: ${orphan.contractIds.join(', ')}). Counted in B/D/pie but not offset in A/F — figures reported AS-IS, not adjusted. Restore or reassign those payments' contract to rebalance.`);
   }
-  if (missingOffset.count > 0) {
-    console.warn(`Overview reconciliation: ${missingOffset.count} 'included' debit(s) totalling ${missingOffset.amountPaise} paise have a NULL or zero contract_stated_paise — a reimbursement offset that does nothing (dues don't drop for that spend). Likely a pre-Phase-5 backup import or direct SQL. Set the contract's stated amount on those debits to rebalance. Reported AS-IS.`);
-  }
   if (overOffset.over) {
-    console.warn(`Overview reconciliation: payments + included offsets (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
+    console.warn(`Overview reconciliation: contractor payments (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
   }
 
   return {
@@ -1346,17 +1338,16 @@ function computeOverview(range) {
       spentBySelfPaise: spentBySelf,            // C (range)
       totalSpentPaise: totalSpent,              // D = B + C (range)
       loanReceivedPaise: loanReceived,          // E (cumulative)
-      owedToContractorsPaise: owedToContractors, // F = stated − Σ paid − Σ included offset (cumulative)
+      owedToContractorsPaise: owedToContractors, // F = stated − Σ paid (cumulative)
     },
-    contracts, // per-contract: { id, contractorName, statedPaise, paidPaise, offsetPaise, owedPaise }
+    contracts, // per-contract: { id, contractorName, statedPaise, paidPaise, owedPaise }
     upcomingPayments: computeUpcomingPayments(), // Part C — scheduled dates forward + soft overdue
     // Phase 4D + 5E — reconciliation status (additive, backward-compatible; the frontend may
     // surface it later). ok=false means the summary doesn't self-reconcile. Every sub-object is a
     // flag over data reported AS-IS — nothing here adjusts a figure.
     reconciliation: {
-      ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && missingOffset.count === 0 && !overOffset.over,
+      ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over,
       orphanedContractorPayments: orphan,          // { count, amountPaise, contractIds }   (Phase 4D)
-      includedDebitsMissingOffset: missingOffset,  // { count, amountPaise }                 (Phase 5E)
       overOffset: overOffset,                      // { over, contractPaise, appliedPaise, excessPaise } (Phase 5E)
     },
   };
@@ -1537,13 +1528,12 @@ function buildOverviewPdfHtml(part, o, rows, range, theme) {
   const txTableBlock = () => {
     if (!rows.length) return '<h2>Transactions</h2><p class="muted">No outflow entries in this range.</p>';
     const total = rows.reduce((a, e) => a + e.amountPaise, 0);
-    // Phase 5-follow-up: Contract Stated column — the reimbursement offset (paise) for 'included'
-    // rows, dash for 'extra'. Right-aligned via the existing class="num" convention. The table is
-    // width:100% / table-layout:auto on A4 (12mm margins ≈ 186mm), and the two numeric columns are
-    // nowrap, so this 8th column shrinks the wrappable By/Ledger/Remark rather than overflowing.
-    return '<h2>Transactions</h2><table><thead><tr><th class="num">#</th><th>Date</th><th class="num">Amount</th><th>By</th><th>Ledger</th><th>Remark</th><th>Contract Included</th><th class="num">Contract Stated</th></tr></thead><tbody>' +
-      rows.map((e, i) => `<tr><td class="num">${i + 1}</td><td>${e.txDate ? pdfEsc(fmtDatePdf(e.txDate)) : '—'}</td><td class="num">${fmtRs(e.amountPaise)}</td><td>${pdfEsc(e.by)}</td><td>${pdfEsc(e.ledger)}</td><td>${e.reason ? pdfEsc(e.reason) : '—'}</td><td>${incl(e.contractScope)}</td><td class="num">${e.contractScope === 'included' && e.contractStatedPaise != null ? fmtRs(e.contractStatedPaise) : '—'}</td></tr>`).join('') +
-      `</tbody><tfoot><tr><td colspan="2">Total (${rows.length})</td><td class="num">${fmtRs(total)}</td><td colspan="5"></td></tr></tfoot></table>`;
+    // The Contract Stated column is gone with the reimbursement offset — the number it printed is
+    // no longer written or used, so a column that would read '—' on every future row is not carried.
+    // Contract Included (Yes/No) stays: that label is still recorded.
+    return '<h2>Transactions</h2><table><thead><tr><th class="num">#</th><th>Date</th><th class="num">Amount</th><th>By</th><th>Ledger</th><th>Remark</th><th>Contract Included</th></tr></thead><tbody>' +
+      rows.map((e, i) => `<tr><td class="num">${i + 1}</td><td>${e.txDate ? pdfEsc(fmtDatePdf(e.txDate)) : '—'}</td><td class="num">${fmtRs(e.amountPaise)}</td><td>${pdfEsc(e.by)}</td><td>${pdfEsc(e.ledger)}</td><td>${e.reason ? pdfEsc(e.reason) : '—'}</td><td>${incl(e.contractScope)}</td></tr>`).join('') +
+      `</tbody><tfoot><tr><td colspan="2">Total (${rows.length})</td><td class="num">${fmtRs(total)}</td><td colspan="4"></td></tr></tfoot></table>`;
   };
 
   const TITLE = { full: 'Overview', summary: 'Overview — summary', pie: 'Spending by Ledger — chart', table: 'Transactions', ledger: 'Spending by Ledger' };
@@ -1843,14 +1833,13 @@ function validateBackup(data) {
     if (!(r.ledger_code === CUSTOM_CODE || LEDGER_BY_CODE.has(r.ledger_code))) return { error: `cash_out: unknown ledger_code ${JSON.stringify(r.ledger_code)}.` };
     if (!(r.subledger_code == null || r.subledger_code === CUSTOM_CODE || subBelongs(r.ledger_code, r.subledger_code))) return { error: `cash_out: subledger_code ${JSON.stringify(r.subledger_code)} does not belong to ledger ${JSON.stringify(r.ledger_code)}.` };
     if (!['included', 'extra'].includes(r.contract_scope)) return { error: `cash_out: invalid contract_scope ${JSON.stringify(r.contract_scope)}.` };
-    // Phase 5E: contract_stated_paise — optional integer paise or null. Absent on pre-Phase-5
-    // backups (undefined -> imported as NULL, which is correct); an 'included' row that lands with
-    // NULL/0 is surfaced later by the reconciliation "missing offset" flag, NOT rejected here, so
-    // old backups still restore. Only reject a present-but-wrong type.
+    // contract_stated_paise — the retired Phase 5E offset column. Kept nullable in the schema and
+    // still round-tripped by backups so a historical value survives an export/import, but nothing
+    // reads it any more. Absent on pre-Phase-5 backups (undefined -> NULL). Type-check only.
     if (!optInt(r.contract_stated_paise)) return { error: 'cash_out: contract_stated_paise must be an integer (paise) or null.' };
     // Services phase (Part C/D): contract_service_id — optional. Absent on pre-change backups
     // (undefined -> NULL). If present, it must resolve to a service inside the file (referential
-    // sanity); the DB's partial-unique index is the ultimate one-service-one-offset backstop on insert.
+    // sanity); the DB's partial-unique index is the ultimate one-service-one-live-debit backstop on insert.
     if (!(r.contract_service_id == null || (isInt(r.contract_service_id) && serviceIds.has(r.contract_service_id)))) return { error: `cash_out: contract_service_id ${JSON.stringify(r.contract_service_id)} is not present in the backup's contract_services.` };
   }
   return { ok: true };
@@ -1907,6 +1896,68 @@ app.post('/api/backup/export-encrypted', requireApiAuth, (req, res) => {
 // res.json().catch(() => ({})) swallows into a generic, misleading "Restore failed" — see Phase 11 audit).
 app.post('/api/backup/import-encrypted', requireApiAuth, (req, res) => {
   res.status(501).json({ error: 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.' });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 15 — backup-overdue reminder. last_encrypted_export_at is stamped only by a VERIFIED
+// encrypted full backup (see saveFile() in data-backup.html, gated on the .db.enc filename) — a
+// JSON export or a Ledger List CSV is not a complete restore point, so neither touches this.
+// backup_reminder_days is the user's overdue threshold: unset = the default (7), the literal string
+// 'off' = disabled, otherwise a whole number of days.
+// ---------------------------------------------------------------------------
+const BACKUP_REMINDER_DEFAULT_DAYS = 7;
+const BACKUP_REMINDER_MIN_DAYS = 1;
+const BACKUP_REMINDER_MAX_DAYS = 365;
+
+function getLastExportAt() {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'").get();
+  return (r && r.value) ? r.value : null;
+}
+
+function getBackupReminderDays() {
+  const r = db.prepare("SELECT value FROM settings WHERE key = 'backup_reminder_days'").get();
+  if (!r || r.value == null) return BACKUP_REMINDER_DEFAULT_DAYS;
+  if (r.value === 'off') return null;
+  const n = Number(r.value);
+  return Number.isInteger(n) && n >= BACKUP_REMINDER_MIN_DAYS && n <= BACKUP_REMINDER_MAX_DAYS ? n : BACKUP_REMINDER_DEFAULT_DAYS;
+}
+
+// Whole days elapsed since `utc` ('YYYY-MM-DD HH:MM:SS', same shape as every other *_at column) —
+// floored, so "6 days and 23 hours" reads as 6 rather than rounding up to a false "7 days ago".
+function daysSinceUtc(utc) {
+  const then = new Date(String(utc).replace(' ', 'T') + 'Z').getTime();
+  return Math.max(0, Math.floor((Date.now() - then) / 86400000));
+}
+
+function getBackupReminderStatus() {
+  const lastExportAt = getLastExportAt();
+  const reminderDays = getBackupReminderDays();
+  const since = lastExportAt ? daysSinceUtc(lastExportAt) : null;
+  const overdue = reminderDays != null && (since === null || since > reminderDays);
+  return { lastExportAt, reminderDays, daysSince: since, overdue };
+}
+
+app.get('/api/backup/reminder', requireApiAuth, (req, res) => { res.json(getBackupReminderStatus()); });
+
+app.put('/api/backup/reminder', requireApiAuth, (req, res) => {
+  const raw = req.body.days;
+  if (raw === null || raw === 'off') {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('backup_reminder_days', 'off') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+    return res.json(getBackupReminderStatus());
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < BACKUP_REMINDER_MIN_DAYS || n > BACKUP_REMINDER_MAX_DAYS) {
+    return res.status(400).json({ error: `Enter a whole number of days between ${BACKUP_REMINDER_MIN_DAYS} and ${BACKUP_REMINDER_MAX_DAYS}, or turn it off.` });
+  }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('backup_reminder_days', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(n));
+  res.json(getBackupReminderStatus());
+});
+
+// Called only after the encrypted backup file is verified to actually exist (Filesystem.stat() on
+// native, the closest browser equivalent otherwise) — see saveFile() in data-backup.html.
+app.post('/api/backup/mark-exported', requireApiAuth, (req, res) => {
+  db.prepare("INSERT INTO settings (key, value) VALUES ('last_encrypted_export_at', datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+  res.json(getBackupReminderStatus());
 });
 
 app.get('/api/backup/export', requireApiAuth, (req, res) => {
