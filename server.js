@@ -1774,22 +1774,49 @@ function fmtRs(paise) {
 }
 const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// Amber-family palette (same idea as the on-screen pie); Custom = deep amber.
-// Phase 10a: 24 main ledgers now (was 23, and this palette had only 20) — 4 more so no ledger wraps
-// around to reuse an earlier one's colour.
-const PDF_PALETTE = ['#f59e0b', '#fbbf24', '#b45309', '#d97706', '#fcd34d', '#92400e', '#ef8a4b',
-  '#eab308', '#a16207', '#f4a06a', '#c2703d', '#facc15', '#7c3f12', '#fdba74', '#9a6a2f', '#e0a800',
-  '#ffcf70', '#8a5a2b', '#f6b352', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#eab676'];
-// Phase 11 audit: same fix as overview.html's colorByCode — a 25th+ main ledger must never wrap
-// back onto an earlier ledger's colour in the PDF pie either. The fixed 24 above are untouched.
+// Amber-family palette for the printed pie; Custom = deep amber (PDF_CUSTOM_COLOR).
+//
+// Phase C re-derived it, and it is the WEAK one of the two palettes — knowingly. Measured before:
+// min ΔE00 2.99, six pairs under 5, forty-seven under 10, and #8a5a2b appeared BOTH as the 18th
+// ledger's colour and as the Custom slice's, so those two slices were byte-identical whenever both
+// had spend. After: no exact duplicate, nothing under ΔE00 5, min 6.00 — but still 39 pairs under 10.
+//
+// That ceiling is structural, not laziness. Hue is the axis that separates categories; this palette
+// gives hue up by design to stay in the app's amber identity on white paper, leaving only lightness
+// and a little chroma to hold 24 categories apart. Measured alternatives, if that trade is ever
+// revisited: staying amber but allowing heavy drift into browns and olives reaches min ΔE00 11.64
+// (and stops reading as amber); dropping the hue constraint entirely reaches 20.14. Both are design
+// decisions about the report's identity, not bug fixes, so neither was taken unilaterally.
+const PDF_PALETTE = [
+  '#f59e0b', '#ffc31b', '#9a5115', '#d97706', '#e3c153', '#973913', '#ef8a4b', '#d2b001',
+  '#a56b1a', '#dda077', '#c2703d', '#e8d12f', '#7d452a', '#f6ba83', '#876322', '#d29e0f',
+  '#ffcf70', '#845f44', '#eca955', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#cea871'];
+// Custom's slice colour. Pulled out of the literal it used to be written as, because it also has to
+// participate in the distinctness check — the old code hard-coded a value that was already in the
+// palette, which no amount of checking the palette alone would ever have caught.
+const PDF_CUSTOM_COLOR = '#8a5a2b';
+// Ledgers past the fixed 24, same farthest-point derivation as overview.html's LEDGER_PALETTE_EXT
+// (see the long note there for why the golden-angle generator was retired). Not hue-constrained:
+// the old generator emitted full-spectrum hsl() here too, and forcing extras into an amber family
+// that cannot separate its own 24 would make things worse, not better.
+const PDF_PALETTE_EXT = [
+  '#f720f8', '#1dc2fc', '#144ea8', '#058f67', '#d5cdf2', '#27f164', '#8e2b69', '#7f7a92',
+  '#ff758f', '#b6d9cd', '#49554c', '#638af8', '#277f92', '#739114', '#851cf6', '#868779',
+  '#0d6007', '#d41346', '#11b4b3', '#5d4e56', '#ca8ec6', '#f9c5c5', '#9dbf7c', '#a0adb9'];
+// Beyond 48 mains — unverified last resort, as on screen.
 function extraLedgerColor(extraIndex) {
   const hue = (extraIndex * 137.508) % 360;
   return `hsl(${hue.toFixed(1)}, 65%, 50%)`;
 }
+function pdfLedgerColor(idx) {
+  if (idx < PDF_PALETTE.length) return PDF_PALETTE[idx];
+  const ext = idx - PDF_PALETTE.length;
+  return ext < PDF_PALETTE_EXT.length ? PDF_PALETTE_EXT[ext] : extraLedgerColor(ext - PDF_PALETTE_EXT.length);
+}
 function pdfSlices(o) {
   return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => {
     const idx = Math.max(0, LEDGERS.findIndex((x) => x.code === L.code));
-    const color = L.code === CUSTOM_CODE ? '#8a5a2b' : (idx < PDF_PALETTE.length ? PDF_PALETTE[idx] : extraLedgerColor(idx - PDF_PALETTE.length));
+    const color = L.code === CUSTOM_CODE ? PDF_CUSTOM_COLOR : pdfLedgerColor(idx);
     return { label: L.name, value: L.totalPaise, color };
   });
 }

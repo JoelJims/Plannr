@@ -44,7 +44,10 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('and disables the typed total so an ignored number cannot sit in an enabled box', await page.isDisabled('#cStated'));
   check('with a note saying where the figure came from', await page.isVisible('#cStatedDerivedNote'));
 
-  // optional metadata, including the derived expected completion date
+  // optional metadata, including the derived expected completion date. Phase C moved all of this
+  // behind a collapsed <details> — open it first, exactly as a user would.
+  await page.click('#cdOptional > summary');
+  await page.waitForTimeout(150);
   await page.check('#hasSignedDate');
   await page.selectOption('#dsDay', '31');
   await page.selectOption('#dsMonth', '1');
@@ -63,6 +66,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('the contract saved with the DERIVED total in the stated column', saved.statedAmountPaise === 504712500, String(saved.statedAmountPaise));
   check('pricingMode reports how the total was arrived at', saved.pricingMode === 'rate', saved.pricingMode);
   check('metadata round-tripped through the form', saved.supervisionRatePct === 12.5 && saved.specifiedBrands === 'Cement: UltraTech' && saved.completionPeriodMonths === 1);
+  check('the optional block auto-opens for a contract that uses it', await page.getAttribute('#cdOptional', 'open') !== null);
   check('the form reloads in edit mode with the rate and area repopulated',
     (await page.inputValue('#cRate')) === '2150.00' && (await page.inputValue('#cAreaSqft')) === '2347.5',
     `${await page.inputValue('#cRate')} / ${await page.inputValue('#cAreaSqft')}`);
@@ -87,7 +91,8 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.waitForTimeout(150);
 
   // ---- scope list: names only --------------------------------------------------------------------
-  check('the scope + allowances section appears once a contract exists', await page.isVisible('#servicesSection'));
+  check('the scope section appears once a contract exists', await page.isVisible('#scopeSection'));
+  check('the allowances section is its own section', await page.isVisible('#allowancesSection'));
   check('there is no service price input anywhere on the page', (await page.$$('.cd-svc-price')).length === 0 && (await page.$('#svcPrice')) === null);
   check('and no remainder line', (await page.$('#remainderLine')) === null);
   await page.fill('#svcName', 'Electrical rough-in');
@@ -96,6 +101,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('a scope item can be added', (await page.$$('.cd-svc-row')).length === 1);
 
   // ---- allowances: the ten standard caps ---------------------------------------------------------
+  check('the empty state is a prompt, not a table', await page.isVisible('#allowancesEmpty') && !(await page.isVisible('#allowancesList')) && !(await page.isVisible('#allowanceForm')));
   check('the standard-set button is offered while there are no allowances', await page.isVisible('#alwSeedBtn'));
   page.once('dialog', (d) => d.accept());
   await page.click('#alwSeedBtn');

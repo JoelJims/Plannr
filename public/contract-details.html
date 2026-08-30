@@ -164,6 +164,56 @@
 
     .cd-sep { border: none; border-top: 1px solid var(--line); margin: 26px 0 18px; }
 
+    /* ---- Phase C: progressive disclosure for the optional contract metadata -------------------
+       Phase A added seven optional fields to a form that already had ten, and on a phone the two
+       that decide the contractor's dues — the rate and the total — ended up above a screen and a
+       half of things that decide nothing. Native <details>: no JS, keyboard-operable for free, and
+       it survives the CSP rules this app runs under (no inline styles, no inline handlers). */
+    .cd-more { border: 1px solid var(--line); margin: 6px 0 18px; background: var(--panel-2); }
+    .cd-more > summary {
+      display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none;
+      padding: 15px 16px; font-family: var(--font-head); font-weight: 600; font-size: 12px;
+      letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim);
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .cd-more > summary::-webkit-details-marker { display: none; }
+    .cd-more > summary:hover { color: var(--accent); background: var(--accent-soft); }
+    .cd-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .cd-more-caret { color: var(--accent); transition: transform 0.2s ease; flex: none; }
+    .cd-more[open] .cd-more-caret { transform: rotate(90deg); }
+    .cd-more-count { margin-left: auto; font-size: 11px; letter-spacing: 0.06em; text-transform: none; color: var(--text-faint); }
+    .cd-more[open] .cd-more-count { color: var(--accent); }
+    .cd-more-body { padding: 4px 16px 16px; }
+    .cd-more-body .field:last-child { margin-bottom: 0; }
+    .cd-more-group { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint); margin: 18px 0 10px; }
+    .cd-more-group:first-child { margin-top: 4px; }
+
+    /* Money and measurements line up column-wise when the digits are the same width. This is a
+       ledger; the figures are read against each other constantly. */
+    #cStated, #cRate, #cAreaSqft, #cAmount, #cMonths, #cSupervision,
+    .cd-alw-cap, .cd-alw-area, .cd-computed, .cd-alw-pos { font-variant-numeric: tabular-nums; }
+
+    /* Allowances: the empty state is a prompt, not an empty table. */
+    .cd-alw-cta { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; padding: 18px 16px; border: 1px dashed var(--line-strong); background: var(--panel-2); }
+    .cd-alw-cta p { margin: 0; font-size: 13px; color: var(--text-dim); line-height: 1.5; max-width: 60ch; }
+    .cd-alw-cta-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    /* [hidden] must beat the display rules above — a class selector outranks the UA's
+       [hidden] { display: none }, which is the same trap .cd-date-grid documents further up.
+       Without this the seeded-allowances state still showed its own empty-state prompt. */
+    .cd-alw-add[hidden], .cd-alw-list[hidden], .cd-alw-cta[hidden], .cd-alw-actions[hidden] { display: none; }
+
+    /* Phone: an allowance row collapses from six columns to one, and six stacked boxes whose only
+       cue is a placeholder is a guessing game. Show the label above each input below 800px, where
+       the grid has already stopped being a table. */
+    .cd-alw-fieldlabel { display: none; font-family: var(--font-head); font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 4px; }
+    @media (max-width: 800px) {
+      .cd-alw-fieldlabel { display: block; }
+      .cd-alw-grid, .cd-alw-add { gap: 12px; }
+      .cd-alw-grid > .cd-alw-actions, .cd-alw-add > button { grid-column: 1 / -1; }
+    }
+    .cd-alw-actions { display: flex; gap: 8px; }
+    @media (max-width: 800px) { .cd-alw-actions .cd-btn-sm { flex: 1 1 auto; } }
+
     /* Contract cards (the list). */
     .cd-contract { border: 1px solid var(--line-strong); background: var(--panel-2); padding: 16px 16px 14px; margin-bottom: 14px; }
     .cd-contract.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line); }
@@ -318,34 +368,9 @@
           <p id="cStatedDerivedNote" class="cd-derived-note" hidden>Set from the rate and measured area above. Clear either one to type a total here instead.</p>
         </div>
 
-        <!-- DORMANT field: amount_paise. Stored (kept like phase/subpart) but feeds NO calculation. -->
-        <div class="field">
-          <label for="cAmount">Reference amount <span class="cd-optional">(optional — not used in any calculation)</span></label>
-          <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
-            <input id="cAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
-        </div>
-
-        <!-- Contract Phase A: the signing date is OPTIONAL now, so it gets the same
-             checkbox-then-picker treatment the end date already had. Unchecked = no date recorded,
-             which also means no expected completion date is claimed below. -->
-        <div class="field">
-          <label class="cd-check"><input type="checkbox" id="hasSignedDate"><span>Record the date signed (optional)</span></label>
-          <div id="dsWrap" class="cd-date-grid" hidden>
-            <div><label for="dsDay" class="cd-sub-label">Day</label><select id="dsDay" aria-label="Day (signed)"></select></div>
-            <div><label for="dsMonth" class="cd-sub-label">Month</label><select id="dsMonth" aria-label="Month (signed)"></select></div>
-            <div><label for="dsYear" class="cd-sub-label">Year</label><select id="dsYear" aria-label="Year (signed)"></select></div>
-          </div>
-        </div>
-
-        <div class="field">
-          <label class="cd-check"><input type="checkbox" id="hasEndDate"><span>Set an end date (optional)</span></label>
-          <div id="deWrap" class="cd-date-grid" hidden>
-            <div><label for="deDay" class="cd-sub-label">Day</label><select id="deDay" aria-label="Day (ends)"></select></div>
-            <div><label for="deMonth" class="cd-sub-label">Month</label><select id="deMonth" aria-label="Month (ends)"></select></div>
-            <div><label for="deYear" class="cd-sub-label">Year</label><select id="deYear" aria-label="Year (ends)"></select></div>
-          </div>
-        </div>
-
+        <!-- Scheduled payment dates stay in the core: they are not a note about the contract, they
+             populate the date dropdown on Contractor Payments, so they get edited in the ordinary
+             course of using the app. -->
         <div class="field">
           <label>Dates of payments <span class="cd-optional">(scheduled — add as many as needed)</span></label>
           <p id="payDatesEmpty" class="cd-paydates-empty">No payment dates added.</p>
@@ -353,35 +378,86 @@
           <button type="button" class="cd-add-date" id="addPayDateBtn">+ Add payment date</button>
         </div>
 
-        <!-- Contract Phase A — OPTIONAL contract metadata. None of it drives a figure. The expected
-             completion date is DERIVED from the signing date plus the period, so it is shown rather
-             than asked for, and stays blank whenever either half is missing. -->
-        <div class="field">
-          <label for="cMonths">Completion period (months) <span class="cd-optional">(optional)</span></label>
-          <input id="cMonths" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 12">
-          <p id="cExpected" class="cd-expected" hidden></p>
-        </div>
+        <!-- ===== Everything below decides NOTHING =====================================
+             Every field in here is optional and none of them moves a figure: not owed, not Total
+             contract, not a single number on the Overview. Phase A added seven of them at once,
+             which on a phone pushed the rate and the total — the two fields the dues actually come
+             from — above a screen and a half of prose boxes. Collapsed by default; the script opens
+             it automatically when a saved contract has anything in it, so nothing hides from you on
+             a contract you have already filled in, and the count in the summary says how much is in
+             there without opening it. -->
+        <details class="cd-more" id="cdOptional">
+          <summary>
+            <span class="cd-more-caret" aria-hidden="true">▸</span>
+            <span>Contract terms &amp; notes</span>
+            <span class="cd-more-count" id="cdOptionalCount">all optional</span>
+          </summary>
+          <div class="cd-more-body">
+            <p class="cd-more-group">Dates</p>
 
-        <div class="field">
-          <label for="cSupervision">Supervision rate on change orders (%) <span class="cd-optional">(optional)</span></label>
-          <input id="cSupervision" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 12.5">
-          <p class="cd-hint">Recorded for reference only — Plannr never applies it to any amount.</p>
-        </div>
+            <!-- Contract Phase A: the signing date is OPTIONAL now, so it gets the same
+                 checkbox-then-picker treatment the end date already had. Unchecked = no date
+                 recorded, which also means no expected completion date is claimed below. -->
+            <div class="field">
+              <label class="cd-check"><input type="checkbox" id="hasSignedDate"><span>Record the date signed</span></label>
+              <div id="dsWrap" class="cd-date-grid" hidden>
+                <div><label for="dsDay" class="cd-sub-label">Day</label><select id="dsDay" aria-label="Day (signed)"></select></div>
+                <div><label for="dsMonth" class="cd-sub-label">Month</label><select id="dsMonth" aria-label="Month (signed)"></select></div>
+                <div><label for="dsYear" class="cd-sub-label">Year</label><select id="dsYear" aria-label="Year (signed)"></select></div>
+              </div>
+            </div>
 
-        <div class="field">
-          <label for="cBrands">Specified brands <span class="cd-optional">(optional)</span></label>
-          <textarea id="cBrands" maxlength="2000" placeholder="Brands the contract names, e.g. cement, wiring, fittings"></textarea>
-        </div>
+            <div class="field">
+              <label class="cd-check"><input type="checkbox" id="hasEndDate"><span>Set an end date</span></label>
+              <div id="deWrap" class="cd-date-grid" hidden>
+                <div><label for="deDay" class="cd-sub-label">Day</label><select id="deDay" aria-label="Day (ends)"></select></div>
+                <div><label for="deMonth" class="cd-sub-label">Month</label><select id="deMonth" aria-label="Month (ends)"></select></div>
+                <div><label for="deYear" class="cd-sub-label">Year</label><select id="deYear" aria-label="Year (ends)"></select></div>
+              </div>
+            </div>
 
-        <div class="field">
-          <label for="cExcluded">Excluded scope <span class="cd-optional">(optional)</span></label>
-          <textarea id="cExcluded" maxlength="2000" placeholder="Work explicitly outside this contract"></textarea>
-        </div>
+            <div class="field">
+              <label for="cMonths">Completion period (months)</label>
+              <input id="cMonths" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 12">
+              <p id="cExpected" class="cd-expected" hidden></p>
+            </div>
 
-        <div class="field">
-          <label for="cObligations">Owner obligations <span class="cd-optional">(optional)</span></label>
-          <textarea id="cObligations" maxlength="2000" placeholder="What the owner has agreed to supply or do"></textarea>
-        </div>
+            <p class="cd-more-group">Terms</p>
+
+            <div class="field">
+              <label for="cSupervision">Supervision rate on change orders (%)</label>
+              <input id="cSupervision" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 12.5">
+              <p class="cd-hint">Recorded for reference only — Plannr never applies it to any amount.</p>
+            </div>
+
+            <!-- DORMANT field: amount_paise. Stored (kept like phase/subpart) but feeds NO
+                 calculation. It sits here rather than beside the total contract value on purpose:
+                 two money boxes in a row, one of which is ignored, is how a figure ends up typed
+                 into the wrong one. -->
+            <div class="field">
+              <label for="cAmount">Reference amount <span class="cd-optional">(not used in any calculation)</span></label>
+              <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
+                <input id="cAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
+            </div>
+
+            <p class="cd-more-group">Notes from the contract</p>
+
+            <div class="field">
+              <label for="cBrands">Specified brands</label>
+              <textarea id="cBrands" maxlength="2000" placeholder="Brands the contract names, e.g. cement, wiring, fittings"></textarea>
+            </div>
+
+            <div class="field">
+              <label for="cExcluded">Excluded scope</label>
+              <textarea id="cExcluded" maxlength="2000" placeholder="Work explicitly outside this contract"></textarea>
+            </div>
+
+            <div class="field">
+              <label for="cObligations">Owner obligations</label>
+              <textarea id="cObligations" maxlength="2000" placeholder="What the owner has agreed to supply or do"></textarea>
+            </div>
+          </div>
+        </details>
 
         <div class="cd-actions-row">
           <button type="submit" class="btn primary" id="contractSaveBtn">Add contract</button>
@@ -390,10 +466,10 @@
         </div>
       </form>
 
-      <!-- ===== Scope of work + allowance caps. Shown only once a contract exists. ===== -->
-      <section id="servicesSection" hidden>
+      <!-- ===== Scope of work. Shown only once a contract exists. ===== -->
+      <section id="scopeSection" hidden aria-labelledby="scopeHeading">
         <hr class="cd-sep">
-        <p class="cd-section-title">Scope of work</p>
+        <h2 class="cd-section-title" id="scopeHeading">Scope of work</h2>
         <p class="cd-hint">The items this contract covers, by name. This contract prices the work as a whole
           (a rate per square foot × the measured area), so a scope item carries <b>no price of its own</b> —
           listing one here changes no figure. A debit can name the item it was for.</p>
@@ -404,25 +480,42 @@
           <button type="submit" class="btn primary" id="svcAddBtn">Add item</button>
         </form>
 
+      </section>
+
+      <!-- ===== Allowances — its own section, because it is its own thing: the scope list above is
+           names, this is the only place the contract attaches rupee figures to items. When a
+           contract has no allowances the TABLE and the add-form are both hidden and this collapses
+           to a two-line prompt; a contract with no allowances is completely normal, so an empty
+           table with ten blank columns would be noise on every load. ===== -->
+      <section id="allowancesSection" hidden aria-labelledby="allowancesHeading">
         <hr class="cd-sep">
-        <p class="cd-section-title">Allowances</p>
-        <p class="cd-hint">Optional. An allowance is a cap the contract sets for a named item — either a
+        <h2 class="cd-section-title" id="allowancesHeading">Allowances</h2>
+        <p class="cd-hint" id="allowancesIntro" hidden>An allowance is a cap the contract sets for a named item — either a
           rupee amount or a ceiling per square foot. Spend is counted from Money Debited entries you tag
           with the allowance, so the position below is real spend, never a typed figure.
           <br>Per the contract, an overrun is added to the next progress payment and an underrun subtracted
           from the final. Plannr <b>shows you where you stand and settles nothing</b> — no figure here
           affects Owed or Total contract.</p>
         <div id="allowancesMsg" class="msg" role="alert"></div>
-        <button type="button" class="cd-alw-seed" id="alwSeedBtn" hidden>+ Add the ten standard allowances from the contract</button>
+
+        <!-- Empty state: a prompt with the two ways in, not a bare table. -->
+        <div class="cd-alw-cta" id="allowancesEmpty" hidden>
+          <p>This contract has no allowance caps recorded. That is a normal contract — add them only if yours sets spending limits on named items like sanitaryware, doors or tiling.</p>
+          <div class="cd-alw-cta-actions">
+            <button type="button" class="cd-alw-seed" id="alwSeedBtn">+ Add the ten from the contract</button>
+            <button type="button" class="cd-btn-sm" id="alwAddOneBtn">Add one myself</button>
+          </div>
+        </div>
+
         <div id="allowancesList" class="cd-alw-list"></div>
-        <form id="allowanceForm" class="cd-alw-add" novalidate>
-          <input id="alwName" type="text" maxlength="120" autocomplete="off" placeholder="Allowance name" aria-label="Allowance name" required>
-          <select id="alwKind" aria-label="Cap type">
+        <form id="allowanceForm" class="cd-alw-add" novalidate hidden>
+          <div><p class="cd-alw-fieldlabel">Name</p><input id="alwName" type="text" maxlength="120" autocomplete="off" placeholder="Allowance name" aria-label="Allowance name" required></div>
+          <div><p class="cd-alw-fieldlabel">Cap type</p><select id="alwKind" aria-label="Cap type">
             <option value="lump">₹ cap</option>
             <option value="per_sqft">₹ per sq ft</option>
-          </select>
-          <input id="alwCap" type="text" inputmode="decimal" autocomplete="off" placeholder="Cap ₹" aria-label="Cap amount">
-          <input id="alwArea" type="text" inputmode="decimal" autocomplete="off" placeholder="Area sq ft" aria-label="Area in square feet" hidden>
+          </select></div>
+          <div><p class="cd-alw-fieldlabel">Cap</p><input id="alwCap" type="text" inputmode="decimal" autocomplete="off" placeholder="Cap ₹" aria-label="Cap amount"></div>
+          <div id="alwAreaWrap" hidden><p class="cd-alw-fieldlabel">Area</p><input id="alwArea" type="text" inputmode="decimal" autocomplete="off" placeholder="Area sq ft" aria-label="Area in square feet"></div>
           <button type="submit" class="btn primary" id="alwAddBtn">Add allowance</button>
         </form>
       </section>
@@ -499,7 +592,24 @@
           cStatedDerivedNote = $('cStatedDerivedNote'), cStatedField = $('cStatedField'),
           hasSignedDate = $('hasSignedDate'), dsWrap = $('dsWrap'),
           cMonths = $('cMonths'), cExpected = $('cExpected'), cSupervision = $('cSupervision'),
-          cBrands = $('cBrands'), cExcluded = $('cExcluded'), cObligations = $('cObligations');
+          cBrands = $('cBrands'), cExcluded = $('cExcluded'), cObligations = $('cObligations'),
+          // Phase C
+          cdOptional = $('cdOptional'), cdOptionalCount = $('cdOptionalCount');
+
+    // The optional block is collapsed by default, which is only safe if it is obvious when there is
+    // something inside it. The summary carries a count, and startEditContract opens the block
+    // outright when a saved contract has anything in there — a field you cannot see is a field you
+    // will not remember to update.
+    const OPTIONAL_FIELDS = () => [
+      hasSignedDate.checked, hasEndDate.checked,
+      cMonths.value.trim(), cSupervision.value.trim(), cAmount.value.trim(),
+      cBrands.value.trim(), cExcluded.value.trim(), cObligations.value.trim(),
+    ];
+    function optionalFilledCount() { return OPTIONAL_FIELDS().filter(Boolean).length; }
+    function syncOptionalSummary() {
+      const n = optionalFilledCount();
+      cdOptionalCount.textContent = n === 0 ? 'all optional' : `${n} set`;
+    }
 
     const cLedger = createLedgerPicker({
       ledgerSelect: $('cLedgerSelect'), ledgerCustomWrap: $('cLedgerCustomWrap'), ledgerCustom: $('cLedgerCustom'),
@@ -566,6 +676,8 @@
     }
     cMonths.addEventListener('input', syncExpected);
     for (const el of [$('dsDay'), $('dsMonth'), $('dsYear')]) el.addEventListener('change', syncExpected);
+    for (const el of [cMonths, cSupervision, cAmount, cBrands, cExcluded, cObligations]) el.addEventListener('input', syncOptionalSummary);
+    for (const el of [hasSignedDate, hasEndDate]) el.addEventListener('change', syncOptionalSummary);
 
     function refreshPayDatesEmpty() { payDatesEmpty.hidden = payRows.length > 0; }
 
@@ -606,6 +718,8 @@
       typedStated = '';
       syncPricing();
       syncExpected();
+      cdOptional.open = false;          // a brand-new contract has nothing in there yet
+      syncOptionalSummary();
       clearPayDates();
       contractSaveBtn.textContent = 'Add contract';
       contractCancelBtn.hidden = true;   // nothing to revert to when creating
@@ -648,12 +762,16 @@
       typedStated = c.pricingMode === 'rate' ? '' : cStated.value;
       syncPricing();
       syncExpected();
+      // Open the optional block for a contract that actually uses it, so editing an existing
+      // contract never hides data behind a collapsed summary.
+      syncOptionalSummary();
+      cdOptional.open = optionalFilledCount() > 0;
       clearPayDates();
       (c.paymentDates || []).forEach((d) => addPayDateRow(d));
       contractSaveBtn.textContent = 'Save changes';
       contractCancelBtn.hidden = false;  // "Revert" to the saved values
       contractDeleteBtn.hidden = false;  // the one contract can be soft-deleted (recycle bin)
-      renderContractSections(c);         // scope list + allowance caps (only when a contract exists)
+      renderContractSections(c);         // scope list + allowance caps (each its own section)
     }
 
     contractForm.addEventListener('submit', async (ev) => {
@@ -751,25 +869,37 @@
     }
 
     // ============ Scope of work (names only) + allowance caps (Contract Phase A) ============
-    const servicesSection = $('servicesSection'),
+    const scopeSection = $('scopeSection'),
           servicesList = $('servicesList'), serviceForm = $('serviceForm'),
           svcName = $('svcName'), svcAddBtn = $('svcAddBtn');
     const servicesMsg = makeMsg($('servicesMsg'));
 
-    const allowancesList = $('allowancesList'), allowanceForm = $('allowanceForm'),
+    const allowancesSection = $('allowancesSection'), allowancesList = $('allowancesList'),
+          allowancesEmpty = $('allowancesEmpty'), allowancesIntro = $('allowancesIntro'),
+          allowanceForm = $('allowanceForm'),
           alwName = $('alwName'), alwKind = $('alwKind'), alwCap = $('alwCap'),
-          alwArea = $('alwArea'), alwAddBtn = $('alwAddBtn'), alwSeedBtn = $('alwSeedBtn');
+          alwArea = $('alwArea'), alwAreaWrap = $('alwAreaWrap'),
+          alwAddBtn = $('alwAddBtn'), alwSeedBtn = $('alwSeedBtn'), alwAddOneBtn = $('alwAddOneBtn');
     const allowancesMsg = makeMsg($('allowancesMsg'));
 
     // An area only means anything for a per-square-foot ceiling, so it is only asked for there.
-    function syncAlwKind(kindEl, capEl, areaEl) {
+    // `hideEl` is what gets hidden — in the add form the input now sits inside a wrapper carrying its
+    // phone-width label, so hiding the input alone would leave the label behind.
+    function syncAlwKind(kindEl, capEl, areaEl, hideEl) {
       const perSqft = kindEl.value === 'per_sqft';
       capEl.placeholder = perSqft ? 'Ceiling ₹ / sq ft' : 'Cap ₹';
-      areaEl.hidden = !perSqft;
+      (hideEl || areaEl).hidden = !perSqft;
       if (!perSqft) areaEl.value = '';
     }
-    alwKind.addEventListener('change', () => syncAlwKind(alwKind, alwCap, alwArea));
-    syncAlwKind(alwKind, alwCap, alwArea);
+    alwKind.addEventListener('change', () => syncAlwKind(alwKind, alwCap, alwArea, alwAreaWrap));
+    syncAlwKind(alwKind, alwCap, alwArea, alwAreaWrap);
+
+    // From the empty state: reveal the add form and put the cursor in it.
+    alwAddOneBtn.addEventListener('click', () => {
+      allowanceForm.hidden = false;
+      allowancesIntro.hidden = false;
+      alwName.focus();
+    });
 
     // The over/under wording. Three genuinely different cases, and the third is the point of the
     // whole design: a per-square-foot ceiling with no area recorded has NO rupee cap, so it reports
@@ -795,26 +925,36 @@
         : (a.capPaise != null ? paiseToInput(a.capPaise) : '');
       const areaValue = a.areaMilliSqft != null ? milliToInput(a.areaMilliSqft) : '';
       const pos = positionText(a);
+      // The per-field labels are hidden by CSS at desk width, where the grid reads as a table with
+      // the add-form's headers above it, and shown below 800px, where the row has collapsed into a
+      // stack and a placeholder alone is a guessing game.
+      const lbl = (t) => '<p class="cd-alw-fieldlabel">' + t + '</p>';
       return '<div class="cd-alw-row" data-id="' + a.id + '">' +
         '<div class="cd-alw-grid">' +
-          '<input class="cd-alw-name" type="text" maxlength="120" value="' + esc(a.name) + '" aria-label="Allowance name">' +
-          '<select class="cd-alw-kind" aria-label="Cap type">' +
+          '<div>' + lbl('Name') + '<input class="cd-alw-name" type="text" maxlength="120" value="' + esc(a.name) + '" aria-label="Allowance name"></div>' +
+          '<div>' + lbl('Cap type') + '<select class="cd-alw-kind" aria-label="Cap type">' +
             '<option value="lump"' + (perSqft ? '' : ' selected') + '>₹ cap</option>' +
             '<option value="per_sqft"' + (perSqft ? ' selected' : '') + '>₹ per sq ft</option>' +
-          '</select>' +
-          '<input class="cd-alw-cap" type="text" inputmode="decimal" value="' + esc(capValue) + '" placeholder="' + (perSqft ? 'Ceiling ₹ / sq ft' : 'Cap ₹') + '" aria-label="Cap amount">' +
-          '<input class="cd-alw-area" type="text" inputmode="decimal" value="' + esc(areaValue) + '" placeholder="Area sq ft" aria-label="Area in square feet"' + (perSqft ? '' : ' hidden') + '>' +
-          '<button type="button" class="cd-btn-sm" data-act="save" data-id="' + a.id + '">Save</button>' +
-          '<button type="button" class="cd-btn-sm cd-del" data-act="del" data-id="' + a.id + '">Delete</button>' +
+          '</select></div>' +
+          '<div>' + lbl('Cap') + '<input class="cd-alw-cap" type="text" inputmode="decimal" value="' + esc(capValue) + '" placeholder="' + (perSqft ? 'Ceiling ₹ / sq ft' : 'Cap ₹') + '" aria-label="Cap amount"></div>' +
+          '<div class="cd-alw-areawrap"' + (perSqft ? '' : ' hidden') + '>' + lbl('Area') + '<input class="cd-alw-area" type="text" inputmode="decimal" value="' + esc(areaValue) + '" placeholder="Area sq ft" aria-label="Area in square feet"></div>' +
+          '<div class="cd-alw-actions">' +
+            '<button type="button" class="cd-btn-sm" data-act="save" data-id="' + a.id + '">Save</button>' +
+            '<button type="button" class="cd-btn-sm cd-del" data-act="del" data-id="' + a.id + '">Delete</button>' +
+          '</div>' +
         '</div>' +
         '<p class="cd-alw-pos ' + pos.cls + '">' + pos.html + '</p>' +
       '</div>';
     }
 
-    // One entry point for both lists: they appear and disappear together with the contract.
+    // One entry point for both sections. They appear together with the contract, but the allowance
+    // one has a second state: with no allowances recorded, the table and the add form are BOTH
+    // hidden and the section shows a prompt instead. A contract with no allowance caps is a normal
+    // contract, so an empty ten-column table on every load would be pure noise.
     function renderContractSections(c) {
-      if (!c) { servicesSection.hidden = true; return; }
-      servicesSection.hidden = false;
+      if (!c) { scopeSection.hidden = true; allowancesSection.hidden = true; return; }
+      scopeSection.hidden = false;
+      allowancesSection.hidden = false;
 
       const services = c.services || [];
       servicesList.innerHTML = services.length
@@ -827,12 +967,14 @@
         : '<p class="cd-svc-empty">No scope items listed yet.</p>';
 
       const allowances = c.allowances || [];
-      allowancesList.innerHTML = allowances.length
-        ? allowances.map(allowanceRowHtml).join('')
-        : '<p class="cd-alw-empty">No allowances. This contract works normally without them — add one below, or start from the ten in the contract.</p>';
-      // Offered only when there are none, because seeding refuses on a contract that already has
-      // some rather than merging into a list the owner has already curated.
-      alwSeedBtn.hidden = allowances.length > 0;
+      const hasAny = allowances.length > 0;
+      allowancesList.innerHTML = hasAny ? allowances.map(allowanceRowHtml).join('') : '';
+      allowancesList.hidden = !hasAny;
+      // The add form stays hidden in the empty state — "Add one myself" reveals it — so the prompt
+      // is two lines and two buttons rather than a prompt plus a form nobody asked for yet.
+      allowanceForm.hidden = !hasAny;
+      allowancesIntro.hidden = !hasAny;
+      allowancesEmpty.hidden = hasAny;
     }
 
     serviceForm.addEventListener('submit', async (ev) => {
@@ -935,7 +1077,7 @@
       const sel = ev.target.closest && ev.target.closest('.cd-alw-kind');
       if (!sel) return;
       const rowEl = sel.closest('.cd-alw-row');
-      syncAlwKind(sel, rowEl.querySelector('.cd-alw-cap'), rowEl.querySelector('.cd-alw-area'));
+      syncAlwKind(sel, rowEl.querySelector('.cd-alw-cap'), rowEl.querySelector('.cd-alw-area'), rowEl.querySelector('.cd-alw-areawrap'));
     });
 
     allowancesList.addEventListener('click', async (ev) => {
