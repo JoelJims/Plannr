@@ -31,7 +31,12 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.goto(base + '/overview', { waitUntil: 'networkidle' });
   await page.waitForTimeout(1000);
   const swatches1 = await page.$$eval('.ov-swatch', (els) => els.map((e) => getComputedStyle(e).backgroundColor));
-  check('24 pie legend swatches, all with distinct colours', swatches1.length === 24 && new Set(swatches1).size === 24, `${swatches1.length} swatches, ${new Set(swatches1).size} distinct`);
+  // Swatch COUNT and "nothing rendered blank" only. Whether the 24 colours are actually
+  // distinguishable is a perceptual question this assertion cannot answer — it once passed with
+  // two pale greens ΔE00 6.30 apart in the legend, because they were distinct STRINGS. That
+  // claim now lives in test-ui/palette-distinctness.js, which measures CIEDE2000 over all 276
+  // pairs of the rendered chart.
+  check('24 pie legend swatches, none blank', swatches1.length === 24 && swatches1.every((c) => c && c !== 'rgba(0, 0, 0, 0)'), `${swatches1.length} swatches`);
 
   // re-render: expand a ledger row, then apply an all-dates range
   await page.locator('.ov-legend-row.expandable').first().click().catch(() => {});

@@ -478,17 +478,45 @@
     // bright enough to read on the dark panel. Colour is stable per ledger (fixed index);
     // Custom / Uncategorized uses a neutral light grey that stands apart from the hues.
     const CUSTOM_CODE = 'CUSTOM';
-    // Phase 10a: 24 main ledgers now (was 23) — one more colour so every ledger still gets a
-    // distinct swatch instead of the 24th wrapping around to reuse the 1st.
+    // Phase 10a: 24 main ledgers (was 23). Phase C: every colour re-derived under a PERCEPTUAL
+    // constraint rather than eyeballed.
+    //
+    // The old set had 4 pairs closer than ΔE00 10 and a worst pair at 6.30 (#aaffc3 vs #7cf5a0 —
+    // two pale greens the legend showed one above the other). The visual suite never caught it
+    // because it asserted 24 distinct STRINGS, which two near-identical greens satisfy perfectly.
+    // Each colour here is within ΔE00 4 of the one it replaces — individually you would not notice
+    // the change — but the worst pair is now 13.82 and NOTHING is below 12. Derived by
+    // test-ui/derive-palette.js, guarded by test-ui/palette-distinctness.js.
+    //
+    // One colour moved for a different reason: the last, saddle brown, was never in a close PAIR
+    // so the separation search never touched it — but at 2.66:1 against the panel it was hard to
+    // see at all in a 12px swatch, which is its own kind of indistinct. Lightened to #964d13,
+    // 3.02:1, without disturbing anything else.
     const LEDGER_PALETTE = [
-      '#e6194b', '#42d4f4', '#ffe119', '#b23fe0', '#3cb44b', '#f58231', '#4f8cff', '#f032e6',
-      '#bfef45', '#ff69b4', '#2dd4bf', '#6a4cff', '#dcbeff', '#9acd32', '#00bfff', '#ffb347',
-      '#c56bff', '#aaffc3', '#c9a66b', '#a0e7ff', '#fabed4', '#fff29a', '#7cf5a0', '#8b4513'];
-    // Phase 11 audit: a 25th+ main ledger (the Ledger List CSV import allows additions) must never
-    // wrap back onto an earlier ledger's colour — that silently made two different categories look
-    // identical in the chart. The fixed 24 above are untouched; only ledgers past the palette get a
-    // generated colour. Golden-angle hue rotation (137.508°) spreads each extra hue maximally apart
-    // from every other extra one, however many get added.
+      '#e6194b', '#04d4eb', '#ffe119', '#b438cf', '#31b553', '#f58231', '#4f8cff', '#fe36e3',
+      '#befd56', '#fc73aa', '#2dd4bf', '#6a4cff', '#dcbeff', '#95c02e', '#46bbfa', '#feb844',
+      '#b879fc', '#beffd2', '#c1a074', '#baedfe', '#fabed4', '#f9f2a6', '#53f187', '#964d13'];
+    // Ledgers past the fixed 24 — the Ledger List CSV import allows additions.
+    //
+    // This replaced a generator, and the reason is worth keeping: the old one was
+    // `hsl(extraIndex * 137.508, 65%, 50%)`, golden-angle hue rotation. It spread the extras apart
+    // from EACH OTHER while being completely blind to the 24 fixed colours it was extending, so the
+    // very first generated colour landed ΔE00 3.99 from a fixed one — the exact "two categories look
+    // identical" bug the Phase 11 audit thought it had fixed by not reusing an index. It also
+    // assumed equal hue steps are equal perceptual steps, which they are not: two extras 32.5° apart
+    // came out ΔE00 6.49 from each other. With 24 extras it reached min ΔE00 2.83 and 48 pairs under 10.
+    //
+    // These 24 were chosen by farthest-point insertion against the fixed palette AND each other, so
+    // all 48 sit at min ΔE00 13.82 — the extension is never the limiting pair. A table rather than a
+    // runtime search because the alternative is ~70 lines of CIELAB/CIEDE2000 maths in three
+    // duplicated files to compute, on the rare boot where someone adds a 25th ledger, an answer that
+    // is identical every time.
+    const LEDGER_PALETTE_EXT = [
+      '#0a6e71', '#606902', '#6b606a', '#83938a', '#a98787', '#1f7b48', '#f2e2d8', '#296797',
+      '#a0426e', '#996d03', '#606558', '#9298b0', '#fe8a7d', '#db3505', '#4090a7', '#6a5997',
+      '#9a920e', '#bcc1a7', '#a776a4', '#019785', '#955d56', '#8c7b66', '#778e57', '#adc9f8'];
+    // Past 48 distinct main ledgers, fall back to the old golden-angle rotation. That is twice the
+    // taxonomy and not a verified region — it is a last resort, not a supported configuration.
     function extraLedgerColor(extraIndex) {
       const hue = (extraIndex * 137.508) % 360;
       return `hsl(${hue.toFixed(1)}, 65%, 50%)`;
@@ -497,7 +525,9 @@
       if (code === CUSTOM_CODE) return '#cbd5e1';
       const i = LEDGERS.findIndex((l) => l.code === code);
       const idx = i < 0 ? 0 : i;
-      return idx < LEDGER_PALETTE.length ? LEDGER_PALETTE[idx] : extraLedgerColor(idx - LEDGER_PALETTE.length);
+      if (idx < LEDGER_PALETTE.length) return LEDGER_PALETTE[idx];
+      const ext = idx - LEDGER_PALETTE.length;
+      return ext < LEDGER_PALETTE_EXT.length ? LEDGER_PALETTE_EXT[ext] : extraLedgerColor(ext - LEDGER_PALETTE_EXT.length);
     };
 
     let data = null;

@@ -1371,22 +1371,39 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  // Phase 10a: 24 main ledgers now (was 23, and this palette had only 20) — 4 more so no ledger
-  // wraps around to reuse an earlier one's colour.
-  const PDF_PALETTE = ['#f59e0b', '#fbbf24', '#b45309', '#d97706', '#fcd34d', '#92400e', '#ef8a4b',
-    '#eab308', '#a16207', '#f4a06a', '#c2703d', '#facc15', '#7c3f12', '#fdba74', '#9a6a2f', '#e0a800',
-    '#ffcf70', '#8a5a2b', '#f6b352', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#eab676'];
-  // Phase 11 audit: same fix as overview.html's colorByCode / server.js's pdfSlices — a 25th+ main
-  // ledger must never wrap back onto an earlier ledger's colour here either. The fixed 24 above are
-  // untouched.
+  // Phase C re-derived this alongside server.js's copy — see the long note there. Before: min ΔE00
+  // 2.99, and #8a5a2b was BOTH the 18th ledger's colour and the Custom slice's, so those two slices
+  // were byte-identical whenever both had spend. After: no exact duplicate, nothing under ΔE00 5,
+  // min 6.00. Still 39 pairs under 10 — a structural ceiling of holding 24 categories inside one
+  // hue family, not something more searching fixes.
+  const PDF_PALETTE = [
+    '#f59e0b', '#ffc31b', '#9a5115', '#d97706', '#e3c153', '#973913', '#ef8a4b', '#d2b001',
+    '#a56b1a', '#dda077', '#c2703d', '#e8d12f', '#7d452a', '#f6ba83', '#876322', '#d29e0f',
+    '#ffcf70', '#845f44', '#eca955', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#cea871'];
+  // Custom's slice colour, pulled out of the literal it used to be written as so it can take part in
+  // the distinctness check.
+  const PDF_CUSTOM_COLOR = '#8a5a2b';
+  // Ledgers past the fixed 24 — farthest-point derived, replacing the golden-angle generator that
+  // was blind to the palette it was extending (first generated colour landed ΔE00 3.99 from a fixed
+  // one). Not hue-constrained, as the old generator was not.
+  const PDF_PALETTE_EXT = [
+    '#f720f8', '#1dc2fc', '#144ea8', '#058f67', '#d5cdf2', '#27f164', '#8e2b69', '#7f7a92',
+    '#ff758f', '#b6d9cd', '#49554c', '#638af8', '#277f92', '#739114', '#851cf6', '#868779',
+    '#0d6007', '#d41346', '#11b4b3', '#5d4e56', '#ca8ec6', '#f9c5c5', '#9dbf7c', '#a0adb9'];
+  // Beyond 48 mains — unverified last resort.
   function extraLedgerColor(extraIndex) {
     const hue = (extraIndex * 137.508) % 360;
     return `hsl(${hue.toFixed(1)}, 65%, 50%)`;
   }
+  function pdfLedgerColor(idx) {
+    if (idx < PDF_PALETTE.length) return PDF_PALETTE[idx];
+    const ext = idx - PDF_PALETTE.length;
+    return ext < PDF_PALETTE_EXT.length ? PDF_PALETTE_EXT[ext] : extraLedgerColor(ext - PDF_PALETTE_EXT.length);
+  }
   function pdfSlices(o) {
     return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => {
       const idx = Math.max(0, LEDGERS.findIndex((x) => x.code === L.code));
-      const color = L.code === CUSTOM_CODE ? '#8a5a2b' : (idx < PDF_PALETTE.length ? PDF_PALETTE[idx] : extraLedgerColor(idx - PDF_PALETTE.length));
+      const color = L.code === CUSTOM_CODE ? PDF_CUSTOM_COLOR : pdfLedgerColor(idx);
       return { label: L.name, value: L.totalPaise, color };
     });
   }

@@ -175,6 +175,15 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   flow on the four file-producing paths in Data Backup.
 - **`npm run test:backup-crypto`** (`test-ui/backup-crypto.js`) → round-trips the encrypted backup
   format through the real export/import routes on a live temp DB.
+- **`npm run test:palette`** (`test-ui/palette-distinctness.js`) → seeds every main ledger, renders
+  the real Overview pie, reads the colours back off the SVG and the legend, and measures CIEDE2000
+  across all 276 pairs. Replaces an assertion that checked 24 distinct *strings* and therefore passed
+  while two pale greens sat ΔE00 6.30 apart in the legend. Also pins the ΔE implementation itself
+  against published reference data, and checks the PDF's separate palette + its Custom colour.
+- **`npm run test:contract-layout`** (`test-ui/contract-details-layout.js`) → Contract Details at
+  390px: the optional block collapsed but auto-opening when it holds data, every optional field
+  actually inside it and no core field swept in, the allowance table hidden when empty, per-field
+  labels appearing when the grid collapses to one column, and no horizontal overflow.
 - **`npm run test:contract-phase-a`** (`test-ui/contract-phase-a.js`) → the Contract Details page in a
   real browser: the derived-total readout appearing and disabling the typed field, the derived
   expected completion date, the scope list with no price input left on it, seeding the ten allowance
@@ -236,6 +245,16 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   catch it (§4). The trade was taken knowingly.
 - **Allowance spend is derived from tagged debits, never typed.** The alternative — a "spent so far"
   field on each allowance — would be exactly the invented number that got the service price removed.
+- **Chart colours are derived, not chosen.** Both palettes (`LEDGER_PALETTE` in `overview.html`,
+  `PDF_PALETTE` in `server.js` + `local-api.js`) are the output of `test-ui/derive-palette.js`, which
+  maximises the smallest pairwise CIEDE2000 subject to each colour staying within an identity budget
+  of the one it replaces. The screen palette is at min ΔE00 13.82 with every colour ≥ 3:1 against the
+  panel; the PDF's is at 6.00 and that is a ceiling, not an oversight — it keeps a single amber hue
+  family by design, and hue is the axis that separates categories. Past the fixed 24 a derived
+  extension table takes over from what used to be a golden-angle generator; that generator spread
+  extras apart from each other while being blind to the palette it was extending, and reached ΔE00
+  2.83. Changing a palette by hand and skipping the tool will not be caught by review, only by
+  `npm run test:palette`.
 - **Loan interest is a ledger spend, under 22.5.** Interest actually paid on a construction loan is
   recorded as an ordinary `cash_out` row, so it counts in total spend. `loans.interest_rate` is
   informational only (drives no calculation), so there is no derived figure to double-count against.
