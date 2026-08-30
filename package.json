@@ -17,6 +17,7 @@
     "test:contract-phase-a": "node test-ui/contract-phase-a.js",
     "test:palette": "node test-ui/palette-distinctness.js",
     "test:contract-layout": "node test-ui/contract-details-layout.js",
+    "test:ledger-picker": "node test-ui/ledger-picker.js",
     "sync:public-modules": "node sync-public-modules.js",
     "android:sync": "node sync-public-modules.js && npx cap sync android"
   },

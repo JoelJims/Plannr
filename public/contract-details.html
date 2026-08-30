@@ -323,7 +323,13 @@
 
         <div class="field">
           <label for="cLedgerSelect">Ledger <span class="cd-optional">(category for this contract)</span></label>
-          <select id="cLedgerSelect" name="cLedgerSelect"></select>
+          <button type="button" class="lb-trigger" id="cLedgerTrigger" aria-haspopup="dialog">
+            <span class="lb-trigger-label" id="cLedgerTriggerLabel">— select ledger —</span>
+            <span class="lb-trigger-icon" aria-hidden="true">▾</span>
+          </button>
+          <!-- Value carrier, driven by the browser above. Kept in the DOM (not replaced) so
+               every existing consumer of .value and its change event works untouched. -->
+          <select id="cLedgerSelect" name="cLedgerSelect" class="lb-native" tabindex="-1" aria-hidden="true"></select>
         </div>
         <div class="field" id="cLedgerCustomWrap" hidden>
           <label for="cLedgerCustom">Custom ledger name</label>
@@ -615,6 +621,12 @@
       ledgerSelect: $('cLedgerSelect'), ledgerCustomWrap: $('cLedgerCustomWrap'), ledgerCustom: $('cLedgerCustom'),
       subSelect: $('cSubSelect'), subCustomWrap: $('cSubCustomWrap'), subCustom: $('cSubCustom'),
     });
+    // Phase C — the searchable, grouped ledger picker in front of the (now hidden) select.
+    window.PlannrUI.createLedgerBrowser({
+      ledgerSelect: $('cLedgerSelect'), subSelect: $('cSubSelect'),
+      trigger: $('cLedgerTrigger'), label: $('cLedgerTriggerLabel'),
+    });
+
     const dateSignedPicker = createDatePicker({ day: $('dsDay'), month: $('dsMonth'), year: $('dsYear') });
     const dateEndsPicker = createDatePicker({ day: $('deDay'), month: $('deMonth'), year: $('deYear') });
 

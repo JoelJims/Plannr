@@ -889,5 +889,251 @@
     return { getFilters, setCount, setEnabled, clearAll };
   }
 
-  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
+  // ===========================================================================================
+  // Ledger browser — a searchable, grouped picker for the main ledger.
+  //
+  // The native <select> is fine for a dozen options. The taxonomy is 24 mains and ~160 sub-ledgers,
+  // and on a phone that is an unscrollable wall with no way to find "granite" except by knowing it
+  // lives under Finishes. This puts a search box over the whole taxonomy and collapses the mains
+  // into seven sections.
+  //
+  // It does NOT replace the <select> elements — it drives them. The select stays in the DOM as the
+  // value carrier, visually hidden, and every selection here writes to it and dispatches `change`,
+  // so createCashOutForm/createLedgerPicker's existing buildSubs/syncCustom/readBody logic runs
+  // exactly as before and none of it had to learn about this component.
+  // ===========================================================================================
+
+  // ---- THE grouping constant. Remapping the picker is editing this and nothing else. ----------
+  // `from`/`to` are inclusive main-ledger numbers (the integer part of the N.0 code). Any main that
+  // falls outside every range lands in a trailing "Other" group rather than vanishing — a taxonomy
+  // edited through the Ledger List CSV can add a 25th main, and a picker that silently hid it would
+  // be worse than an ugly one.
+  //
+  // Ranges follow the CURRENT taxonomy's own names (1.0 LAND & LEGAL … 24.0 CONTINGENCY &
+  // UNPLANNED). For the v2 list, whose numbering runs Materials first, the mapping is the commented
+  // block below — swap the two and nothing else changes.
+  const LEDGER_GROUPS = [
+    { name: 'Pre-construction', from: 1, to: 5 },   // land, design, approvals, site prep, temp setup
+    { name: 'Materials', from: 6, to: 11 },
+    { name: 'Labour', from: 12, to: 14 },
+    { name: 'Fit-out', from: 15, to: 17 },          // kitchen, interiors, appliances
+    { name: 'Site & external', from: 18, to: 21 },
+    { name: 'Money', from: 22, to: 22 },
+    { name: 'Closing', from: 23, to: 24 },
+  ];
+  // const LEDGER_GROUPS = [                        // v2 taxonomy
+  //   { name: 'Materials', from: 1, to: 7 },
+  //   { name: 'Labour', from: 8, to: 11 },
+  //   { name: 'Pre-construction', from: 12, to: 15 },
+  //   { name: 'Contract boundaries', from: 16, to: 17 },
+  //   { name: 'Post-contract', from: 18, to: 21 },
+  //   { name: 'Money', from: 22, to: 22 },
+  //   { name: 'Closing', from: 23, to: 24 },
+  // ];
+
+  const SEARCH_RESULT_CAP = 60; // a phone cannot use 200 results; narrow the query instead
+
+  function groupLedgers(ledgers) {
+    const out = LEDGER_GROUPS.map((g) => ({ name: g.name, ledgers: [] }));
+    const other = { name: 'Other', ledgers: [] };
+    for (const l of ledgers) {
+      const n = parseInt(l.code, 10);
+      const gi = LEDGER_GROUPS.findIndex((g) => n >= g.from && n <= g.to);
+      (gi < 0 ? other : out[gi]).ledgers.push(l);
+    }
+    if (other.ledgers.length) out.push(other);
+    return out.filter((g) => g.ledgers.length);
+  }
+
+  // What the trigger button reads. Mirrors the server's ledgerLabel so the closed picker and the
+  // saved row say the same thing.
+  function ledgerTriggerLabel(ledgerSelect, subSelect) {
+    const code = ledgerSelect.value;
+    if (!code) return '— select ledger —';
+    if (code === CUSTOM_CODE) return 'Custom…';
+    const L = (root.LEDGERS || []).find((x) => x.code === code);
+    if (!L) return code;
+    const sub = subSelect && subSelect.value;
+    if (sub && sub !== CUSTOM_CODE) {
+      const S = (L.subLedgers || []).find((x) => x.code === sub);
+      if (S) return `${S.code} ${S.name}`;
+    }
+    if (sub === CUSTOM_CODE) return `${L.code} ${L.name} · Custom sub`;
+    return `${L.code} ${L.name}`;
+  }
+
+  let _lbWrap = null;
+  function ledgerBrowserPanel() {
+    if (_lbWrap) return _lbWrap;
+    const wrap = document.createElement('div');
+    wrap.className = 'lb-backdrop';
+    wrap.hidden = true;
+    wrap.innerHTML =
+      '<div class="lb-panel" role="dialog" aria-modal="true" aria-label="Choose a ledger">' +
+        '<div class="lb-head">' +
+          '<input type="search" class="lb-search" placeholder="Search ledgers and sub-ledgers" aria-label="Search ledgers and sub-ledgers" autocomplete="off">' +
+          '<button type="button" class="lb-close" data-act="close" aria-label="Close">✕</button>' +
+        '</div>' +
+        '<div class="lb-body" tabindex="-1"></div>' +
+      '</div>';
+    document.body.appendChild(wrap);
+    _lbWrap = wrap;
+    return wrap;
+  }
+
+  // els: { ledgerSelect, subSelect, trigger, label }
+  function createLedgerBrowser(els) {
+    const { ledgerSelect, subSelect, trigger, label } = els;
+
+    function syncLabel() { label.textContent = ledgerTriggerLabel(ledgerSelect, subSelect); }
+    ledgerSelect.addEventListener('change', syncLabel);
+    if (subSelect) subSelect.addEventListener('change', syncLabel);
+    syncLabel();
+
+    // Choosing a ledger writes through the select and fires `change`, which is what makes every
+    // existing consumer (sub-ledger rebuild, Custom… reveal, readBody) keep working untouched.
+    function choose(code, subCode) {
+      ledgerSelect.value = code;
+      ledgerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      if (subSelect) {
+        subSelect.value = subCode || '';
+        subSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      syncLabel();
+    }
+
+    function rowHtml(code, name, sub) {
+      const cls = sub ? 'lb-row lb-row-sub' : 'lb-row lb-row-main';
+      const attrs = sub ? `data-act="sub" data-code="${code}" data-sub="${sub}"` : `data-act="main" data-code="${code}"`;
+      const shown = sub || code;
+      return `<button type="button" class="${cls}" ${attrs}><span class="lb-code">${escapeHtml(shown)}</span><span class="lb-name">${escapeHtml(name)}</span></button>`;
+    }
+
+    function renderBrowse(body, openGroups, openMains) {
+      const groups = groupLedgers(root.LEDGERS || []);
+      body.innerHTML = groups.map((g, gi) => {
+        const gOpen = openGroups.has(gi);
+        const mains = g.ledgers.map((l) => {
+          const mOpen = openMains.has(l.code);
+          const subs = (l.subLedgers || []).map((sb) => rowHtml(l.code, sb.name, sb.code)).join('');
+          return '<div class="lb-main">' +
+            '<div class="lb-mainline">' +
+              rowHtml(l.code, l.name) +
+              `<button type="button" class="lb-expand" data-act="expand" data-code="${l.code}" aria-expanded="${mOpen}" aria-label="Sub-ledgers of ${escapeHtml(l.name)}"><span class="lb-caret">▸</span></button>` +
+            '</div>' +
+            `<div class="lb-subs"${mOpen ? '' : ' hidden'}>${subs}</div>` +
+          '</div>';
+        }).join('');
+        return '<div class="lb-group">' +
+          `<button type="button" class="lb-grouphead" data-act="group" data-i="${gi}" aria-expanded="${gOpen}">` +
+            '<span class="lb-caret">▸</span>' +
+            `<span class="lb-groupname">${escapeHtml(g.name)}</span>` +
+            `<span class="lb-groupcount">${g.ledgers.length}</span>` +
+          '</button>' +
+          `<div class="lb-groupbody"${gOpen ? '' : ' hidden'}>${mains}</div>` +
+        '</div>';
+      }).join('') + `<button type="button" class="lb-row lb-row-custom" data-act="main" data-code="${CUSTOM_CODE}"><span class="lb-name">Custom…</span></button>`;
+    }
+
+    // Search flattens the tree: no point collapsing sections around three matches. Matches on the
+    // sub-ledger name, the main's name, or either code, and a sub result shows the main it sits
+    // under so "Misc" is never ambiguous across 24 identically-named entries.
+    function renderSearch(body, q) {
+      const needle = q.toLowerCase();
+      const hits = [];
+      for (const l of (root.LEDGERS || [])) {
+        const mainHit = l.name.toLowerCase().includes(needle) || l.code.startsWith(needle);
+        if (mainHit) hits.push({ code: l.code, name: l.name, sub: null, parent: null });
+        for (const sb of (l.subLedgers || [])) {
+          if (sb.name.toLowerCase().includes(needle) || sb.code.startsWith(needle)) {
+            hits.push({ code: l.code, name: sb.name, sub: sb.code, parent: l.name });
+          }
+        }
+      }
+      if (!hits.length) {
+        body.innerHTML = '<p class="lb-empty">Nothing matches that. Try a shorter word, or a code like 6.1.</p>';
+        return;
+      }
+      const shown = hits.slice(0, SEARCH_RESULT_CAP);
+      body.innerHTML = shown.map((h) => {
+        const cls = h.sub ? 'lb-row lb-row-sub lb-row-flat' : 'lb-row lb-row-main lb-row-flat';
+        const attrs = h.sub ? `data-act="sub" data-code="${h.code}" data-sub="${h.sub}"` : `data-act="main" data-code="${h.code}"`;
+        const parent = h.parent ? `<span class="lb-parent">${escapeHtml(h.parent)}</span>` : '';
+        return `<button type="button" class="${cls}" ${attrs}><span class="lb-code">${escapeHtml(h.sub || h.code)}</span><span class="lb-name">${escapeHtml(h.name)}</span>${parent}</button>`;
+      }).join('')
+        + (hits.length > shown.length ? `<p class="lb-empty">${hits.length - shown.length} more match — narrow the search.</p>` : '');
+    }
+
+    function open() {
+      const wrap = ledgerBrowserPanel();
+      const search = wrap.querySelector('.lb-search');
+      const body = wrap.querySelector('.lb-body');
+      const openGroups = new Set();
+      const openMains = new Set();
+
+      // Open the section (and the main) the current value sits in, so the picker starts where the
+      // user already is rather than fully collapsed.
+      const cur = ledgerSelect.value;
+      if (cur && cur !== CUSTOM_CODE) {
+        const groups = groupLedgers(root.LEDGERS || []);
+        const gi = groups.findIndex((g) => g.ledgers.some((l) => l.code === cur));
+        if (gi >= 0) openGroups.add(gi);
+        if (subSelect && subSelect.value && subSelect.value !== CUSTOM_CODE) openMains.add(cur);
+      }
+
+      search.value = '';
+      renderBrowse(body, openGroups, openMains);
+      wrap.hidden = false;
+      search.focus();
+
+      const rerender = () => {
+        const q = search.value.trim();
+        if (q) renderSearch(body, q); else renderBrowse(body, openGroups, openMains);
+      };
+
+      const finish = () => {
+        wrap.hidden = true;
+        search.removeEventListener('input', rerender);
+        body.removeEventListener('click', onClick);
+        wrap.removeEventListener('mousedown', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        wrap.querySelector('.lb-close').removeEventListener('click', finish);
+        trigger.focus();
+      };
+
+      function onClick(e) {
+        const btn = e.target.closest && e.target.closest('button[data-act]');
+        if (!btn) return;
+        const act = btn.getAttribute('data-act');
+        if (act === 'group') {
+          const i = Number(btn.getAttribute('data-i'));
+          if (openGroups.has(i)) openGroups.delete(i); else openGroups.add(i);
+          rerender();
+        } else if (act === 'expand') {
+          const code = btn.getAttribute('data-code');
+          if (openMains.has(code)) openMains.delete(code); else openMains.add(code);
+          rerender();
+        } else if (act === 'main') {
+          choose(btn.getAttribute('data-code'), '');
+          finish();
+        } else if (act === 'sub') {
+          choose(btn.getAttribute('data-code'), btn.getAttribute('data-sub'));
+          finish();
+        }
+      }
+      const onBackdrop = (e) => { if (e.target === wrap) finish(); };
+      const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(); } };
+
+      search.addEventListener('input', rerender);
+      body.addEventListener('click', onClick);
+      wrap.addEventListener('mousedown', onBackdrop);
+      document.addEventListener('keydown', onKey);
+      wrap.querySelector('.lb-close').addEventListener('click', finish);
+    }
+
+    trigger.addEventListener('click', open);
+    return { open, syncLabel };
+  }
+
+  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createLedgerBrowser, LEDGER_GROUPS, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
 })(window);

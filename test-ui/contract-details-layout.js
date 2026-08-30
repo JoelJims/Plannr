@@ -11,6 +11,19 @@
 const H = require('../test/helpers');
 const { chromium } = require('playwright');
 
+// The main ledger is chosen through the searchable browser now, not a <select>. Search for the code,
+// then click the result — which is what a user does, and what a selectOption() call stopped testing
+// the moment the picker changed.
+async function pickLedger(page, triggerSel, code) {
+  await page.click(triggerSel);
+  await page.waitForSelector('.lb-backdrop:not([hidden]) .lb-search', { timeout: 5000 });
+  await page.fill('.lb-search', code);
+  await page.waitForTimeout(120);
+  await page.click(`.lb-row[data-act="main"][data-code="${code}"]`);
+  await page.waitForSelector('.lb-backdrop', { state: 'hidden', timeout: 5000 });
+}
+
+
 const PHONE = { width: 390, height: 844 };   // iPhone 14-ish, the narrow case that matters
 const DESK = { width: 1400, height: 1800 };
 
@@ -83,7 +96,7 @@ const OPTIONAL = ['#hasSignedDate', '#hasEndDate', '#cMonths', '#cSupervision', 
   // Save, reload, and confirm the block opens itself rather than hiding data behind a summary.
   await page.fill('#cContractor', 'Ramesh & Co');
   await page.fill('#cArea', 'Structural');
-  await page.selectOption('#cLedgerSelect', '5.0');
+  await pickLedger(page, '#cLedgerTrigger', '5.0');
   await page.fill('#cRate', '2150');
   await page.click('#contractSaveBtn');
   await page.waitForTimeout(700);

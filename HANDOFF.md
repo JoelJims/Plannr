@@ -180,6 +180,11 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   across all 276 pairs. Replaces an assertion that checked 24 distinct *strings* and therefore passed
   while two pale greens sat ΔE00 6.30 apart in the legend. Also pins the ΔE implementation itself
   against published reference data, and checks the PDF's separate palette + its Custom colour.
+- **`npm run test:ledger-picker`** (`test-ui/ledger-picker.js`) → the searchable, grouped ledger
+  browser: seven sections with every main in exactly one of them, search matching both mains and
+  sub-ledgers, and — the checks that matter — that picking through the panel leaves the native
+  `<select>` holding the right value and fires the `change` the sub-ledger rebuild and the Custom…
+  reveal depend on. Plus the phone-width behaviour (full-bleed panel, 48px rows, no overflow).
 - **`npm run test:contract-layout`** (`test-ui/contract-details-layout.js`) → Contract Details at
   390px: the optional block collapsed but auto-opening when it holds data, every optional field
   actually inside it and no core field swept in, the allowance table hidden when empty, per-field
@@ -245,6 +250,16 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   catch it (§4). The trade was taken knowingly.
 - **Allowance spend is derived from tagged debits, never typed.** The alternative — a "spent so far"
   field on each allowance — would be exactly the invented number that got the service price removed.
+- **The ledger picker is a facade over the `<select>`, not a replacement.** `createLedgerBrowser`
+  (`plannr-ui.js`) renders the visible control; the native `<select>` stays in the DOM, hidden
+  (`.lb-native`), and remains the value carrier. Every selection writes to it and dispatches
+  `change`, which is the only reason `createCashOutForm`/`createLedgerPicker` needed no changes —
+  their `buildSubs`, `syncCustom` and `readBody` all still hang off that one event. Do not "tidy
+  this up" by deleting the select.
+- **The picker's grouping is ONE constant.** `LEDGER_GROUPS` in `plannr-ui.js`, inclusive `from`/`to`
+  main-ledger numbers. A main outside every range falls into a trailing "Other" group rather than
+  disappearing, because the Ledger List CSV can add a 25th. Remapping for a new taxonomy is editing
+  that array and nothing else; the v2 mapping sits beside it, commented out.
 - **Chart colours are derived, not chosen.** Both palettes (`LEDGER_PALETTE` in `overview.html`,
   `PDF_PALETTE` in `server.js` + `local-api.js`) are the output of `test-ui/derive-palette.js`, which
   maximises the smallest pairwise CIEDE2000 subject to each colour staying within an identity budget
