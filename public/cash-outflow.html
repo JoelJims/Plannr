@@ -218,7 +218,13 @@
         <!-- 2. Ledger (required) -->
         <div class="field">
           <label for="ledgerSelect">Ledger <span class="co-carry" id="ledgerCarry" hidden>↻ carried over — change if needed</span></label>
-          <select id="ledgerSelect" name="ledgerSelect"></select>
+          <button type="button" class="lb-trigger" id="ledgerTrigger" aria-haspopup="dialog">
+            <span class="lb-trigger-label" id="ledgerTriggerLabel">— select ledger —</span>
+            <span class="lb-trigger-icon" aria-hidden="true">▾</span>
+          </button>
+          <!-- Value carrier, driven by the browser above. Kept in the DOM (not replaced) so
+               every existing consumer of .value and its change event works untouched. -->
+          <select id="ledgerSelect" name="ledgerSelect" class="lb-native" tabindex="-1" aria-hidden="true"></select>
         </div>
 
         <div class="field" id="ledgerCustomWrap" hidden>
@@ -368,6 +374,12 @@
       serviceSelect: $('serviceSelect'), serviceWrap: $('serviceWrap'), ledgerCustomList: $('ledgerCustomList'),
       allowanceSelect: $('allowanceSelect'), allowanceWrap: $('allowanceWrap'),
     });
+    // Phase C — the searchable, grouped ledger picker in front of the (now hidden) select.
+    window.PlannrUI.createLedgerBrowser({
+      ledgerSelect: $('ledgerSelect'), subSelect: $('subSelect'),
+      trigger: $('ledgerTrigger'), label: $('ledgerTriggerLabel'),
+    });
+
 
     // The SAME bulk-editable table used on the Overview page — ONE implementation.
     // Editing existing rows happens here; the form above only ADDS new entries.

@@ -10,6 +10,19 @@
 const H = require('../test/helpers');
 const { chromium } = require('playwright');
 
+// The main ledger is chosen through the searchable browser now, not a <select>. Search for the code,
+// then click the result — which is what a user does, and what a selectOption() call stopped testing
+// the moment the picker changed.
+async function pickLedger(page, triggerSel, code) {
+  await page.click(triggerSel);
+  await page.waitForSelector('.lb-backdrop:not([hidden]) .lb-search', { timeout: 5000 });
+  await page.fill('.lb-search', code);
+  await page.waitForTimeout(120);
+  await page.click(`.lb-row[data-act="main"][data-code="${code}"]`);
+  await page.waitForSelector('.lb-backdrop', { state: 'hidden', timeout: 5000 });
+}
+
+
 let failures = 0;
 const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
 
@@ -30,7 +43,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.goto(base + '/contract-details', { waitUntil: 'networkidle' });
   await page.fill('#cContractor', 'ACME Builders');
   await page.fill('#cArea', 'Structural & RCC');
-  await page.selectOption('#cLedgerSelect', '5.0');
+  await pickLedger(page, '#cLedgerTrigger', '5.0');
 
   // the derived readout stays quiet until BOTH halves are present
   await page.fill('#cRate', '2150');
@@ -125,7 +138,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('all ten allowances are offered (a cap is not used up by being picked)', alwOptions === 10, String(alwOptions));
 
   await page.fill('#amount', '60000'); // deliberately OVER the ₹50,000 cap, to exercise the overrun wording
-  await page.selectOption('#ledgerSelect', '5.0');
+  await pickLedger(page, '#ledgerTrigger', '5.0');
   const doorValue = await page.$eval('#allowanceSelect', (sel) => {
     const opt = [...sel.options].find((o) => o.text.startsWith('Main entry steel door'));
     return opt ? opt.value : '';

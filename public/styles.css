@@ -685,3 +685,99 @@ input:-webkit-autofill {
 .ov-up-date { font-family: var(--font-head); font-weight: 600; font-size: 14px; letter-spacing: 0.02em; color: var(--text); }
 .ov-up-when { font-size: 12.5px; color: var(--text-dim); }
 .ov-up-overdue .ov-up-when { color: #ffb020; font-weight: 600; }
+
+/* ── Ledger browser (Phase C) ───────────────────────────────────────────────────────────────────
+   A searchable, grouped picker standing in front of the main-ledger <select>. The select is still
+   there and still holds the value — see createLedgerBrowser in plannr-ui.js — it is just no longer
+   the thing you look at, because 24 mains and ~160 subs in a native dropdown is not a picker on a
+   phone, it is a scroll.
+   Follows the .pl-confirm-backdrop idiom above: fixed backdrop, [hidden] toggled, z-index in the
+   same 200 band. */
+/* display:none rather than the usual clip-path visually-hidden recipe: each page styles
+   `.cd-form select { width: 100% }` from its own inline <style>, which outranks a bare utility
+   class on both specificity and source order, so the "hidden" select kept its full width and
+   pushed 6px of horizontal scroll onto a 390px screen. Nothing reads this element except JS
+   (.value and a dispatched change event, both of which work while display:none), and the
+   trigger button in front of it is the accessible control, so there is nothing to preserve
+   for a screen reader here — it carries aria-hidden and tabindex=-1 for that reason. */
+.lb-native { display: none; }
+
+.lb-trigger {
+  width: 100%; min-height: 52px; display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-body); font-size: 16px; text-align: left;
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong);
+  border-radius: 0; padding: 12px 13px; cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.lb-trigger:hover { background: #15161a; }
+.lb-trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+.lb-trigger:active { transform: translateY(1px); }
+.lb-trigger-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-trigger-icon { flex: none; color: var(--accent); font-size: 13px; }
+
+.lb-backdrop { position: fixed; inset: 0; z-index: 210; display: grid; place-items: center; padding: 24px 16px; background: rgba(0,0,0,0.66); }
+.lb-backdrop[hidden] { display: none; }
+.lb-panel {
+  width: 100%; max-width: 620px; max-height: min(78dvh, 720px);
+  display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line-strong);
+}
+.lb-head { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); flex: none; }
+.lb-search {
+  flex: 1 1 auto; min-height: 46px; font-family: var(--font-body); font-size: 16px;
+  padding: 10px 13px; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line-strong); border-radius: 0; outline: none;
+}
+.lb-search:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.lb-close { flex: none; width: 46px; background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--text-dim); font-size: 15px; cursor: pointer; }
+.lb-close:hover { color: var(--accent); border-color: var(--accent-line); }
+.lb-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.lb-body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 0 10px; }
+.lb-empty { color: var(--text-dim); font-size: 13px; padding: 14px 16px; margin: 0; }
+
+.lb-grouphead {
+  width: 100%; display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 14px 16px; background: none; border: none; border-top: 1px solid var(--line);
+  font-family: var(--font-head); font-weight: 600; font-size: 12px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-dim); text-align: left;
+}
+.lb-group:first-child .lb-grouphead { border-top: none; }
+.lb-grouphead:hover { color: var(--accent); background: var(--accent-soft); }
+.lb-grouphead:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lb-groupname { flex: 1 1 auto; }
+.lb-groupcount { font-family: var(--font-body); font-size: 11px; letter-spacing: 0; color: var(--text-faint); }
+.lb-caret { flex: none; color: var(--accent); font-size: 11px; transition: transform 0.18s ease; display: inline-block; }
+.lb-grouphead[aria-expanded="true"] .lb-caret, .lb-expand[aria-expanded="true"] .lb-caret { transform: rotate(90deg); }
+
+.lb-mainline { display: flex; align-items: stretch; }
+.lb-row {
+  flex: 1 1 auto; display: flex; align-items: baseline; gap: 10px; width: 100%;
+  padding: 12px 16px; background: none; border: none; cursor: pointer; text-align: left;
+  font-family: var(--font-body); font-size: 15px; color: var(--text);
+}
+.lb-row:hover { background: var(--accent-soft); color: var(--accent); }
+.lb-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lb-row-main { font-weight: 600; }
+.lb-row-sub { padding-left: 34px; font-size: 14.5px; color: var(--text-dim); }
+.lb-row-sub:hover { color: var(--accent); }
+.lb-row-flat { padding-left: 16px; }
+.lb-row-custom { border-top: 1px solid var(--line); margin-top: 4px; color: var(--accent); font-weight: 600; }
+.lb-code { flex: none; font-family: var(--font-head); font-size: 12px; letter-spacing: 0.04em; color: var(--text-faint); min-width: 42px; font-variant-numeric: tabular-nums; }
+.lb-row:hover .lb-code { color: var(--accent); }
+.lb-name { flex: 1 1 auto; }
+.lb-parent { flex: none; font-size: 11.5px; color: var(--text-faint); }
+
+.lb-expand { flex: none; width: 52px; background: none; border: none; border-left: 1px solid var(--line); cursor: pointer; color: var(--accent); }
+.lb-expand:hover { background: var(--accent-soft); }
+.lb-expand:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Phone: the panel takes the whole screen. A centred card with margins wastes the only axis that
+   matters when the list is long, and a 78dvh sheet leaves the search box under the thumb. */
+@media (max-width: 620px) {
+  .lb-backdrop { padding: 0; place-items: stretch; }
+  .lb-panel { max-width: none; max-height: none; height: 100dvh; border: none; }
+  .lb-row, .lb-grouphead { padding-top: 14px; padding-bottom: 14px; }
+  .lb-row-sub { padding-left: 30px; }
+  .lb-parent { display: none; }   /* the sub name plus its code is enough at this width */
+}

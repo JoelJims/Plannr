@@ -38,7 +38,7 @@ const { chromium } = require('playwright');
   const tap = () => { taps++; };
   for (let i = 0; i < 5; i++) {
     const wantRows = i + 1;
-    if (i === 0) { await page.selectOption('#ledgerSelect', '1.0'); tap(); } // ledger: entry 1 only (carried after)
+    if (i === 0) { await page.click('#ledgerTrigger'); tap(); await page.fill('.lb-search', '1.0'); await page.click('.lb-row[data-act="main"][data-code="1.0"]'); tap(); } // ledger: entry 1 only (carried after)
     await page.click('#amount'); tap(); await page.fill('#amount', String(1000 + i)); // amount: focus = 1 tap, typing not counted
     await page.selectOption('#scopeSelect', 'extra'); tap();                 // "Was this item in the contract? -> No"
     await page.click('#saveBtn'); tap();                                     // submit
