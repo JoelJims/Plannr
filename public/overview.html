@@ -628,6 +628,11 @@
       const issues = [];
       if (rc.orphanedContractorPayments && rc.orphanedContractorPayments.count) issues.push(rc.orphanedContractorPayments.count + ' contractor payment(s) attributed to a contract that no longer exists');
       if (rc.overOffset && rc.overOffset.over) issues.push('contractor payments exceed the contract value by ' + fmtPaise(rc.overOffset.excessPaise) + ' (over-offset)');
+      // Contract Phase A — a rate-priced contract stores rate x measured area in the same column a
+      // typed price uses. If the stored figure stops matching the two it is derived from (a restored
+      // backup writes columns verbatim), say so and name the repair. The figure above is the STORED
+      // one, unadjusted.
+      if (rc.contractPriceDerivation && rc.contractPriceDerivation.drifted) issues.push(rc.contractPriceDerivation.contracts.length + ' rate-priced contract(s) have a stored total that no longer equals rate x measured area — re-save on Contract Details to recompute');
       el.textContent = '⚠ Reconciliation: ' + (issues.join('; ') || 'figures do not reconcile') + '. Figures are shown as-is, not adjusted.';
       el.hidden = false;
     }

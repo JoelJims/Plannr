@@ -27,6 +27,8 @@
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
 import { db, isStorageFullError } from './db.js';
+// Contract Phase A: the ten standard allowance caps, offered on explicit opt-in (seed data only).
+import { DEFAULT_ALLOWANCES } from './allowances.js';
 import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
@@ -413,7 +415,7 @@ export function installFetchShim(repo) {
   const CASH_OUT_SELECT =
     `SELECT c.id, c.amount_paise, c.tx_date, c.by_type, c.by_user_id, c.by_label, c.ledger_code,
             c.subledger_code, c.ledger_custom_name, c.subledger_custom_name, c.reason,
-            c.contract_scope, c.contract_stated_paise, c.contract_service_id, c.created_at,
+            c.contract_scope, c.contract_stated_paise, c.contract_service_id, c.contract_allowance_id, c.created_at,
             u.display_name AS user_display_name
        FROM cash_out c
        LEFT JOIN users u ON u.id = c.by_user_id`;
@@ -436,6 +438,7 @@ export function installFetchShim(repo) {
       contractScope: r.contract_scope,
       contractStatedPaise: r.contract_stated_paise, // LEGACY (Phase 5E offset). No longer written or used in any maths.
       contractServiceId: r.contract_service_id,
+      contractAllowanceId: r.contract_allowance_id, // Contract Phase A: the allowance this spend draws against, or null
       createdAt: r.created_at,
     };
   }
@@ -446,21 +449,34 @@ export function installFetchShim(repo) {
     }
   };
 
-  function cashOutServiceFinalize(values, { existing }) {
-    // With the reimbursement offset removed the link is pure PROVENANCE - which contract service
-    // this spend was for. 'extra' still forces NULL so a stale link can't linger.
-    if (values.contract_scope !== 'included') { values.contract_service_id = null; return; }
+  // The two contract links a debit can carry, resolved and guarded before the write. They are
+  // deliberately asymmetric: a SERVICE may be claimed by at most one live debit (provenance;
+  // idx_cash_out_service_live is the DB backstop), while an ALLOWANCE is a cap that MANY debits draw
+  // against - uniqueness there would break the feature. Neither moves any figure. Contract Phase A
+  // also dropped the "only a PRICED service is linkable" rule, along with the column it read.
+  function cashOutContractLinksFinalize(values, { existing }) {
+    if (values.contract_scope !== 'included') {
+      values.contract_service_id = null;
+      values.contract_allowance_id = null;
+      return;
+    }
     let sid = values.contract_service_id;
     if (sid === undefined) sid = existing ? existing.contract_service_id : null;
-    if (sid == null) { values.contract_service_id = null; return; }
-    const svc = repo.contract.serviceLivePriced(sid);
-    if (!svc) return { status: 400, error: 'That contract service was not found — pick a listed service, or type the amount directly.' };
-    if (svc.price_paise == null) return { status: 400, error: 'That service has no price set, so it cannot be linked — add a price to it, or type the amount directly.' };
-    const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
-    if (other) {
-      return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
+    if (sid == null) values.contract_service_id = null;
+    else {
+      if (!repo.contract.serviceLinkable(sid)) return { status: 400, error: 'That contract service was not found — pick a listed service, or leave it blank.' };
+      const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
+      if (other) {
+        return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
+      }
+      values.contract_service_id = sid;
     }
-    values.contract_service_id = sid;
+
+    let aid = values.contract_allowance_id;
+    if (aid === undefined) aid = existing ? existing.contract_allowance_id : null;
+    if (aid == null) { values.contract_allowance_id = null; return; }
+    if (!repo.contract.allowanceLinkable(aid)) return { status: 400, error: 'That allowance was not found — pick a listed allowance, or leave it blank.' };
+    values.contract_allowance_id = aid;
   }
 
   makeLedgerCrud({
@@ -468,7 +484,7 @@ export function installFetchShim(repo) {
     alias: 'c',
     batch: true,
     auditField: 'by_user_id',
-    finalize: cashOutServiceFinalize,
+    finalize: cashOutContractLinksFinalize,
     afterWrite: (values) => saveLedgerCustom(values),
     table: 'cash_out',
     select: CASH_OUT_SELECT,
@@ -478,7 +494,7 @@ export function installFetchShim(repo) {
     shape: cashOutRow,
     // contract_stated_paise is deliberately ABSENT: new rows get NULL, and an edit of a legacy row
     // leaves its stored value untouched (the column is never in the UPDATE ... SET list).
-    columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id'],
+    columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id', 'contract_allowance_id'],
     validate: (req, existingByUserId) => {
       const amountPaise = parsePaise(req.body.amountRupees);
       if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
@@ -507,6 +523,13 @@ export function installFetchShim(repo) {
         else { const n = Number(raw); if (!Number.isInteger(n) || n <= 0) return { error: 'Invalid service selection.' }; contractServiceId = n; }
       }
 
+      let contractAllowanceId;
+      if ('contractAllowanceId' in req.body) {
+        const raw = req.body.contractAllowanceId;
+        if (raw == null || raw === '') contractAllowanceId = null;
+        else { const n = Number(raw); if (!Number.isInteger(n) || n <= 0) return { error: 'Invalid allowance selection.' }; contractAllowanceId = n; }
+      }
+
       return {
         values: {
           amount_paise: amountPaise,
@@ -521,6 +544,7 @@ export function installFetchShim(repo) {
           reason: str(req.body.reason).slice(0, REASON_MAX),
           contract_scope: contractScope,
           contract_service_id: contractServiceId,
+          contract_allowance_id: contractAllowanceId,
         },
       };
     },
@@ -576,11 +600,101 @@ export function installFetchShim(repo) {
   }
 
   const AREA_MAX = 200;
-  const serviceRow = (s) => ({ id: s.id, name: s.name, pricePaise: s.price_paise });
 
+  // ---- Contract Phase A: fixed unit-rate lump sum pricing, metadata, allowance caps -------------
+  // Areas are INTEGER thousandths of a square foot for the same reason money is integer paise:
+  // rate x area has to be exact integer arithmetic.
+  const MILLI_PER_SQFT = 1000;
+  function parseAreaOptional(v) {
+    const t = str(v).replace(/,/g, '');
+    if (t === '') return { milli: null };
+    if (!/^\d+(\.\d{1,3})?$/.test(t)) return { error: 'Enter a valid area in square feet (up to 3 decimals), or leave it blank.' };
+    const [ip, dp = ''] = t.split('.');
+    const milli = Number(ip) * MILLI_PER_SQFT + Number((dp + '000').slice(0, 3));
+    if (!Number.isSafeInteger(milli) || milli <= 0) return { error: 'Enter an area greater than 0 square feet.' };
+    return { milli };
+  }
+
+  // Returns null unless BOTH halves are present: one half of a rate price is not a price.
+  function unitPricePaise(ratePaise, areaMilli) {
+    if (ratePaise == null || areaMilli == null) return null;
+    const product = ratePaise * areaMilli;
+    if (!Number.isSafeInteger(product)) return null;
+    return Math.round(product / MILLI_PER_SQFT);
+  }
+
+  function parseWholeOptional(v, min, max, message) {
+    const t = str(v).replace(/,/g, '');
+    if (t === '') return { value: null };
+    if (!/^\d+$/.test(t)) return { error: message };
+    const n = Number(t);
+    if (!Number.isSafeInteger(n) || n < min || n > max) return { error: message };
+    return { value: n };
+  }
+
+  // A RATE, not money - and informational only, exactly like loans.interest_rate: nothing
+  // multiplies by it, so no rounding rule is needed and none is implied.
+  function parsePercentOptional(v) {
+    const t = str(v).replace(/,/g, '');
+    if (t === '') return { value: null };
+    if (!/^\d+(\.\d{1,2})?$/.test(t)) return { error: 'Enter a supervision rate between 0 and 100 percent (up to 2 decimals), or leave it blank.' };
+    const n = Number(t);
+    if (!Number.isFinite(n) || n < 0 || n > 100) return { error: 'Enter a supervision rate between 0 and 100 percent (up to 2 decimals), or leave it blank.' };
+    return { value: n };
+  }
+
+  // date_signed + N whole months, clamped to the end of the target month. Pure string maths on the
+  // ISO date, so no timezone can shift it. '' when either half is missing.
+  function addMonthsIso(iso, months) {
+    if (!iso || months == null) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const total = y * 12 + (mo - 1) + months;
+    const ny = Math.floor(total / 12), nm = (total % 12) + 1;
+    const lastDay = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+    const nd = Math.min(d, lastDay);
+    const pad = (n, w) => String(n).padStart(w, '0');
+    return `${pad(ny, 4)}-${pad(nm, 2)}-${pad(nd, 2)}`;
+  }
+
+  const NOTE_MAX = 2000;
+  const ALLOWANCE_NAME_MAX = 120;
+  const ALLOWANCE_KINDS = new Set(['lump', 'per_sqft']);
+  const MAX_MONTHS = 600;
+
+  // A service is a NAME and nothing else (Contract Phase A removed price_paise).
+  const serviceRow = (s) => ({ id: s.id, name: s.name });
+
+  // effectiveCapPaise: a lump cap already IS one; a per-sqft ceiling only becomes one once an area
+  // is recorded, and with no area the row reports its ceiling as a rate and no position rather than
+  // inventing an area to manufacture one. positionPaise is SIGNED (+ under, - over) and is
+  // DISPLAYED only - the contract's overrun/underrun settlement stays the owner's to make.
+  const allowanceRow = (a, spend) => {
+    const spentPaise = spend ? spend.spentPaise : 0;
+    const effectiveCapPaise = a.cap_kind === 'per_sqft'
+      ? unitPricePaise(a.cap_rate_per_sqft_paise, a.area_milli_sqft)
+      : a.cap_paise;
+    return {
+      id: a.id,
+      name: a.name,
+      capKind: a.cap_kind,
+      capPaise: a.cap_paise,
+      capRatePerSqftPaise: a.cap_rate_per_sqft_paise,
+      areaMilliSqft: a.area_milli_sqft,
+      effectiveCapPaise,
+      spentPaise,
+      entryCount: spend ? spend.entryCount : 0,
+      positionPaise: effectiveCapPaise == null ? null : effectiveCapPaise - spentPaise,
+    };
+  };
+
+  // Contract Phase A: servicesPricedTotalPaise/remainderPaise are GONE (no service has a price, so
+  // the remainder could only ever restate the total), and statedAmountPaise may now be DERIVED -
+  // pricingMode says which, so a computed figure is never presented as one the owner typed.
   const contractRow = (r) => {
-    const services = repo.contract.servicesFor(r.id);
-    const servicesPricedTotalPaise = services.reduce((sum, s) => sum + (s.price_paise || 0), 0);
+    const spend = repo.contract.allowanceSpendFor(r.id);
+    const computedPricePaise = unitPricePaise(r.rate_per_sqft_paise, r.measured_area_milli_sqft);
     return {
       id: r.id,
       contractorName: r.contractor_name || '',
@@ -593,19 +707,29 @@ export function installFetchShim(repo) {
       ledger: r.ledger_code ? ledgerLabel(r.ledger_code, r.subledger_code, r.ledger_custom_name, r.subledger_custom_name) : '',
       amountPaise: r.amount_paise,
       statedAmountPaise: r.price_of_contract_paise,
+      ratePerSqftPaise: r.rate_per_sqft_paise,
+      measuredAreaMilliSqft: r.measured_area_milli_sqft,
+      computedPricePaise,
+      pricingMode: computedPricePaise != null ? 'rate' : (r.price_of_contract_paise != null ? 'typed' : 'none'),
       dateSigned: r.date_signed || '',
       dateEnds: r.contract_end_date || '',
+      completionPeriodMonths: r.completion_period_months,
+      expectedCompletionDate: addMonthsIso(r.date_signed, r.completion_period_months),
+      supervisionRatePct: r.supervision_rate_pct,
+      specifiedBrands: r.specified_brands || '',
+      excludedScope: r.excluded_scope || '',
+      ownerObligations: r.owner_obligations || '',
       paymentDates: repo.contract.payDatesFor(r.id),
-      services: services.map(serviceRow),
-      servicesPricedTotalPaise,
-      remainderPaise: (r.price_of_contract_paise || 0) - servicesPricedTotalPaise,
+      services: repo.contract.servicesFor(r.id).map(serviceRow),
+      allowances: repo.contract.allowancesFor(r.id).map((a) => allowanceRow(a, spend.get(a.id))),
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
   };
 
   const getContractRow = (id) => repo.contract.getLive(id);
-  const CONTRACT_COLS = ['contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company'];
+  const CONTRACT_COLS = ['contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company',
+    'rate_per_sqft_paise', 'measured_area_milli_sqft', 'completion_period_months', 'supervision_rate_pct', 'specified_brands', 'excluded_scope', 'owner_obligations'];
   const COMPANY_MAX = 120;
 
   function readContractBody(req) {
@@ -624,12 +748,34 @@ export function installFetchShim(repo) {
     const stated = parsePriceOptional(req.body.statedAmountRupees);
     if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
 
+    // Rate-based pricing. Both halves optional and independently editable (the area is not known
+    // until final measurement). When BOTH land, the product REPLACES whatever was typed; a typed
+    // value sent alongside a complete rate price is ignored, not rejected.
+    const rate = parsePriceOptional(req.body.ratePerSqftRupees);
+    if (rate.error) return { error: 'Enter a valid rate per square foot greater than 0 (up to 2 decimals), or leave it blank.' };
+    const area = parseAreaOptional(req.body.measuredAreaSqft);
+    if (area.error) return { error: area.error };
+    if (rate.paise != null && area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
+      return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
+    }
+    const computed = unitPricePaise(rate.paise, area.milli);
+
+    // Contract Phase A: the signing date is OPTIONAL now. A malformed date is still rejected.
     const signed = parseIsoDate(req.body.dateSigned);
     if (signed.error) return { error: signed.error };
-    if (!signed.date) return { error: 'Select the date the contract was signed.' };
 
     const ends = parseIsoDate(req.body.dateEnds);
     if (ends.error) return { error: ends.error };
+
+    const months = parseWholeOptional(req.body.completionPeriodMonths, 1, MAX_MONTHS, `Enter the completion period as a whole number of months between 1 and ${MAX_MONTHS}, or leave it blank.`);
+    if (months.error) return { error: months.error };
+
+    const supervision = parsePercentOptional(req.body.supervisionRatePct);
+    if (supervision.error) return { error: supervision.error };
+
+    const specifiedBrands = str(req.body.specifiedBrands).slice(0, NOTE_MAX);
+    const excludedScope = str(req.body.excludedScope).slice(0, NOTE_MAX);
+    const ownerObligations = str(req.body.ownerObligations).slice(0, NOTE_MAX);
 
     const company = str(req.body.company).slice(0, COMPANY_MAX);
 
@@ -650,9 +796,19 @@ export function installFetchShim(repo) {
         ledger_custom_name: led.ledgerCustomName,
         subledger_custom_name: led.subledgerCustomName,
         amount_paise: amount.paise,
-        price_of_contract_paise: stated.paise,
+        // DERIVED when rate-priced, TYPED otherwise. Materialised into the one column every
+        // consumer already reads, so nothing downstream learns about rates;
+        // reconciliation.contractPriceDerivation flags any drift instead of correcting it.
+        price_of_contract_paise: computed != null ? computed : stated.paise,
+        rate_per_sqft_paise: rate.paise,
+        measured_area_milli_sqft: area.milli,
         contract_end_date: ends.date,
         date_signed: signed.date,
+        completion_period_months: months.value,
+        supervision_rate_pct: supervision.value,
+        specified_brands: specifiedBrands || null,
+        excluded_scope: excludedScope || null,
+        owner_obligations: ownerObligations || null,
         company: company || null,
       },
       paymentDates,
@@ -688,12 +844,12 @@ export function installFetchShim(repo) {
   const getLiveServiceForContract = (cid, sid) => repo.contract.serviceForContract(cid, sid);
   const SERVICE_NAME_MAX = 120;
 
+  // A service is a name. Contract Phase A dropped priceRupees; a body that still sends one is
+  // IGNORED rather than rejected, so a stale tab cannot 400 on a valid save.
   function readServiceBody(req) {
     const name = str(req.body.name).slice(0, SERVICE_NAME_MAX);
     if (!name) return { error: 'Service name is required.' };
-    const price = parsePriceOptional(req.body.priceRupees);
-    if (price.error) return { error: price.error };
-    return { values: { name, price_paise: price.paise } };
+    return { values: { name } };
   }
 
   localApp.post('/api/contracts/:id/services', (req, res) => {
@@ -701,7 +857,7 @@ export function installFetchShim(repo) {
     if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
     const v = readServiceBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    const info = repo.contract.insertService(cid, v.values.name, v.values.price_paise);
+    const info = repo.contract.insertService(cid, v.values.name);
     res.status(201).json({ ok: true, service: serviceRow(getServiceRow(info.lastInsertRowid)) });
   });
 
@@ -710,7 +866,7 @@ export function installFetchShim(repo) {
     if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
     const v = readServiceBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    repo.contract.updateService(sid, v.values.name, v.values.price_paise);
+    repo.contract.updateService(sid, v.values.name);
     res.json({ ok: true, service: serviceRow(getServiceRow(sid)) });
   });
 
@@ -718,6 +874,88 @@ export function installFetchShim(repo) {
     const cid = Number(req.params.id), sid = Number(req.params.sid);
     if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
     repo.contract.softDeleteService(sid);
+    res.json({ ok: true });
+  });
+
+  // ---- Contract allowances (Contract Phase A) --------------------------------------------------
+  // Optional per contract. Spend against a cap is DERIVED from live cash_out rows tagged with the
+  // allowance, never typed; the over/under position is DISPLAYED and settled by the owner.
+  const getLiveAllowanceForContract = (cid, aid) => repo.contract.allowanceForContract(cid, aid);
+
+  function readAllowanceBody(req) {
+    const name = str(req.body.name).slice(0, ALLOWANCE_NAME_MAX);
+    if (!name) return { error: 'Allowance name is required.' };
+    const kind = str(req.body.capKind) || 'lump';
+    if (!ALLOWANCE_KINDS.has(kind)) return { error: 'Choose whether this cap is a rupee amount or a rate per square foot.' };
+
+    if (kind === 'lump') {
+      const cap = parsePriceOptional(req.body.capRupees);
+      if (cap.error) return { error: 'Enter a valid cap amount greater than 0 (up to 2 decimals).' };
+      if (cap.paise == null) return { error: 'Enter the cap amount for this allowance.' };
+      return { values: { name, cap_kind: 'lump', cap_paise: cap.paise, cap_rate_per_sqft_paise: null, area_milli_sqft: null } };
+    }
+
+    const rate = parsePriceOptional(req.body.capRatePerSqftRupees);
+    if (rate.error) return { error: 'Enter a valid ceiling rate per square foot greater than 0 (up to 2 decimals).' };
+    if (rate.paise == null) return { error: 'Enter the ceiling rate per square foot for this allowance.' };
+    const area = parseAreaOptional(req.body.areaSqft); // optional: a rate ceiling is a real cap on its own
+    if (area.error) return { error: area.error };
+    if (area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
+      return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
+    }
+    return { values: { name, cap_kind: 'per_sqft', cap_paise: null, cap_rate_per_sqft_paise: rate.paise, area_milli_sqft: area.milli } };
+  }
+
+  const allowanceById = (cid, aid) => {
+    const row = repo.contract.allowanceForContract(cid, aid);
+    return row ? allowanceRow(row, repo.contract.allowanceSpendFor(cid).get(aid)) : null;
+  };
+
+  localApp.post('/api/contracts/:id/allowances', (req, res) => {
+    const cid = Number(req.params.id);
+    if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
+    const v = readAllowanceBody(req);
+    if (v.error) return res.status(400).json({ error: v.error });
+    const info = repo.contract.insertAllowance(cid, { ...v.values, sort_order: repo.contract.nextAllowanceOrder(cid) });
+    res.status(201).json({ ok: true, allowance: allowanceById(cid, Number(info.lastInsertRowid)) });
+  });
+
+  // Explicit opt-in, never automatic; refuses on a contract that already has allowances rather than
+  // duplicating or merging them.
+  localApp.post('/api/contracts/:id/allowances/defaults', (req, res) => {
+    const cid = Number(req.params.id);
+    if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
+    const existing = repo.contract.allowanceCount(cid);
+    if (existing > 0) {
+      return res.status(409).json({ error: `This contract already has ${existing} allowance${existing === 1 ? '' : 's'}. The standard set is only offered for a contract with none — delete the existing ones first if you want to start over.` });
+    }
+    let order = 0;
+    for (const a of DEFAULT_ALLOWANCES) {
+      repo.contract.insertAllowance(cid, {
+        name: a.name,
+        cap_kind: a.kind,
+        cap_paise: a.kind === 'lump' ? a.capPaise : null,
+        cap_rate_per_sqft_paise: a.kind === 'per_sqft' ? a.capRatePerSqftPaise : null,
+        area_milli_sqft: null, // measured, not assumed
+        sort_order: order++,
+      });
+    }
+    res.status(201).json({ ok: true, contract: contractRow(getContractRow(cid)) });
+  });
+
+  localApp.put('/api/contracts/:id/allowances/:aid', (req, res) => {
+    const cid = Number(req.params.id), aid = Number(req.params.aid);
+    if (!Number.isInteger(cid) || !Number.isInteger(aid) || !getLiveAllowanceForContract(cid, aid)) return res.status(404).json({ error: 'Allowance not found.' });
+    const v = readAllowanceBody(req);
+    if (v.error) return res.status(400).json({ error: v.error });
+    repo.contract.updateAllowance(aid, v.values);
+    res.json({ ok: true, allowance: allowanceById(cid, aid) });
+  });
+
+  localApp.delete('/api/contracts/:id/allowances/:aid', (req, res) => {
+    const cid = Number(req.params.id), aid = Number(req.params.aid);
+    if (!Number.isInteger(cid) || !Number.isInteger(aid) || !getLiveAllowanceForContract(cid, aid)) return res.status(404).json({ error: 'Allowance not found.' });
+    repo.contract.softDeleteAllowance(aid);
     res.json({ ok: true });
   });
 
@@ -874,6 +1112,12 @@ export function installFetchShim(repo) {
       const m = repo.contract.cashOutReferencingServices(id);
       if (m > 0) {
         return res.status(409).json({ error: `This contract still has ${m} cash-out entr${m === 1 ? 'y' : 'ies'} linked to one of its services (live or in the Recycle Bin). Permanently deleting it would orphan ${m === 1 ? 'that entry' : 'those entries'} — unlink or restore ${m === 1 ? 'it' : 'them'} first.` });
+      }
+      // Contract Phase A: contract_allowances CASCADEs the same way and cash_out.contract_allowance_id
+      // has no ON DELETE action either.
+      const k = repo.contract.cashOutReferencingAllowances(id);
+      if (k > 0) {
+        return res.status(409).json({ error: `This contract still has ${k} cash-out entr${k === 1 ? 'y' : 'ies'} drawing against one of its allowances (live or in the Recycle Bin). Permanently deleting it would orphan ${k === 1 ? 'that entry' : 'those entries'} — unlink or restore ${k === 1 ? 'it' : 'them'} first.` });
       }
     }
     TRASH_REPO[table].hardDelete(id);
@@ -1041,6 +1285,19 @@ export function installFetchShim(repo) {
     const appliedAgainstContract = cumulativePaid;
     const overOffset = { over: totalContract > 0 && appliedAgainstContract > totalContract, contractPaise: totalContract, appliedPaise: appliedAgainstContract, excessPaise: Math.max(0, appliedAgainstContract - totalContract) };
 
+    // Contract Phase A - contractPriceDerivation. A rate-priced contract MATERIALISES rate x area
+    // into price_of_contract_paise so owed/A/the PDF keep reading one column; a materialised derived
+    // value can drift (a restored backup writes columns verbatim rather than re-running the write
+    // path). Recompute and FLAG - the figure is reported as stored, never corrected.
+    const priceDrift = [];
+    for (const c of contractRows) {
+      const expected = unitPricePaise(c.rate_per_sqft_paise, c.measured_area_milli_sqft);
+      if (expected != null && expected !== (c.price_of_contract_paise || 0)) {
+        priceDrift.push({ contractId: c.id, storedPaise: c.price_of_contract_paise, expectedPaise: expected });
+      }
+    }
+    const contractPriceDerivation = { drifted: priceDrift.length > 0, contracts: priceDrift };
+
     if (!splitSumsToTotal || !mainsSumToTotal || !subsSumToMains) {
       console.error('Overview reconciliation failed', { splitSumsToTotal, mainsSumToTotal, subsSumToMains });
     }
@@ -1049,6 +1306,9 @@ export function installFetchShim(repo) {
     }
     if (overOffset.over) {
       console.warn(`Overview reconciliation: contractor payments (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
+    }
+    if (contractPriceDerivation.drifted) {
+      console.warn(`Overview reconciliation: ${priceDrift.length} rate-priced contract(s) have a stored price that no longer equals rate × measured area — ${priceDrift.map((d) => `#${d.contractId}: stored ${d.storedPaise} paise, rate × area ${d.expectedPaise} paise`).join('; ')}. The STORED figure is what every total above uses; re-save the contract to recompute it.`);
     }
 
     return {
@@ -1065,9 +1325,10 @@ export function installFetchShim(repo) {
       contracts,
       upcomingPayments: computeUpcomingPayments(),
       reconciliation: {
-        ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over,
+        ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over && !contractPriceDerivation.drifted,
         orphanedContractorPayments: orphan,
         overOffset: overOffset,
+        contractPriceDerivation,
       },
     };
   }
@@ -1315,17 +1576,22 @@ export function installFetchShim(repo) {
   // teardown/replace transaction, the by_user_id remap, storage-full handling — is unchanged.
   // ---------------------------------------------------------------------------
   const BACKUP_SCHEMA_VERSION = 1;
-  const BACKUP_TABLES = ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'];
-  const IMPORT_OWNED_TABLES = ['cash_out', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'contract', 'cash_in', 'loans', 'settings'];
+  const BACKUP_TABLES = ['contract', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'];
+  const IMPORT_OWNED_TABLES = ['cash_out', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'contract', 'cash_in', 'loans', 'settings'];
   const BACKUP_COLS = {
-    contract: ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company', 'created_at', 'updated_at', 'deleted_at'],
-    contract_services: ['id', 'contract_id', 'name', 'price_paise', 'created_at', 'updated_at', 'deleted_at'],
+    contract: ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company',
+      'rate_per_sqft_paise', 'measured_area_milli_sqft', 'completion_period_months', 'supervision_rate_pct', 'specified_brands', 'excluded_scope', 'owner_obligations',
+      'created_at', 'updated_at', 'deleted_at'],
+    // price_paise is gone (Contract Phase A). An older backup carrying the key still imports:
+    // rows are written through this explicit list, so the extra key is ignored.
+    contract_services: ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at'],
+    contract_allowances: ['id', 'contract_id', 'name', 'cap_kind', 'cap_paise', 'cap_rate_per_sqft_paise', 'area_milli_sqft', 'sort_order', 'created_at', 'updated_at', 'deleted_at'],
     contract_payment_dates: ['id', 'contract_id', 'pay_date', 'created_at'],
     contractor_payments: ['id', 'contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'remarks', 'created_at', 'updated_at', 'deleted_at'],
     loans: ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at'],
     settings: ['key', 'value'],
     cash_in: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason', 'created_at', 'updated_at', 'deleted_at'],
-    cash_out: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id', 'created_at', 'updated_at', 'deleted_at'],
+    cash_out: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id', 'contract_allowance_id', 'created_at', 'updated_at', 'deleted_at'],
   };
   const CONTACT_SETTINGS_KEYS = ['daily_report_recipients', 'daily_report_whatsapp'];
 
@@ -1366,7 +1632,7 @@ export function installFetchShim(repo) {
     const T = data.tables;
     if (!T || typeof T !== 'object') return { error: 'Backup is missing its "tables" section.' };
     for (const t of BACKUP_TABLES) {
-      if ((t === 'contract_payment_dates' || t === 'contractor_payments' || t === 'contract_services') && T[t] === undefined) continue;
+      if ((t === 'contract_payment_dates' || t === 'contractor_payments' || t === 'contract_services' || t === 'contract_allowances') && T[t] === undefined) continue;
       if (!Array.isArray(T[t])) return { error: `Backup is missing or has an invalid "${t}" table.` };
     }
 
@@ -1381,6 +1647,13 @@ export function installFetchShim(repo) {
       { const d = parseIsoDate(r.date_signed); if (!(r.date_signed == null || (!d.error && d.date))) return { error: `contract: date_signed must be ISO YYYY-MM-DD or null (got ${JSON.stringify(r.date_signed)}).` }; }
       { const d = parseIsoDate(r.contract_end_date); if (!(r.contract_end_date == null || (!d.error && d.date))) return { error: `contract: contract_end_date must be ISO YYYY-MM-DD or null (got ${JSON.stringify(r.contract_end_date)}).` }; }
       if (!optStr(r.company)) return { error: 'contract: company must be a string or null.' };
+      if (!optInt(r.rate_per_sqft_paise)) return { error: 'contract: rate_per_sqft_paise must be integer paise or null.' };
+      if (!optInt(r.measured_area_milli_sqft)) return { error: 'contract: measured_area_milli_sqft must be an integer number of thousandths of a square foot, or null.' };
+      if (!optInt(r.completion_period_months)) return { error: 'contract: completion_period_months must be a whole number of months or null.' };
+      if (!optNum(r.supervision_rate_pct)) return { error: 'contract: supervision_rate_pct must be a number or null.' };
+      for (const f of ['specified_brands', 'excluded_scope', 'owner_obligations']) {
+        if (!optStr(r[f])) return { error: `contract: ${f} must be a string or null.` };
+      }
       contractIds.add(r.id);
     }
     const serviceIds = new Set();
@@ -1388,8 +1661,22 @@ export function installFetchShim(repo) {
       if (!isInt(r.id)) return { error: 'contract_services: a row has a non-integer id.' };
       if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_services: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
       if (typeof r.name !== 'string' || !r.name.trim()) return { error: 'contract_services: name must be a non-empty string.' };
-      if (!optInt(r.price_paise)) return { error: 'contract_services: price_paise must be integer paise or null.' };
+      // price_paise is NOT checked: Contract Phase A removed the column.
       serviceIds.add(r.id);
+    }
+    const allowanceIds = new Set();
+    for (const r of (T.contract_allowances || [])) {
+      if (!isInt(r.id)) return { error: 'contract_allowances: a row has a non-integer id.' };
+      if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_allowances: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
+      if (typeof r.name !== 'string' || !r.name.trim()) return { error: 'contract_allowances: name must be a non-empty string.' };
+      if (r.cap_kind !== 'lump' && r.cap_kind !== 'per_sqft') return { error: `contract_allowances: unknown cap_kind ${JSON.stringify(r.cap_kind)} (expected 'lump' or 'per_sqft').` };
+      if (!optInt(r.cap_paise)) return { error: 'contract_allowances: cap_paise must be integer paise or null.' };
+      if (!optInt(r.cap_rate_per_sqft_paise)) return { error: 'contract_allowances: cap_rate_per_sqft_paise must be integer paise or null.' };
+      if (!optInt(r.area_milli_sqft)) return { error: 'contract_allowances: area_milli_sqft must be an integer number of thousandths of a square foot, or null.' };
+      if (!optInt(r.sort_order)) return { error: 'contract_allowances: sort_order must be an integer or null.' };
+      if (r.cap_kind === 'lump' && !isInt(r.cap_paise)) return { error: 'contract_allowances: a lump-sum allowance needs a cap_paise amount.' };
+      if (r.cap_kind === 'per_sqft' && !isInt(r.cap_rate_per_sqft_paise)) return { error: 'contract_allowances: a per-square-foot allowance needs a cap_rate_per_sqft_paise rate.' };
+      allowanceIds.add(r.id);
     }
     for (const r of (T.contract_payment_dates || [])) {
       if (!isInt(r.id)) return { error: 'contract_payment_dates: a row has a non-integer id.' };
@@ -1431,6 +1718,7 @@ export function installFetchShim(repo) {
       if (!['included', 'extra'].includes(r.contract_scope)) return { error: `cash_out: invalid contract_scope ${JSON.stringify(r.contract_scope)}.` };
       if (!optInt(r.contract_stated_paise)) return { error: 'cash_out: contract_stated_paise must be an integer (paise) or null.' };
       if (!(r.contract_service_id == null || (isInt(r.contract_service_id) && serviceIds.has(r.contract_service_id)))) return { error: `cash_out: contract_service_id ${JSON.stringify(r.contract_service_id)} is not present in the backup's contract_services.` };
+      if (!(r.contract_allowance_id == null || (isInt(r.contract_allowance_id) && allowanceIds.has(r.contract_allowance_id)))) return { error: `cash_out: contract_allowance_id ${JSON.stringify(r.contract_allowance_id)} is not present in the backup's contract_allowances.` };
     }
     return { ok: true };
   }

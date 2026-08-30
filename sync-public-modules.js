@@ -28,7 +28,9 @@ const PUBLIC = path.join(ROOT, 'public');
 
 // Phase 10b: ledgers.js moved here from public/ — it's now seed data db.js reads at init() time
 // (on both sides, same reasoning as db.js/repo.js themselves), not a page's runtime source.
-const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js'];
+// Contract Phase A: allowances.js joins them - seed data for the contract's allowance caps, read
+// by the API layer on BOTH sides (server.js requires it; public/local-api.js imports it).
+const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js', 'allowances.js'];
 // Every package an import map points at by absolute /node_modules/... path — those paths only
 // resolve if the whole package directory is here too (see the header comment).
 const VENDOR_PACKAGES = [

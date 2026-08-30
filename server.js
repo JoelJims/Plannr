@@ -41,6 +41,9 @@ const getOwner = () => OWNER_STMT.get();
 // The data-access layer. Required AFTER init() so it can prepare its statements against the
 // migrated schema. Every read/write touching one of the ledger tables goes through repo.*.
 const repo = require('./repo');
+// Contract Phase A: the ten standard allowance caps, offered on explicit opt-in. Seed data only
+// (same role as ledgers.js) - once seeded, contract_allowances is the source of truth.
+const { DEFAULT_ALLOWANCES } = require('./allowances');
 
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
@@ -545,7 +548,7 @@ function resolveCashOutBy(body, existingByUserId) {
 const CASH_OUT_SELECT =
   `SELECT c.id, c.amount_paise, c.tx_date, c.by_type, c.by_user_id, c.by_label, c.ledger_code,
           c.subledger_code, c.ledger_custom_name, c.subledger_custom_name, c.reason,
-          c.contract_scope, c.contract_stated_paise, c.contract_service_id, c.created_at,
+          c.contract_scope, c.contract_stated_paise, c.contract_service_id, c.contract_allowance_id, c.created_at,
           u.display_name AS user_display_name
      FROM cash_out c
      LEFT JOIN users u ON u.id = c.by_user_id`;
@@ -568,6 +571,7 @@ function cashOutRow(r) {
     contractScope: r.contract_scope,
     contractStatedPaise: r.contract_stated_paise, // LEGACY (Phase 5E offset). No longer written or used in any maths.
     contractServiceId: r.contract_service_id,     // Services phase: the linked service (provenance), or null
+    contractAllowanceId: r.contract_allowance_id, // Contract Phase A: the allowance this spend draws against, or null
     createdAt: r.created_at,
   };
 }
@@ -581,29 +585,46 @@ const saveLedgerCustom = (values) => {
   }
 };
 
-// Services phase (Part C/D) — resolve + guard cash_out.contract_service_id. Runs AFTER validate, BEFORE
-// the write, so it can MUTATE values and reject with a status. One service may source at most one LIVE
-// debit. (The partial-unique index idx_cash_out_service_live is the DB backstop; this gives the clean,
-// naming 409.) NOTE: with the reimbursement offset removed the link is now pure PROVENANCE — "which
-// contract service was this spend for" — and the one-live-debit rule no longer guards any figure.
-// finalize runs with ctx.req present (single POST/PUT + the batch loop pass req).
-function cashOutServiceFinalize(values, { existing }) {
-  // Only an 'included' debit may carry a service link; 'extra' forces NULL so a stale link can't
+// Resolve + guard the two CONTRACT LINKS a debit can carry: the service it was for (provenance) and
+// the allowance it draws against. Runs AFTER validate, BEFORE the write, so it can MUTATE values and
+// reject with a status. finalize runs with ctx.req present (single POST/PUT + the batch loop pass req).
+//
+// The two links are deliberately NOT symmetrical:
+//   · SERVICE — at most one LIVE debit per service (idx_cash_out_service_live is the DB backstop;
+//     this gives the clean, naming 409). Pure provenance: it moves no figure.
+//     Contract Phase A removed the "only a PRICED service is linkable" rule along with the column —
+//     services carry no price now, so every live service is selectable.
+//   · ALLOWANCE — many debits per allowance, by design. An allowance is a CAP with a RUNNING spend;
+//     a uniqueness rule here would break the feature. It moves no figure either: the cap position is
+//     displayed, and the contract's settlement of an overrun/underrun stays the owner's to make.
+function cashOutContractLinksFinalize(values, { existing }) {
+  // Only an 'included' debit may carry either link; 'extra' forces both NULL so a stale link can't
   // linger if the scope flips back.
-  if (values.contract_scope !== 'included') { values.contract_service_id = null; return; }
-  // undefined = the body did not send contractServiceId (the editable table doesn't) -> PRESERVE the
-  // existing link on edit; on create there is no existing, so it's NULL (manual entry).
+  if (values.contract_scope !== 'included') {
+    values.contract_service_id = null;
+    values.contract_allowance_id = null;
+    return;
+  }
+
+  // undefined = the body did not send the key (the editable table doesn't) -> PRESERVE the existing
+  // link on edit; on create there is no existing, so it's NULL (manual entry).
   let sid = values.contract_service_id;
   if (sid === undefined) sid = existing ? existing.contract_service_id : null;
-  if (sid == null) { values.contract_service_id = null; return; }
-  const svc = repo.contract.serviceLivePriced(sid);
-  if (!svc) return { status: 400, error: 'That contract service was not found — pick a listed service, or type the amount directly.' };
-  if (svc.price_paise == null) return { status: 400, error: 'That service has no price set, so it cannot be linked — add a price to it, or type the amount directly.' };
-  const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
-  if (other) {
-    return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
+  if (sid == null) values.contract_service_id = null;
+  else {
+    if (!repo.contract.serviceLinkable(sid)) return { status: 400, error: 'That contract service was not found — pick a listed service, or leave it blank.' };
+    const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
+    if (other) {
+      return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
+    }
+    values.contract_service_id = sid;
   }
-  values.contract_service_id = sid;
+
+  let aid = values.contract_allowance_id;
+  if (aid === undefined) aid = existing ? existing.contract_allowance_id : null;
+  if (aid == null) { values.contract_allowance_id = null; return; }
+  if (!repo.contract.allowanceLinkable(aid)) return { status: 400, error: 'That allowance was not found — pick a listed allowance, or leave it blank.' };
+  values.contract_allowance_id = aid;
 }
 
 makeLedgerCrud({
@@ -611,7 +632,7 @@ makeLedgerCrud({
   alias: 'c', // the table alias used in CASH_OUT_SELECT
   batch: true, // Phase 6B: POST /api/cash-out/batch — Save All in one round trip (both pages)
   auditField: 'by_user_id', // Phase 2: log who-paid changes on edit
-  finalize: cashOutServiceFinalize,                    // Services phase (Part C/D): service link + guard
+  finalize: cashOutContractLinksFinalize,              // service link + one-live-debit guard, and the allowance draw
   afterWrite: (values) => saveLedgerCustom(values), // Part E: remember a custom ledger name
   table: 'cash_out',
   select: CASH_OUT_SELECT,
@@ -623,7 +644,7 @@ makeLedgerCrud({
   shape: cashOutRow,
   // contract_stated_paise is deliberately ABSENT from this list: new rows get NULL, and an edit of a
   // legacy row leaves its stored value untouched (the column is never in the UPDATE ... SET list).
-  columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id'],
+  columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id', 'contract_allowance_id'],
   validate: (req, existingByUserId) => {
     const amountPaise = parsePaise(req.body.amountRupees);
     if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
@@ -663,6 +684,15 @@ makeLedgerCrud({
       else { const n = Number(raw); if (!Number.isInteger(n) || n <= 0) return { error: 'Invalid service selection.' }; contractServiceId = n; }
     }
 
+    // Contract Phase A — which allowance cap this spend draws against. Same undefined/null/number
+    // convention as the service link above, resolved and validated in finalize().
+    let contractAllowanceId; // undefined = not sent
+    if ('contractAllowanceId' in req.body) {
+      const raw = req.body.contractAllowanceId;
+      if (raw == null || raw === '') contractAllowanceId = null;
+      else { const n = Number(raw); if (!Number.isInteger(n) || n <= 0) return { error: 'Invalid allowance selection.' }; contractAllowanceId = n; }
+    }
+
     return {
       values: {
         amount_paise: amountPaise,
@@ -676,7 +706,8 @@ makeLedgerCrud({
         subledger_custom_name: subledgerCustomName,
         reason: str(req.body.reason).slice(0, REASON_MAX),
         contract_scope: contractScope,
-        contract_service_id: contractServiceId, // finalize() resolves/guards this (may be undefined)
+        contract_service_id: contractServiceId,     // finalize() resolves/guards this (may be undefined)
+        contract_allowance_id: contractAllowanceId, // ditto
       },
     };
   },
@@ -749,17 +780,130 @@ function parsePriceOptional(v) {
 
 const AREA_MAX = 200;
 
-const serviceRow = (s) => ({ id: s.id, name: s.name, pricePaise: s.price_paise }); // pricePaise null = unpriced
+// ---------------------------------------------------------------------------
+// Contract Phase A — the contract is a FIXED UNIT-RATE LUMP SUM: its price is a rate per square
+// foot times the final measured built-up area. The helpers below are what that costs.
+// ---------------------------------------------------------------------------
 
-// Shape a contract row for the API: resolved headline ledger label, the OPTIONAL stated amount, the
-// OPTIONAL free-form amount, both dates, the scheduled payment-date list, the OPTIONAL company (Part F),
-// the line-item services (Part A), and the informational REMAINDER (Part B): the stated total minus the
-// sum of PRICED services. remainderPaise is SIGNED (may be negative) — the UI shows "remains"/"over"
-// wording, never a bare minus, mirroring Phase 4's overpaid figure. Services never drive dues:
-// price_of_contract_paise stays the single source of truth for owed.
+// Areas are stored as INTEGER thousandths of a square foot, for the same reason money is stored as
+// integer paise: rate x area has to be exact integer arithmetic. Accepts up to 3 decimals.
+const MILLI_PER_SQFT = 1000;
+function parseAreaOptional(v) {
+  const t = str(v).replace(/,/g, '');
+  if (t === '') return { milli: null };
+  if (!/^\d+(\.\d{1,3})?$/.test(t)) return { error: 'Enter a valid area in square feet (up to 3 decimals), or leave it blank.' };
+  const [ip, dp = ''] = t.split('.');
+  const milli = Number(ip) * MILLI_PER_SQFT + Number((dp + '000').slice(0, 3));
+  if (!Number.isSafeInteger(milli) || milli <= 0) return { error: 'Enter an area greater than 0 square feet.' };
+  return { milli };
+}
+
+// rate (paise per sq ft) x area (milli-sq-ft) -> paise. Returns null unless BOTH are present: one
+// half of a rate price is not a price, and guessing the other half is exactly the invented-number
+// problem that got contract_services.price_paise removed. Also used for a per-sqft allowance
+// ceiling, which is the same shape of calculation.
+function unitPricePaise(ratePaise, areaMilli) {
+  if (ratePaise == null || areaMilli == null) return null;
+  const product = ratePaise * areaMilli;
+  if (!Number.isSafeInteger(product)) return null; // absurd inputs; the parsers below reject them first
+  return Math.round(product / MILLI_PER_SQFT);
+}
+
+// Optional whole number in [min, max]. Blank -> null.
+function parseWholeOptional(v, min, max, message) {
+  const t = str(v).replace(/,/g, '');
+  if (t === '') return { value: null };
+  if (!/^\d+$/.test(t)) return { error: message };
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n < min || n > max) return { error: message };
+  return { value: n };
+}
+
+// Optional percentage, 0–100, up to 2 decimals. Blank -> null. Stored as a REAL because it is a
+// RATE, not money — and, exactly like loans.interest_rate, it drives no calculation anywhere: it
+// records what the contract says the supervision charge on a change order is. Nothing multiplies
+// by it, so no rounding rule is needed and none is implied.
+function parsePercentOptional(v) {
+  const t = str(v).replace(/,/g, '');
+  if (t === '') return { value: null };
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return { error: 'Enter a supervision rate between 0 and 100 percent (up to 2 decimals), or leave it blank.' };
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return { error: 'Enter a supervision rate between 0 and 100 percent (up to 2 decimals), or leave it blank.' };
+  return { value: n };
+}
+
+// date_signed + N whole months, clamped to the end of the target month (31 Jan + 1 month = 28/29
+// Feb, never 2/3 Mar). Pure string maths on the ISO date — no Date parsing of the input, so no
+// timezone can shift it. '' when either half is missing: an expected completion date with no
+// signing date to count from would be a fabricated one.
+function addMonthsIso(iso, months) {
+  if (!iso || months == null) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return '';
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const total = y * 12 + (mo - 1) + months;
+  const ny = Math.floor(total / 12), nm = (total % 12) + 1;
+  const lastDay = new Date(Date.UTC(ny, nm, 0)).getUTCDate(); // day 0 of month nm+1 = last day of nm
+  const nd = Math.min(d, lastDay);
+  const pad = (n, w) => String(n).padStart(w, '0');
+  return `${pad(ny, 4)}-${pad(nm, 2)}-${pad(nd, 2)}`;
+}
+
+const NOTE_MAX = 2000;      // each of the three free-text contract notes
+const ALLOWANCE_NAME_MAX = 120;
+const ALLOWANCE_KINDS = new Set(['lump', 'per_sqft']);
+const MAX_MONTHS = 600;     // 50 years — a typo guard, not a domain rule
+
+// A service is a NAME and nothing else (Contract Phase A removed price_paise — the contract's
+// schedule of work attaches no price to any scope item).
+const serviceRow = (s) => ({ id: s.id, name: s.name });
+
+// One allowance row, with its DERIVED position. `spend` is this row's entry from
+// repo.contract.allowanceSpendFor(), or undefined when nothing has been drawn against it yet.
+//
+// effectiveCapPaise is the rupee ceiling this row can actually be measured against:
+//   · 'lump'     -> cap_paise, always present.
+//   · 'per_sqft' -> the ceiling RATE times the area this allowance covers. With no area recorded
+//                   there IS no rupee ceiling, so it stays null and positionPaise stays null too —
+//                   the row reports its ceiling as a rate and declines to compute an over/under
+//                   rather than inventing an area to make one appear.
+// positionPaise is SIGNED: positive = under the cap, negative = over it. Plannr only DISPLAYS it.
+// Per the contract an overrun is added to the next progress payment and an underrun subtracted
+// from the final — a settlement the owner performs, not one this app performs for them. Nothing
+// here feeds owed, Total contract, or any Overview figure.
+const allowanceRow = (a, spend) => {
+  const spentPaise = spend ? spend.spentPaise : 0;
+  const effectiveCapPaise = a.cap_kind === 'per_sqft'
+    ? unitPricePaise(a.cap_rate_per_sqft_paise, a.area_milli_sqft)
+    : a.cap_paise;
+  return {
+    id: a.id,
+    name: a.name,
+    capKind: a.cap_kind,
+    capPaise: a.cap_paise,
+    capRatePerSqftPaise: a.cap_rate_per_sqft_paise,
+    areaMilliSqft: a.area_milli_sqft,
+    effectiveCapPaise,
+    spentPaise,
+    entryCount: spend ? spend.entryCount : 0,
+    positionPaise: effectiveCapPaise == null ? null : effectiveCapPaise - spentPaise,
+  };
+};
+
+// Shape a contract row for the API.
+//
+// Contract Phase A changed two things here:
+//   · servicesPricedTotalPaise / remainderPaise are GONE. The remainder was "stated total − Σ priced
+//     services", and with no service carrying a price it could only ever equal the stated total —
+//     a line that restated a number already on screen and implied services were meant to add up to
+//     it. The services list is a scope list now, so there is nothing to subtract.
+//   · statedAmountPaise may now be DERIVED. When a rate and a measured area are both recorded, the
+//     stated price is their product and price_of_contract_paise is rewritten to match on every
+//     contract write; `pricingMode` says which it is, so the UI never presents a computed figure as
+//     something the owner typed. Dues maths is untouched: owed still reads the one stored column.
 const contractRow = (r) => {
-  const services = repo.contract.servicesFor(r.id);
-  const servicesPricedTotalPaise = services.reduce((sum, s) => sum + (s.price_paise || 0), 0);
+  const spend = repo.contract.allowanceSpendFor(r.id);
+  const computedPricePaise = unitPricePaise(r.rate_per_sqft_paise, r.measured_area_milli_sqft);
   return {
     id: r.id,
     contractorName: r.contractor_name || '',
@@ -771,13 +915,28 @@ const contractRow = (r) => {
     subledgerCustomName: r.subledger_custom_name,
     ledger: r.ledger_code ? ledgerLabel(r.ledger_code, r.subledger_code, r.ledger_custom_name, r.subledger_custom_name) : '',
     amountPaise: r.amount_paise,                  // optional free-form amount or null
-    statedAmountPaise: r.price_of_contract_paise, // OPTIONAL stated amount, null when unstated (single source of truth for owed)
+    statedAmountPaise: r.price_of_contract_paise, // the stated amount owed maths reads — typed OR derived
+    // Rate-based pricing (both optional, both editable at any time — the area is not known until
+    // final measurement). 'rate' when both are present, 'typed' when a price was entered directly,
+    // 'none' when the contract states no price at all (all three are valid).
+    ratePerSqftPaise: r.rate_per_sqft_paise,
+    measuredAreaMilliSqft: r.measured_area_milli_sqft,
+    computedPricePaise,                           // rate × area, or null when either half is missing
+    pricingMode: computedPricePaise != null ? 'rate' : (r.price_of_contract_paise != null ? 'typed' : 'none'),
     dateSigned: r.date_signed || '',
     dateEnds: r.contract_end_date || '',
+    // Optional metadata. expectedCompletionDate is DERIVED (signing date + N months) and never
+    // stored: it is a function of two fields that are both editable, so storing it would just be a
+    // third value to keep in step.
+    completionPeriodMonths: r.completion_period_months,
+    expectedCompletionDate: addMonthsIso(r.date_signed, r.completion_period_months),
+    supervisionRatePct: r.supervision_rate_pct,   // informational only; drives no calculation
+    specifiedBrands: r.specified_brands || '',
+    excludedScope: r.excluded_scope || '',
+    ownerObligations: r.owner_obligations || '',
     paymentDates: repo.contract.payDatesFor(r.id),
-    services: services.map(serviceRow),           // Part A: live line-item services
-    servicesPricedTotalPaise,                     // Σ of PRICED services (informational)
-    remainderPaise: (r.price_of_contract_paise || 0) - servicesPricedTotalPaise, // Part B: SIGNED remainder
+    services: repo.contract.servicesFor(r.id).map(serviceRow), // scope list: names only
+    allowances: repo.contract.allowancesFor(r.id).map((a) => allowanceRow(a, spend.get(a.id))),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -786,7 +945,11 @@ const contractRow = (r) => {
 const getContractRow = (id) => repo.contract.getLive(id);
 
 // Columns written on contract create/update (id/timestamps/deleted_at excluded).
-const CONTRACT_COLS = ['contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company'];
+const CONTRACT_COLS = ['contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company',
+  // Contract Phase A — rate-based pricing + optional metadata. price_of_contract_paise stays in
+  // the list and stays the single source of truth for owed; when a rate and an area are both
+  // given, readContractBody() writes the product into it rather than whatever was typed.
+  'rate_per_sqft_paise', 'measured_area_milli_sqft', 'completion_period_months', 'supervision_rate_pct', 'specified_brands', 'excluded_scope', 'owner_obligations'];
 const COMPANY_MAX = 120; // Part F: optional company/firm name cap
 
 // Validate + normalise a contract request body -> { values, paymentDates } or { error }.
@@ -809,12 +972,39 @@ function readContractBody(req) {
   const stated = parsePriceOptional(req.body.statedAmountRupees);
   if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
 
+  // Contract Phase A — rate-based pricing. Both halves are OPTIONAL and independently editable at
+  // any time: the rate is fixed at signing, the area is not known until final measurement, so a
+  // contract routinely sits with a rate and no area for months. When BOTH land, the product REPLACES
+  // whatever is in statedAmountRupees; a typed value sent alongside a complete rate price is
+  // ignored, not rejected, so an older client or a stale tab can't 400 on an otherwise valid save.
+  const rate = parsePriceOptional(req.body.ratePerSqftRupees);
+  if (rate.error) return { error: 'Enter a valid rate per square foot greater than 0 (up to 2 decimals), or leave it blank.' };
+  const area = parseAreaOptional(req.body.measuredAreaSqft);
+  if (area.error) return { error: area.error };
+  if (rate.paise != null && area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
+    return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
+  }
+  const computed = unitPricePaise(rate.paise, area.milli); // null unless BOTH halves are present
+
+  // Contract Phase A — the signing date is OPTIONAL now (it was required). Every field on this form
+  // is optional except the contractor, the area of work and the headline ledger. A malformed date
+  // is still rejected; an absent one is simply absent, and the expected completion date it would
+  // have anchored is then not reported rather than being counted from a made-up day.
   const signed = parseIsoDate(req.body.dateSigned);
   if (signed.error) return { error: signed.error };
-  if (!signed.date) return { error: 'Select the date the contract was signed.' };
 
   const ends = parseIsoDate(req.body.dateEnds); // optional; blank -> null
   if (ends.error) return { error: ends.error };
+
+  const months = parseWholeOptional(req.body.completionPeriodMonths, 1, MAX_MONTHS, `Enter the completion period as a whole number of months between 1 and ${MAX_MONTHS}, or leave it blank.`);
+  if (months.error) return { error: months.error };
+
+  const supervision = parsePercentOptional(req.body.supervisionRatePct);
+  if (supervision.error) return { error: supervision.error };
+
+  const specifiedBrands = str(req.body.specifiedBrands).slice(0, NOTE_MAX);
+  const excludedScope = str(req.body.excludedScope).slice(0, NOTE_MAX);
+  const ownerObligations = str(req.body.ownerObligations).slice(0, NOTE_MAX);
 
   const company = str(req.body.company).slice(0, COMPANY_MAX); // Part F: optional; blank -> null below
 
@@ -835,9 +1025,21 @@ function readContractBody(req) {
       ledger_custom_name: led.ledgerCustomName,
       subledger_custom_name: led.subledgerCustomName,
       amount_paise: amount.paise,
-      price_of_contract_paise: stated.paise,
+      // DERIVED when the contract is rate-priced, TYPED otherwise. Materialising it into the one
+      // column every consumer already reads (owed, figure A, the PDF, the Contractor Payments
+      // "Remaining" line) is what keeps this change additive: nothing downstream learns about rates.
+      // reconciliation.contractPriceDerivation re-checks the product on every Overview load and
+      // flags any drift rather than silently correcting it.
+      price_of_contract_paise: computed != null ? computed : stated.paise,
+      rate_per_sqft_paise: rate.paise,
+      measured_area_milli_sqft: area.milli,
       contract_end_date: ends.date,
       date_signed: signed.date,
+      completion_period_months: months.value,
+      supervision_rate_pct: supervision.value,
+      specified_brands: specifiedBrands || null,
+      excluded_scope: excludedScope || null,
+      owner_obligations: ownerObligations || null,
       company: company || null,
     },
     paymentDates,
@@ -890,12 +1092,12 @@ const SERVICE_NAME_MAX = 120;
 const getServiceRow = (id) => repo.contract.serviceLive(id);
 const getLiveServiceForContract = (cid, sid) => repo.contract.serviceForContract(cid, sid);
 
+// A service is a name. Contract Phase A dropped priceRupees; a body that still sends one is
+// IGNORED rather than rejected, so a stale tab or an older client cannot 400 on a valid save.
 function readServiceBody(req) {
   const name = str(req.body.name).slice(0, SERVICE_NAME_MAX);
   if (!name) return { error: 'Service name is required.' };
-  const price = parsePriceOptional(req.body.priceRupees); // blank -> null (unpriced; can't be picked on a debit)
-  if (price.error) return { error: price.error };
-  return { values: { name, price_paise: price.paise } };
+  return { values: { name } };
 }
 
 app.post('/api/contracts/:id/services', requireApiAuth, (req, res) => {
@@ -903,7 +1105,7 @@ app.post('/api/contracts/:id/services', requireApiAuth, (req, res) => {
   if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
   const v = readServiceBody(req);
   if (v.error) return res.status(400).json({ error: v.error });
-  const info = repo.contract.insertService(cid, v.values.name, v.values.price_paise);
+  const info = repo.contract.insertService(cid, v.values.name);
   res.status(201).json({ ok: true, service: serviceRow(getServiceRow(info.lastInsertRowid)) });
 });
 
@@ -912,16 +1114,117 @@ app.put('/api/contracts/:id/services/:sid', requireApiAuth, (req, res) => {
   if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
   const v = readServiceBody(req);
   if (v.error) return res.status(400).json({ error: v.error });
-  repo.contract.updateService(sid, v.values.name, v.values.price_paise);
+  repo.contract.updateService(sid, v.values.name);
   res.json({ ok: true, service: serviceRow(getServiceRow(sid)) });
 });
 
 app.delete('/api/contracts/:id/services/:sid', requireApiAuth, (req, res) => {
   const cid = Number(req.params.id), sid = Number(req.params.sid);
   if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
-  // Soft-delete. A LIVE debit may still reference this now-deleted service (keeps its offset + the
-  // provenance link); it simply stops being offered by the picker. No block — services are informational.
+  // Soft-delete. A LIVE debit may still reference this now-deleted service (keeping the provenance
+  // link); it simply stops being offered by the picker. No block — services are informational.
   repo.contract.softDeleteService(sid);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Contract allowances (Contract Phase A). The contract's allowance caps — the only rupee figures
+// the contract attaches to anything. Entirely OPTIONAL: a contract with none behaves normally.
+// Nested under the parent contract so the id proves ownership, exactly like services.
+//
+// Spend against a cap is DERIVED from live cash_out rows tagged with the allowance, never typed,
+// and the over/under position is DISPLAYED only. The contract settles an overrun by adding it to
+// the next progress payment and an underrun by subtracting it from the final — that is the owner's
+// decision to make on the day, so nothing here touches owed or any Overview total.
+// ---------------------------------------------------------------------------
+const getLiveAllowanceForContract = (cid, aid) => repo.contract.allowanceForContract(cid, aid);
+
+// Read + normalise an allowance body -> { values } | { error }.
+// 'lump'     needs capRupees.                    'per_sqft' needs capRatePerSqftRupees.
+// 'per_sqft' may ALSO carry areaSqft — optional, because a rate ceiling is a real cap on its own
+// and only becomes a rupee figure once an area is known. Without it the row simply reports no
+// position; making the area mandatory would force the owner to invent one.
+function readAllowanceBody(req) {
+  const name = str(req.body.name).slice(0, ALLOWANCE_NAME_MAX);
+  if (!name) return { error: 'Allowance name is required.' };
+  const kind = str(req.body.capKind) || 'lump';
+  if (!ALLOWANCE_KINDS.has(kind)) return { error: 'Choose whether this cap is a rupee amount or a rate per square foot.' };
+
+  if (kind === 'lump') {
+    const cap = parsePriceOptional(req.body.capRupees);
+    if (cap.error) return { error: 'Enter a valid cap amount greater than 0 (up to 2 decimals).' };
+    if (cap.paise == null) return { error: 'Enter the cap amount for this allowance.' };
+    return { values: { name, cap_kind: 'lump', cap_paise: cap.paise, cap_rate_per_sqft_paise: null, area_milli_sqft: null } };
+  }
+
+  const rate = parsePriceOptional(req.body.capRatePerSqftRupees);
+  if (rate.error) return { error: 'Enter a valid ceiling rate per square foot greater than 0 (up to 2 decimals).' };
+  if (rate.paise == null) return { error: 'Enter the ceiling rate per square foot for this allowance.' };
+  const area = parseAreaOptional(req.body.areaSqft); // optional
+  if (area.error) return { error: area.error };
+  if (area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
+    return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
+  }
+  return { values: { name, cap_kind: 'per_sqft', cap_paise: null, cap_rate_per_sqft_paise: rate.paise, area_milli_sqft: area.milli } };
+}
+
+// Re-shape one allowance for a single-row response (the list comes back via contractRow).
+const allowanceById = (cid, aid) => {
+  const row = repo.contract.allowanceForContract(cid, aid);
+  return row ? allowanceRow(row, repo.contract.allowanceSpendFor(cid).get(aid)) : null;
+};
+
+app.post('/api/contracts/:id/allowances', requireApiAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
+  const v = readAllowanceBody(req);
+  if (v.error) return res.status(400).json({ error: v.error });
+  const info = repo.contract.insertAllowance(cid, { ...v.values, sort_order: repo.contract.nextAllowanceOrder(cid) });
+  res.status(201).json({ ok: true, allowance: allowanceById(cid, Number(info.lastInsertRowid)) });
+});
+
+// Seed the ten caps this contract's allowance schedule actually names (allowances.js). Explicit
+// opt-in, never automatic. Refuses when the contract already has allowances rather than
+// duplicating or merging them: a half-seeded list of ten rupee caps is worse than none, and
+// "which of these did I add and which came from the contract" is not a question the owner should
+// have to answer. Clear them first if a re-seed is really what is wanted.
+app.post('/api/contracts/:id/allowances/defaults', requireApiAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
+  const existing = repo.contract.allowanceCount(cid);
+  if (existing > 0) {
+    return res.status(409).json({ error: `This contract already has ${existing} allowance${existing === 1 ? '' : 's'}. The standard set is only offered for a contract with none — delete the existing ones first if you want to start over.` });
+  }
+  let order = 0;
+  for (const a of DEFAULT_ALLOWANCES) {
+    repo.contract.insertAllowance(cid, {
+      name: a.name,
+      cap_kind: a.kind,
+      cap_paise: a.kind === 'lump' ? a.capPaise : null,
+      cap_rate_per_sqft_paise: a.kind === 'per_sqft' ? a.capRatePerSqftPaise : null,
+      area_milli_sqft: null, // per-sqft ceilings start with no area: it is measured, not assumed
+      sort_order: order++,
+    });
+  }
+  res.status(201).json({ ok: true, contract: contractRow(getContractRow(cid)) });
+});
+
+app.put('/api/contracts/:id/allowances/:aid', requireApiAuth, (req, res) => {
+  const cid = Number(req.params.id), aid = Number(req.params.aid);
+  if (!Number.isInteger(cid) || !Number.isInteger(aid) || !getLiveAllowanceForContract(cid, aid)) return res.status(404).json({ error: 'Allowance not found.' });
+  const v = readAllowanceBody(req);
+  if (v.error) return res.status(400).json({ error: v.error });
+  repo.contract.updateAllowance(aid, v.values);
+  res.json({ ok: true, allowance: allowanceById(cid, aid) });
+});
+
+app.delete('/api/contracts/:id/allowances/:aid', requireApiAuth, (req, res) => {
+  const cid = Number(req.params.id), aid = Number(req.params.aid);
+  if (!Number.isInteger(cid) || !Number.isInteger(aid) || !getLiveAllowanceForContract(cid, aid)) return res.status(404).json({ error: 'Allowance not found.' });
+  // Soft-delete, same as a service. Debits already drawn against it keep their link (the spend is
+  // still real spend, and it still counts in every Overview figure — only the cap stops being
+  // reported); the allowance simply stops being offered on the debit form.
+  repo.contract.softDeleteAllowance(aid);
   res.json({ ok: true });
 });
 
@@ -1112,6 +1415,12 @@ app.delete('/api/trash/:table/:id', requireApiAuth, (req, res) => {
     const m = repo.contract.cashOutReferencingServices(id);
     if (m > 0) {
       return res.status(409).json({ error: `This contract still has ${m} cash-out entr${m === 1 ? 'y' : 'ies'} linked to one of its services (live or in the Recycle Bin). Permanently deleting it would orphan ${m === 1 ? 'that entry' : 'those entries'} — unlink or restore ${m === 1 ? 'it' : 'them'} first.` });
+    }
+    // Contract Phase A: contract_allowances CASCADEs the same way, and cash_out.contract_allowance_id
+    // has no ON DELETE action either — same crash, same pre-flight count.
+    const k = repo.contract.cashOutReferencingAllowances(id);
+    if (k > 0) {
+      return res.status(409).json({ error: `This contract still has ${k} cash-out entr${k === 1 ? 'y' : 'ies'} drawing against one of its allowances (live or in the Recycle Bin). Permanently deleting it would orphan ${k === 1 ? 'that entry' : 'those entries'} — unlink or restore ${k === 1 ? 'it' : 'them'} first.` });
     }
   }
   TRASH_REPO[table].hardDelete(id); // contract_payment_dates / contract_services children cascade
@@ -1318,6 +1627,24 @@ function computeOverview(range) {
   const appliedAgainstContract = cumulativePaid;
   const overOffset = { over: totalContract > 0 && appliedAgainstContract > totalContract, contractPaise: totalContract, appliedPaise: appliedAgainstContract, excessPaise: Math.max(0, appliedAgainstContract - totalContract) };
 
+  // Contract Phase A — contractPriceDerivation. A rate-priced contract stores the PRODUCT of its
+  // rate and its measured area in price_of_contract_paise, so that owed, figure A, the PDF and the
+  // Contractor Payments "Remaining" line all keep reading the one column they always read. That
+  // makes the stored price a DERIVED value, and a derived value that is materialised can drift —
+  // a backup restored from a file whose stored price disagreed with its own rate and area is the
+  // realistic way in, since the import writes columns verbatim rather than re-running the write
+  // path. This recomputes the product for every rate-priced live contract and flags a mismatch.
+  // Flag-and-log only: it reports the figure AS STORED and corrects nothing, exactly like the two
+  // checks above. Re-saving the contract on the Contract Details page rewrites it.
+  const priceDrift = [];
+  for (const c of contractRows) {
+    const expected = unitPricePaise(c.rate_per_sqft_paise, c.measured_area_milli_sqft);
+    if (expected != null && expected !== (c.price_of_contract_paise || 0)) {
+      priceDrift.push({ contractId: c.id, storedPaise: c.price_of_contract_paise, expectedPaise: expected });
+    }
+  }
+  const contractPriceDerivation = { drifted: priceDrift.length > 0, contracts: priceDrift };
+
   if (!splitSumsToTotal || !mainsSumToTotal || !subsSumToMains) {
     console.error('Overview reconciliation failed', { splitSumsToTotal, mainsSumToTotal, subsSumToMains });
   }
@@ -1326,6 +1653,9 @@ function computeOverview(range) {
   }
   if (overOffset.over) {
     console.warn(`Overview reconciliation: contractor payments (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
+  }
+  if (contractPriceDerivation.drifted) {
+    console.warn(`Overview reconciliation: ${priceDrift.length} rate-priced contract(s) have a stored price that no longer equals rate × measured area — ${priceDrift.map((d) => `#${d.contractId}: stored ${d.storedPaise} paise, rate × area ${d.expectedPaise} paise`).join('; ')}. The STORED figure is what every total above uses; re-save the contract to recompute it.`);
   }
 
   return {
@@ -1346,9 +1676,10 @@ function computeOverview(range) {
     // surface it later). ok=false means the summary doesn't self-reconcile. Every sub-object is a
     // flag over data reported AS-IS — nothing here adjusts a figure.
     reconciliation: {
-      ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over,
+      ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over && !contractPriceDerivation.drifted,
       orphanedContractorPayments: orphan,          // { count, amountPaise, contractIds }   (Phase 4D)
       overOffset: overOffset,                      // { over, contractPaise, appliedPaise, excessPaise } (Phase 5E)
+      contractPriceDerivation,                     // { drifted, contracts: [{ contractId, storedPaise, expectedPaise }] } (Phase A)
     },
   };
 }
@@ -1676,9 +2007,11 @@ function requireAuth(req, res, next) {
 const BACKUP_SCHEMA_VERSION = 1;
 // Import/insert order = parents before children (foreign keys are ON). Services phase: contract_services
 // sits AFTER contract (its parent) and BEFORE cash_out (which references it via contract_service_id).
-const BACKUP_TABLES = ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'];
+// Contract Phase A: contract_allowances sits AFTER contract (its parent) and BEFORE cash_out
+// (which references it via contract_allowance_id) — same placement rule as contract_services.
+const BACKUP_TABLES = ['contract', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'];
 // The AUTOINCREMENT tables among them (settings is key/value, not autoincrement).
-const BACKUP_AUTOINC = ['contract', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'loans', 'cash_in', 'cash_out'];
+const BACKUP_AUTOINC = ['contract', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'loans', 'cash_in', 'cash_out'];
 
 // TABLES THE IMPORT OWNS (clears during teardown). SINGLE SOURCE OF TRUTH for the teardown loop.
 // Ordered CHILDREN-FIRST so DELETE never trips a foreign key and never leans on an implicit
@@ -1691,7 +2024,10 @@ const BACKUP_AUTOINC = ['contract', 'contract_services', 'contract_payment_dates
 //   fk chain (Services phase): contract ← contract_payment_dates, contractor_payments, contract_services;
 //   and contract_services ← cash_out (contract_service_id). Children-first teardown: cash_out (child of
 //   contract_services) precedes contract_services, which precedes contract.
-const IMPORT_OWNED_TABLES = ['cash_out', 'contract_services', 'contract_payment_dates', 'contractor_payments', 'contract', 'cash_in', 'loans', 'settings'];
+//   Contract Phase A adds contract ← contract_allowances ← cash_out (contract_allowance_id), so
+//   contract_allowances slots in after cash_out and before contract, same as contract_services.
+//   assertImportOwnershipComplete() below fails the boot if that is ever forgotten.
+const IMPORT_OWNED_TABLES = ['cash_out', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'contract', 'cash_in', 'loans', 'settings'];
 
 // Startup drift guard. If any table carries a foreign key INTO an import-owned table but is not
 // itself owned, then clearing the owned parent would cascade/orphan that table's rows implicitly
@@ -1720,14 +2056,21 @@ assertImportOwnershipComplete();
 
 // Explicit column lists so an import writes ids + every foreign key verbatim.
 const BACKUP_COLS = {
-  contract: ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company', 'created_at', 'updated_at', 'deleted_at'],
-  contract_services: ['id', 'contract_id', 'name', 'price_paise', 'created_at', 'updated_at', 'deleted_at'],
+  contract: ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company',
+    'rate_per_sqft_paise', 'measured_area_milli_sqft', 'completion_period_months', 'supervision_rate_pct', 'specified_brands', 'excluded_scope', 'owner_obligations',
+    'created_at', 'updated_at', 'deleted_at'],
+  // Contract Phase A dropped price_paise. An OLDER backup that still carries the key imports
+  // fine — rows are written through this explicit column list, so an extra key is ignored (and
+  // the figures themselves survive in settings._archived_service_prices_v1, written by the
+  // migration that dropped the column).
+  contract_services: ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at'],
+  contract_allowances: ['id', 'contract_id', 'name', 'cap_kind', 'cap_paise', 'cap_rate_per_sqft_paise', 'area_milli_sqft', 'sort_order', 'created_at', 'updated_at', 'deleted_at'],
   contract_payment_dates: ['id', 'contract_id', 'pay_date', 'created_at'],
   contractor_payments: ['id', 'contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'remarks', 'created_at', 'updated_at', 'deleted_at'],
   loans: ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at'],
   settings: ['key', 'value'],
   cash_in: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason', 'created_at', 'updated_at', 'deleted_at'],
-  cash_out: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id', 'created_at', 'updated_at', 'deleted_at'],
+  cash_out: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id', 'contract_allowance_id', 'created_at', 'updated_at', 'deleted_at'],
 };
 
 // Phase 8B — settings keys that hold your family's CONTACT details (Gmail addresses + WhatsApp
@@ -1762,7 +2105,7 @@ function validateBackup(data) {
   const T = data.tables;
   if (!T || typeof T !== 'object') return { error: 'Backup is missing its "tables" section.' };
   for (const t of BACKUP_TABLES) {
-    if ((t === 'contract_payment_dates' || t === 'contractor_payments' || t === 'contract_services') && T[t] === undefined) continue; // optional (older backups predate them)
+    if ((t === 'contract_payment_dates' || t === 'contractor_payments' || t === 'contract_services' || t === 'contract_allowances') && T[t] === undefined) continue; // optional (older backups predate them)
     if (!Array.isArray(T[t])) return { error: `Backup is missing or has an invalid "${t}" table.` };
   }
 
@@ -1777,6 +2120,15 @@ function validateBackup(data) {
     { const d = parseIsoDate(r.date_signed); if (!(r.date_signed == null || (!d.error && d.date))) return { error: `contract: date_signed must be ISO YYYY-MM-DD or null (got ${JSON.stringify(r.date_signed)}).` }; }
     { const d = parseIsoDate(r.contract_end_date); if (!(r.contract_end_date == null || (!d.error && d.date))) return { error: `contract: contract_end_date must be ISO YYYY-MM-DD or null (got ${JSON.stringify(r.contract_end_date)}).` }; }
     if (!optStr(r.company)) return { error: 'contract: company must be a string or null.' }; // Services phase (Part F)
+    // Contract Phase A — rate-based pricing + optional metadata. All nullable (every pre-Phase-A
+    // backup has them absent, which reads as null and is correct).
+    if (!optInt(r.rate_per_sqft_paise)) return { error: 'contract: rate_per_sqft_paise must be integer paise or null.' };
+    if (!optInt(r.measured_area_milli_sqft)) return { error: 'contract: measured_area_milli_sqft must be an integer number of thousandths of a square foot, or null.' };
+    if (!optInt(r.completion_period_months)) return { error: 'contract: completion_period_months must be a whole number of months or null.' };
+    if (!optNum(r.supervision_rate_pct)) return { error: 'contract: supervision_rate_pct must be a number or null.' };
+    for (const f of ['specified_brands', 'excluded_scope', 'owner_obligations']) {
+      if (!optStr(r[f])) return { error: `contract: ${f} must be a string or null.` };
+    }
     contractIds.add(r.id);
   }
   // Services phase (Part A) — contract_services rows (optional table). Collect valid ids so a debit's
@@ -1786,8 +2138,27 @@ function validateBackup(data) {
     if (!isInt(r.id)) return { error: 'contract_services: a row has a non-integer id.' };
     if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_services: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
     if (typeof r.name !== 'string' || !r.name.trim()) return { error: 'contract_services: name must be a non-empty string.' };
-    if (!optInt(r.price_paise)) return { error: 'contract_services: price_paise must be integer paise or null.' };
+    // price_paise is NOT checked: Contract Phase A removed the column. A backup that still carries
+    // the key is accepted and the value dropped on the way in (it is not in BACKUP_COLS).
     serviceIds.add(r.id);
+  }
+  // Contract Phase A — contract_allowances (optional table). Same shape of checks as services, plus
+  // the cap-kind invariant: a lump cap MUST have its rupee ceiling, a per-sqft cap MUST have its
+  // rate, and the area on a per-sqft cap stays optional (no area = a rate ceiling with no rupee
+  // position, which is a legitimate state, not a broken row).
+  const allowanceIds = new Set();
+  for (const r of (T.contract_allowances || [])) {
+    if (!isInt(r.id)) return { error: 'contract_allowances: a row has a non-integer id.' };
+    if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_allowances: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
+    if (typeof r.name !== 'string' || !r.name.trim()) return { error: 'contract_allowances: name must be a non-empty string.' };
+    if (r.cap_kind !== 'lump' && r.cap_kind !== 'per_sqft') return { error: `contract_allowances: unknown cap_kind ${JSON.stringify(r.cap_kind)} (expected 'lump' or 'per_sqft').` };
+    if (!optInt(r.cap_paise)) return { error: 'contract_allowances: cap_paise must be integer paise or null.' };
+    if (!optInt(r.cap_rate_per_sqft_paise)) return { error: 'contract_allowances: cap_rate_per_sqft_paise must be integer paise or null.' };
+    if (!optInt(r.area_milli_sqft)) return { error: 'contract_allowances: area_milli_sqft must be an integer number of thousandths of a square foot, or null.' };
+    if (!optInt(r.sort_order)) return { error: 'contract_allowances: sort_order must be an integer or null.' };
+    if (r.cap_kind === 'lump' && !isInt(r.cap_paise)) return { error: 'contract_allowances: a lump-sum allowance needs a cap_paise amount.' };
+    if (r.cap_kind === 'per_sqft' && !isInt(r.cap_rate_per_sqft_paise)) return { error: 'contract_allowances: a per-square-foot allowance needs a cap_rate_per_sqft_paise rate.' };
+    allowanceIds.add(r.id);
   }
   for (const r of (T.contract_payment_dates || [])) {
     if (!isInt(r.id)) return { error: 'contract_payment_dates: a row has a non-integer id.' };
@@ -1841,6 +2212,9 @@ function validateBackup(data) {
     // (undefined -> NULL). If present, it must resolve to a service inside the file (referential
     // sanity); the DB's partial-unique index is the ultimate one-service-one-live-debit backstop on insert.
     if (!(r.contract_service_id == null || (isInt(r.contract_service_id) && serviceIds.has(r.contract_service_id)))) return { error: `cash_out: contract_service_id ${JSON.stringify(r.contract_service_id)} is not present in the backup's contract_services.` };
+    // Contract Phase A: the allowance draw must resolve inside the file too. Absent on every
+    // pre-Phase-A backup, which reads as null.
+    if (!(r.contract_allowance_id == null || (isInt(r.contract_allowance_id) && allowanceIds.has(r.contract_allowance_id)))) return { error: `cash_out: contract_allowance_id ${JSON.stringify(r.contract_allowance_id)} is not present in the backup's contract_allowances.` };
   }
   return { ok: true };
 }

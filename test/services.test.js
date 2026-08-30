@@ -1,7 +1,13 @@
-// Services phase — contract services (A), remainder (B), the debit service picker + the
-// one-service-one-live-debit guard (C/D), per-user customs (E), company (F). API + direct-index coverage.
-// The reimbursement offset is gone, so the service link is now pure PROVENANCE (which service a debit
-// was for) and no cash-out body carries a contract-stated amount any more.
+// Services phase — contract services (A), the debit service picker + the one-service-one-live-debit
+// guard (C/D), per-user customs (E), company (F). API + direct-index coverage.
+//
+// TWO things this file used to cover are gone with Contract Phase A:
+//   · the service PRICE. The contract is a fixed unit-rate lump sum whose schedule of work attaches
+//     no rupee figure to any scope item, so price_paise could only hold an invented number.
+//   · the REMAINDER line it fed (stated − Σ priced services). With no priced services it could only
+//     ever equal the stated total, restating a figure already on screen.
+// What is left is asserted below: a service is a NAME, every live service is linkable, and the
+// one-live-debit guard is unchanged (it never depended on the price).
 const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
@@ -16,43 +22,49 @@ const mkContract = async (stated = '100000.00', extra = {}) => {
   assert.strictEqual(r.status, 201, JSON.stringify(r.json));
   return r.json.contract;
 };
-const addService = async (cid, name, priceRupees) => {
-  const r = await H.post(`/api/contracts/${cid}/services`, { name, priceRupees }, { cookie });
+const addService = async (cid, name) => {
+  const r = await H.post(`/api/contracts/${cid}/services`, { name }, { cookie });
   assert.strictEqual(r.status, 201, JSON.stringify(r.json));
   return r.json.service;
 };
 const getContract = async () => (await H.get('/api/contracts', { cookie })).json.contracts[0];
 
-// ── Part A — services with and without prices ─────────────────────────────────────────────────────
-test('Part A — services can be added with a price or without one; unpriced services are kept', async () => {
+// ── Part A — services are a SCOPE LIST: a name, and nothing else ─────────────────────────────────
+test('Part A — a service is a name; no price is stored, asked for, or returned', async () => {
   const c = await mkContract();
-  const priced = await addService(c.id, 'Electrical', '40000');
-  const unpriced = await addService(c.id, 'Consultation', '');
-  assert.strictEqual(priced.pricePaise, 4000000);
-  assert.strictEqual(unpriced.pricePaise, null, 'a service with no price stores NULL, not 0');
-  const got = await getContract();
-  assert.strictEqual(got.services.length, 2, 'both services returned on the contract');
+  const svc = await addService(c.id, 'Electrical');
+  assert.deepStrictEqual(Object.keys(svc).sort(), ['id', 'name'], 'the API shape is exactly { id, name }');
+  assert.strictEqual('price_paise' in H.db.prepare('SELECT * FROM contract_services WHERE id = ?').get(svc.id), false,
+    'the column itself is gone from the table');
+  const second = await addService(c.id, 'Consultation');
+  assert.strictEqual((await getContract()).services.length, 2, 'both services returned on the contract');
   // soft-delete removes it from the live list
-  assert.strictEqual((await H.del(`/api/contracts/${c.id}/services/${unpriced.id}`, { cookie })).status, 200);
+  assert.strictEqual((await H.del(`/api/contracts/${c.id}/services/${second.id}`, { cookie })).status, 200);
   assert.strictEqual((await getContract()).services.length, 1, 'soft-deleted service drops out of the live list');
 });
 
-// ── Part B — remainder line, including negative ───────────────────────────────────────────────────
-test('Part B — remainder = stated − Σ priced services (positive), and goes negative sensibly', async () => {
+test('Part A — a stale client still sending priceRupees is IGNORED, not rejected', async () => {
+  const c = await mkContract();
+  const r = await H.post(`/api/contracts/${c.id}/services`, { name: 'Plumbing', priceRupees: '40000' }, { cookie });
+  assert.strictEqual(r.status, 201, 'the extra field does not 400 an otherwise valid save');
+  assert.deepStrictEqual(Object.keys(r.json.service).sort(), ['id', 'name'], 'and nothing about it is stored');
+});
+
+// ── Part B — the remainder line is GONE ──────────────────────────────────────────────────────────
+test('Part B — no remainder is reported: with no service prices there is nothing to subtract', async () => {
   const c = await mkContract('1000000.00'); // ₹10,00,000
-  assert.strictEqual((await getContract()).remainderPaise, 100000000, 'no services -> whole value remains');
-  await addService(c.id, 'A', '300000');    // ₹3,00,000
-  assert.strictEqual((await getContract()).remainderPaise, 70000000, '₹7,00,000 remains');
-  await addService(c.id, 'B', '900000');    // pushes priced total to ₹12,00,000 > ₹10,00,000
-  assert.strictEqual((await getContract()).remainderPaise, -20000000, 'remainder is SIGNED negative (₹2,00,000 over)');
-  await addService(c.id, 'C', '');          // an UNPRICED service does not move the remainder
-  assert.strictEqual((await getContract()).remainderPaise, -20000000, 'unpriced service ignored in the remainder');
+  await addService(c.id, 'A');
+  await addService(c.id, 'B');
+  const got = await getContract();
+  assert.strictEqual(got.remainderPaise, undefined, 'remainderPaise is removed from the payload');
+  assert.strictEqual(got.servicesPricedTotalPaise, undefined, 'so is the priced-services total that fed it');
+  assert.strictEqual(got.statedAmountPaise, 100000000, 'the stated total is untouched by how many services exist');
 });
 
 // ── Part C — the picker fills the offset; manual entry still works ────────────────────────────────
 test('Part C — a debit linking a service records the service id, and no amount', async () => {
   const c = await mkContract();
-  const svc = await addService(c.id, 'Electrical', '40000');
+  const svc = await addService(c.id, 'Electrical');
   const deb = await H.post('/api/cash-out', { amountRupees: '32000.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id }, { cookie });
   assert.strictEqual(deb.status, 201, JSON.stringify(deb.json));
   assert.strictEqual(deb.json.entry.contractServiceId, svc.id, 'the service link (provenance) is recorded');
@@ -67,13 +79,22 @@ test('Part C — an in-contract debit with NO service picked still works exactly
   assert.strictEqual(deb.json.entry.contractStatedPaise, null);
 });
 
-test('Part C — an unpriced service cannot be linked; scope=extra clears any link', async () => {
+test('Part C — EVERY live service is linkable now; a service that does not exist still is not', async () => {
   const c = await mkContract();
-  const unpriced = await addService(c.id, 'Consultation', '');
-  const bad = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: unpriced.id }, { cookie });
-  assert.strictEqual(bad.status, 400, 'linking an unpriced service is rejected');
-  const priced = await addService(c.id, 'Electrical', '40000');
-  const extra = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '1.0', contractScope: 'extra', contractServiceId: priced.id }, { cookie });
+  const svc = await addService(c.id, 'Consultation');
+  // The old rule ("only a PRICED service can be linked") went out with the column. This service
+  // would have been rejected before Contract Phase A; it must be accepted now.
+  const ok = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id }, { cookie });
+  assert.strictEqual(ok.status, 201, JSON.stringify(ok.json));
+  assert.strictEqual(ok.json.entry.contractServiceId, svc.id);
+  const bad = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id + 9999 }, { cookie });
+  assert.strictEqual(bad.status, 400, 'a service id that resolves to nothing is still rejected');
+});
+
+test('Part C — scope=extra clears any service link', async () => {
+  const c = await mkContract();
+  const svc = await addService(c.id, 'Electrical');
+  const extra = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '1.0', contractScope: 'extra', contractServiceId: svc.id }, { cookie });
   assert.strictEqual(extra.status, 201);
   assert.strictEqual(extra.json.entry.contractServiceId, null, 'scope=extra forces the service link to NULL');
 });
@@ -81,7 +102,7 @@ test('Part C — an unpriced service cannot be linked; scope=extra clears any li
 // ── Part D — one service, one offset (API + directly against the index) ───────────────────────────
 test('Part D — two live debits cannot claim one service (API 409, naming the existing debit)', async () => {
   const c = await mkContract();
-  const svc = await addService(c.id, 'Electrical', '40000');
+  const svc = await addService(c.id, 'Electrical');
   const body = (d) => ({ amountRupees: '32000.00', txDate: d, byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id });
   const first = await H.post('/api/cash-out', body('2026-07-12'), { cookie });
   assert.strictEqual(first.status, 201);
@@ -92,7 +113,7 @@ test('Part D — two live debits cannot claim one service (API 409, naming the e
 
 test('Part D — the invariant is enforced in the DB (partial unique index), not just app code', () => {
   const cid = H.seedContract();
-  const sid = Number(H.db.prepare("INSERT INTO contract_services (contract_id, name, price_paise) VALUES (?, 'E', 4000000)").run(cid).lastInsertRowid);
+  const sid = Number(H.db.prepare("INSERT INTO contract_services (contract_id, name) VALUES (?, 'E')").run(cid).lastInsertRowid);
   const ins = (d) => H.db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, ledger_code, contract_scope, contract_service_id) VALUES (100,?,'user','5.0','included',?)").run(d, sid);
   ins('2026-07-12');
   assert.throws(() => ins('2026-07-13'), /UNIQUE/, 'a second LIVE debit on the same service violates idx_cash_out_service_live');
@@ -103,7 +124,7 @@ test('Part D — the invariant is enforced in the DB (partial unique index), not
 
 test('Part D — soft-delete RELEASES the service; restore REFUSES if it has since been claimed', async () => {
   const c = await mkContract();
-  const svc = await addService(c.id, 'Electrical', '40000');
+  const svc = await addService(c.id, 'Electrical');
   const body = (d) => ({ amountRupees: '32000.00', txDate: d, byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id });
   const first = (await H.post('/api/cash-out', body('2026-07-12'), { cookie })).json.entry.id;
   assert.strictEqual((await H.del(`/api/cash-out/${first}`, { cookie })).status, 200, 'soft-delete the first debit');
@@ -118,7 +139,7 @@ test('Part D — soft-delete RELEASES the service; restore REFUSES if it has sin
 
 test('Part C/D — editing a linked debit WITHOUT sending contractServiceId PRESERVES the link', async () => {
   const c = await mkContract();
-  const svc = await addService(c.id, 'Electrical', '40000');
+  const svc = await addService(c.id, 'Electrical');
   const first = (await H.post('/api/cash-out', { amountRupees: '32000.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id }, { cookie })).json.entry.id;
   // The editable table's PUT does NOT carry contractServiceId; the link must survive an amount edit.
   const put = await H.put(`/api/cash-out/${first}`, { amountRupees: '35000.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included' }, { cookie });
@@ -132,7 +153,7 @@ test('Part C/D — editing a linked debit WITHOUT sending contractServiceId PRES
 // ── Part D — a linked service does NOT move the dues maths (cumulative under a range) ──────────────
 test('Part D — a service-linked debit leaves owed at stated − paid, cumulative under a range', async () => {
   const c = await mkContract('100000.00');
-  const svc = await addService(c.id, 'Electrical', '40000');
+  const svc = await addService(c.id, 'Electrical');
   assert.strictEqual((await H.post('/api/contractor-payments', { contractId: c.id, amountRupees: '40000.00', payDate: '2026-07-10' }, { cookie })).status, 201);
   const deb = await H.post('/api/cash-out', { amountRupees: '32000.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included', contractServiceId: svc.id }, { cookie });
   assert.strictEqual(deb.status, 201);

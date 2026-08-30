@@ -575,6 +575,9 @@
       const toCsv = (header, rows) => '﻿' + [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
       const rupees = (paise) => (paise == null ? '' : paiseToInput(paise)); // plain rupees, e.g. 14000.00
       const scopeLabel = (s) => (s === 'included' ? 'Yes' : s === 'extra' ? 'No' : (s || '')); // "Contract Included"
+      // Contract Phase A: areas are stored as thousandths of a square foot (see db.js).
+      const sqft = (milli) => (milli == null ? '' : String(milli / 1000));
+      const pricingBasis = (c) => (c.pricingMode === 'rate' ? 'Rate x measured area' : c.pricingMode === 'typed' ? 'Stated amount' : 'No price stated');
 
       const downloadCsvBtn = document.getElementById('downloadCsvBtn');
       downloadCsvBtn.addEventListener('click', async () => {
@@ -617,11 +620,45 @@
             (ln.loans || []).map((l, i) => [i + 1, rupees(l.amountPaise), l.bankName, l.interestRate == null ? '' : l.interestRate, l.tenure]),
           )]);
 
-          // Contracts (one row per contract; scheduled payment dates joined)
+          // Contracts (one row per contract; scheduled payment dates joined). Contract Phase A adds
+          // the rate/area pair, the basis the stated amount came from, and the optional metadata —
+          // "Stated amount" alone no longer says whether it was typed or derived.
           files.push([`plannr-contracts-${stamp}.csv`, toCsv(
-            ['Sl.No', 'Contractor', 'Area of work', 'Ledger', 'Amount (₹)', 'Stated amount (₹)', 'Date signed', 'Date ends', 'Payment dates'],
-            contractsList.map((c, i) => [i + 1, c.contractorName, c.areaOfWork, c.ledger, rupees(c.amountPaise), rupees(c.statedAmountPaise), fmtDate(c.dateSigned), fmtDate(c.dateEnds), (c.paymentDates || []).map(fmtDate).join('; ')]),
+            ['Sl.No', 'Contractor', 'Area of work', 'Ledger', 'Amount (₹)', 'Stated amount (₹)', 'Pricing basis',
+             'Rate per sq ft (₹)', 'Measured area (sq ft)', 'Date signed', 'Date ends', 'Completion period (months)',
+             'Expected completion', 'Supervision rate (%)', 'Specified brands', 'Excluded scope', 'Owner obligations', 'Payment dates'],
+            contractsList.map((c, i) => [i + 1, c.contractorName, c.areaOfWork, c.ledger, rupees(c.amountPaise), rupees(c.statedAmountPaise), pricingBasis(c),
+              rupees(c.ratePerSqftPaise), sqft(c.measuredAreaMilliSqft), fmtDate(c.dateSigned), fmtDate(c.dateEnds),
+              c.completionPeriodMonths == null ? '' : c.completionPeriodMonths, fmtDate(c.expectedCompletionDate),
+              c.supervisionRatePct == null ? '' : c.supervisionRatePct, c.specifiedBrands, c.excludedScope, c.ownerObligations,
+              (c.paymentDates || []).map(fmtDate).join('; ')]),
           )]);
+
+          // Allowance caps, with their DERIVED position. Written only when the contract actually has
+          // allowances — an empty file would just be one more thing to open and close.
+          // "Cap (₹)" is blank for a per-square-foot ceiling with no area recorded: there is no rupee
+          // cap yet, and the position column says so rather than showing a misleading 0.
+          const allowanceRows = contractsList.flatMap((c) => (c.allowances || []).map((a) => [
+            c.contractorName,
+            a.name,
+            a.capKind === 'per_sqft' ? 'Per sq ft' : 'Lump sum',
+            rupees(a.capPaise),
+            rupees(a.capRatePerSqftPaise),
+            sqft(a.areaMilliSqft),
+            rupees(a.effectiveCapPaise),
+            rupees(a.spentPaise),
+            a.entryCount,
+            a.positionPaise == null ? 'No cap set (no area recorded)'
+              : a.positionPaise < 0 ? 'Over by ' + rupees(-a.positionPaise)
+              : a.positionPaise > 0 ? 'Under by ' + rupees(a.positionPaise)
+              : 'At the cap',
+          ]));
+          if (allowanceRows.length) {
+            files.push([`plannr-allowances-${stamp}.csv`, toCsv(
+              ['Contract', 'Allowance', 'Cap type', 'Cap (₹)', 'Ceiling (₹/sq ft)', 'Area (sq ft)', 'Effective cap (₹)', 'Spent (₹)', 'Entries', 'Position'],
+              allowanceRows,
+            )]);
+          }
 
           // Contractor Payments (money paid to contractors, per contract)
           files.push([`plannr-contractor-payments-${stamp}.csv`, toCsv(

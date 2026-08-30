@@ -60,7 +60,13 @@ See `README.md` for the full table list. The ones worth extra context here:
   `cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL`) makes
   at most one live debit link any given `contract_services` row. It existed to stop one service
   offsetting the dues twice; with the reimbursement offset removed (§3) the link is pure provenance,
-  so the index now guards a bookkeeping rule rather than a figure. Kept as-is.
+  so the index now guards a bookkeeping rule rather than a figure. Kept as-is. Contract Phase A did
+  NOT touch it — it never depended on the service price — but it did remove the app-level rule that
+  sat beside it ("only a PRICED service can be linked"), which went out with the column.
+- **Many debits, one allowance — the deliberate non-index.** `idx_cash_out_allowance_live` is
+  partial and **not unique**, unlike its service counterpart. An allowance is a CAP that accumulates
+  a running spend from many entries; uniqueness there would break the feature rather than protect
+  it. The index exists for the rollup query, not as a constraint.
 - **Soft-delete everywhere.** The five Recycle Bin tables (`cash_in`, `cash_out`, `loans`, `contract`,
   `contractor_payments`) carry `deleted_at` (NULL = live); "delete" sets it, the Recycle Bin restores
   or permanently removes. Hard-deleting a contract is blocked while any live `contractor_payments` OR
@@ -99,6 +105,25 @@ third term is gone:
 optional: a contract with no stated price contributes 0 to Total contract (A) and 0 to owed, while its
 payments still count in B/D/pie.
 
+**The stated price may be DERIVED (Contract Phase A).** This contract is a fixed unit-rate lump sum:
+its price is `rate_per_sqft_paise × measured_area_milli_sqft`. Both halves are optional and
+independently editable — the rate is fixed at signing, the area is not known until final measurement.
+When both are present the write path MATERIALISES their product into `price_of_contract_paise`, so
+owed, figure A, the PDF and the Contractor Payments "Remaining" line all keep reading the one column
+they always read and nothing downstream learns about rates. `pricingMode` (`rate` | `typed` | `none`)
+tells the UI which it is, so a computed figure is never presented as one the owner typed. Because the
+stored price is derived-and-materialised it can drift — a restored backup writes columns verbatim
+rather than re-running the write path — so `reconciliation.contractPriceDerivation` recomputes and
+flags it (§4). Re-saving the contract is the repair.
+
+**Allowance caps are DISPLAYED, never settled.** `contract_allowances` holds the only rupee figures
+the contract attaches to named items. Spend against a cap is derived from live `cash_out` rows tagged
+with `contract_allowance_id`; the position is `effective cap − spend`, signed. Per the contract an
+overrun is added to the next progress payment and an underrun subtracted from the final — that is a
+decision the owner makes on the day, so **no allowance figure touches owed, Total contract, or any
+Overview total**. A `per_sqft` cap with no area recorded has no rupee ceiling at all and reports no
+position, rather than inventing an area to manufacture one.
+
 **Cumulative vs range-scoped (critical).** Owed and paid totals are a *balance* — summed over the full
 set. The pie, Paid-to-contractors (B) and Spent-by-self (C) are scoped to the selected date range. A
 date range that excludes a payment still leaves owed unchanged.
@@ -125,9 +150,13 @@ Contractor Payments shows "Remaining = stated − Σ payments", which is now the
 Every figure is reported as-is; these only detect + report (and log) inconsistencies:
 `ok` (false if any trip), `orphanedContractorPayments` (payments whose contract is soft-deleted/gone),
 `overOffset` (contractor payments exceed the contract value — the name is a holdover; with the offset
-gone `appliedPaise` is just the payments total). `includedDebitsMissingOffset` was **removed**: it
-fired on any `included` debit with a NULL/0 stated amount, which is now every ordinary entry. When
-`ok` is false a banner shows on `/overview`; the numbers themselves are never changed.
+gone `appliedPaise` is just the payments total), and `contractPriceDerivation` (Contract Phase A: a
+rate-priced contract whose stored `price_of_contract_paise` no longer equals rate × measured area —
+`{ drifted, contracts: [{ contractId, storedPaise, expectedPaise }] }`). `includedDebitsMissingOffset`
+was **removed**: it fired on any `included` debit with a NULL/0 stated amount, which is now every
+ordinary entry. When `ok` is false a banner shows on `/overview`; the numbers themselves are never
+changed. Note there is NO reconciliation check over contract services or allowances: services carry
+no figures at all now, and an allowance overrun is a normal state of the world, not an inconsistency.
 
 ---
 
@@ -146,6 +175,11 @@ fired on any `included` debit with a NULL/0 stated amount, which is now every or
   flow on the four file-producing paths in Data Backup.
 - **`npm run test:backup-crypto`** (`test-ui/backup-crypto.js`) → round-trips the encrypted backup
   format through the real export/import routes on a live temp DB.
+- **`npm run test:contract-phase-a`** (`test-ui/contract-phase-a.js`) → the Contract Details page in a
+  real browser: the derived-total readout appearing and disabling the typed field, the derived
+  expected completion date, the scope list with no price input left on it, seeding the ten allowance
+  caps, the two different over/under wordings, and drawing spend against a cap from the debit form.
+  Fails on any console error.
 
 ---
 
@@ -159,6 +193,17 @@ fired on any `included` debit with a NULL/0 stated amount, which is now every or
   backup first, which you must explicitly confirm you have (a modal names the exact file) before the
   import is allowed to proceed. Import is rejected outright — no partial taxonomy change — if any
   code would be removed while still referenced by existing spend.
+- **A destructive migration refusing to boot.** Two migrations in `db.js` can destroy data and both
+  REFUSE and explain rather than proceed silently: the Phase 10a ledger-taxonomy cleanup (which
+  deletes every `cash_out` row) and Contract Phase A's A3 step (which drops
+  `contract_services.price_paise`). Both are gated on their own `settings` marker, not the shared
+  `user_version`, so a database already stamped at the current schema version still runs them once.
+  Both print what is at stake and both approval hatches — an env var for Node/desktop
+  (`PLANNR_ALLOW_TAXONOMY_WIPE=1` / `PLANNR_ALLOW_SERVICE_PRICE_DROP=1`) and a `settings` key for the
+  Android build, which has no environment variables. Approve only after exporting a backup. Each is
+  pinned by a spawned-process fixture (`test/_taxonomy-guard-fixture.js`,
+  `test/_service-price-guard-fixture.js`) covering refuse / lose-nothing / repeat / both hatches /
+  ordinary paths unaffected.
 - **Database → encrypted snapshots (desktop mode only).** `backup-db.js` writes a consistent
   `VACUUM INTO` snapshot, AES-256-GCM-encrypted when `PLANNR_BACKUP_PASSPHRASE` is set; `decrypt-db.js`
   is the restore step. This applies to a `server.js` install; the Android app's own backup/restore
@@ -176,6 +221,21 @@ fired on any `included` debit with a NULL/0 stated amount, which is now every or
 - **Dormant columns kept on purpose** (`cash_out.phase`/`subpart`, `users.password_hash`, the
   contract's optional free-form `amount_paise`) — stored, unused, retained rather than dropped, to
   avoid a schema rebuild for no functional gain.
+- **`contract_services.price_paise` was DROPPED, not retired** — the one exception to the rule above,
+  and deliberately so. A retired-but-present money column is worse than a dropped one here: the form
+  would keep asking for a per-item price the contract does not have, and every answer would be a
+  number the owner made up. Dropping it is what removes the question. `ALTER TABLE … DROP COLUMN`
+  sufficed (no index or constraint referenced it), so no rebuild was needed. The migration is
+  marker-gated and REFUSES TO BOOT if any service actually holds a price, listing the figures in the
+  error and archiving them into `settings._archived_service_prices_v1` on an approved run — so they
+  survive in every backup even though the column does not. See §6.
+- **A derived price is materialised, not computed on read.** Rate × area is written into
+  `price_of_contract_paise` rather than assembled in `contractRow()`. That keeps owed, figure A, the
+  PDF and Contractor Payments reading exactly the column they always read (a one-line change instead
+  of five), at the cost of a value that can drift — which is why `contractPriceDerivation` exists to
+  catch it (§4). The trade was taken knowingly.
+- **Allowance spend is derived from tagged debits, never typed.** The alternative — a "spent so far"
+  field on each allowance — would be exactly the invented number that got the service price removed.
 - **Loan interest is a ledger spend, under 22.5.** Interest actually paid on a construction loan is
   recorded as an ordinary `cash_out` row, so it counts in total spend. `loans.interest_rate` is
   informational only (drives no calculation), so there is no derived figure to double-count against.

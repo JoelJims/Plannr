@@ -105,7 +105,8 @@ const ov = {
   // missing-offset reconciliation check) is gone with the offset itself — nothing reads
   // cash_out.contract_stated_paise any more, so there is no aggregate over it here.
   contracts: db.prepare(
-    `SELECT id, contractor_name, area_of_work, ledger_code, subledger_code, ledger_custom_name, subledger_custom_name, price_of_contract_paise
+    `SELECT id, contractor_name, area_of_work, ledger_code, subledger_code, ledger_custom_name, subledger_custom_name, price_of_contract_paise,
+            rate_per_sqft_paise, measured_area_milli_sqft
        FROM contract WHERE deleted_at IS NULL ORDER BY id ASC`
   ),
   paidByContract: db.prepare('SELECT contract_id, COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL GROUP BY contract_id'),
@@ -139,11 +140,11 @@ const cStmt = {
   payDatesFor: db.prepare('SELECT pay_date FROM contract_payment_dates WHERE contract_id = ? ORDER BY pay_date ASC, id ASC'),
   delPayDates: db.prepare('DELETE FROM contract_payment_dates WHERE contract_id = ?'),
   insPayDate: db.prepare('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?, ?)'),
-  servicesFor: db.prepare('SELECT id, name, price_paise FROM contract_services WHERE contract_id = ? AND deleted_at IS NULL ORDER BY id ASC'),
+  servicesFor: db.prepare('SELECT id, name FROM contract_services WHERE contract_id = ? AND deleted_at IS NULL ORDER BY id ASC'),
   serviceLive: db.prepare('SELECT * FROM contract_services WHERE id = ? AND deleted_at IS NULL'),
   serviceForContract: db.prepare('SELECT * FROM contract_services WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
-  insService: db.prepare('INSERT INTO contract_services (contract_id, name, price_paise) VALUES (?, ?, ?)'),
-  updService: db.prepare("UPDATE contract_services SET name = ?, price_paise = ?, updated_at = datetime('now') WHERE id = ?"),
+  insService: db.prepare('INSERT INTO contract_services (contract_id, name) VALUES (?, ?)'),
+  updService: db.prepare("UPDATE contract_services SET name = ?, updated_at = datetime('now') WHERE id = ?"),
   delService: db.prepare("UPDATE contract_services SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"),
   livePaymentsFor: db.prepare('SELECT COUNT(*) AS n FROM contractor_payments WHERE contract_id = ? AND deleted_at IS NULL'),
   // Part C — best-effort overdue heuristic: is there a LIVE payment recorded on exactly this scheduled
@@ -158,10 +159,43 @@ const cStmt = {
   cashOutReferencingServices: db.prepare(
     'SELECT COUNT(*) AS n FROM cash_out WHERE contract_service_id IN (SELECT id FROM contract_services WHERE contract_id = ?)'
   ),
-  // Service one-offset guard (the safety-critical pair)
-  serviceLivePriced: db.prepare('SELECT cs.id, cs.price_paise FROM contract_services cs JOIN contract c ON c.id = cs.contract_id WHERE cs.id = ? AND cs.deleted_at IS NULL AND c.deleted_at IS NULL'),
+  // One-live-debit-per-service guard (the safety-critical pair). Contract Phase A: this used to
+  // be serviceLivePriced and also returned price_paise, because only a PRICED service could be
+  // linked. Services carry no price now, so the question it answers is simply "is this a live
+  // service on the live contract" - the price half of the old rule went out with the column.
+  serviceLinkable: db.prepare('SELECT cs.id FROM contract_services cs JOIN contract c ON c.id = cs.contract_id WHERE cs.id = ? AND cs.deleted_at IS NULL AND c.deleted_at IS NULL'),
   serviceClaimedByOther: db.prepare('SELECT id, tx_date, amount_paise FROM cash_out WHERE contract_service_id = ? AND deleted_at IS NULL AND id != ?'),
   cashOutServiceId: db.prepare('SELECT contract_service_id FROM cash_out WHERE id = ?'),
+
+  // Contract Phase A - allowance caps. Same shape as the service statements above, with two
+  // differences that matter: an allowance is NOT tenant-scoped (the column was never added,
+  // post-collapse), and its spend is a SUM over many debits rather than a one-to-one link.
+  allowancesFor: db.prepare('SELECT id, name, cap_kind, cap_paise, cap_rate_per_sqft_paise, area_milli_sqft, sort_order FROM contract_allowances WHERE contract_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC'),
+  allowanceLive: db.prepare('SELECT * FROM contract_allowances WHERE id = ? AND deleted_at IS NULL'),
+  // Mirror of serviceLinkable: is this a live allowance on the LIVE contract? (No uniqueness
+  // check to go with it - many debits may draw against one cap; that is what a cap is.)
+  allowanceLinkable: db.prepare('SELECT ca.id FROM contract_allowances ca JOIN contract c ON c.id = ca.contract_id WHERE ca.id = ? AND ca.deleted_at IS NULL AND c.deleted_at IS NULL'),
+  allowanceForContract: db.prepare('SELECT * FROM contract_allowances WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
+  allowanceCount: db.prepare('SELECT COUNT(*) AS n FROM contract_allowances WHERE contract_id = ? AND deleted_at IS NULL'),
+  allowanceMaxOrder: db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM contract_allowances WHERE contract_id = ?'),
+  insAllowance: db.prepare('INSERT INTO contract_allowances (contract_id, name, cap_kind, cap_paise, cap_rate_per_sqft_paise, area_milli_sqft, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+  updAllowance: db.prepare("UPDATE contract_allowances SET name = ?, cap_kind = ?, cap_paise = ?, cap_rate_per_sqft_paise = ?, area_milli_sqft = ?, updated_at = datetime('now') WHERE id = ?"),
+  delAllowance: db.prepare("UPDATE contract_allowances SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"),
+  // Running spend per allowance: LIVE cash_out rows only, one grouped pass for the whole
+  // contract (idx_cash_out_allowance_live). Soft-deleting a debit releases its draw, exactly as
+  // it does for every other figure in the app.
+  allowanceSpendFor: db.prepare(
+    'SELECT co.contract_allowance_id AS id, COALESCE(SUM(co.amount_paise), 0) AS s, COUNT(*) AS c '
+    + 'FROM cash_out co JOIN contract_allowances ca ON ca.id = co.contract_allowance_id '
+    + 'WHERE ca.contract_id = ? AND co.deleted_at IS NULL AND co.contract_allowance_id IS NOT NULL '
+    + 'GROUP BY co.contract_allowance_id'
+  ),
+  // Mirror of cashOutReferencingServices: contract_allowances CASCADEs off a hard-deleted
+  // contract, but cash_out.contract_allowance_id has no ON DELETE action, so the same raw FK
+  // crash is possible and gets the same pre-flight count.
+  cashOutReferencingAllowances: db.prepare(
+    'SELECT COUNT(*) AS n FROM cash_out WHERE contract_allowance_id IN (SELECT id FROM contract_allowances WHERE contract_id = ?)'
+  ),
 };
 const contract = {
   list: () => cStmt.list.all(),
@@ -177,8 +211,8 @@ const contract = {
   servicesFor: (cid) => cStmt.servicesFor.all(cid),
   serviceLive: (id) => cStmt.serviceLive.get(id) || null,
   serviceForContract: (cid, sid) => cStmt.serviceForContract.get(sid, cid) || null,
-  insertService: (cid, name, price) => cStmt.insService.run(cid, name, price),
-  updateService: (id, name, price) => cStmt.updService.run(name, price, id),
+  insertService: (cid, name) => cStmt.insService.run(cid, name),
+  updateService: (id, name) => cStmt.updService.run(name, id),
   softDeleteService: (id) => cStmt.delService.run(id),
   livePaymentsFor: (cid) => cStmt.livePaymentsFor.get(cid).n,
   paymentOnDate: (cid, payDate) => !!cStmt.paymentOnDate.get(cid, payDate), // Part C
@@ -186,9 +220,23 @@ const contract = {
   paymentsForAny: (cid) => cStmt.paymentsForAny.get(cid).n,
   paymentContractId: (id) => cStmt.paymentContractId.get(id),
   cashOutReferencingServices: (cid) => cStmt.cashOutReferencingServices.get(cid).n,
-  serviceLivePriced: (sid) => cStmt.serviceLivePriced.get(sid),
+  serviceLinkable: (sid) => cStmt.serviceLinkable.get(sid),
   serviceClaimedByOther: (sid, excludeId) => cStmt.serviceClaimedByOther.get(sid, excludeId),
   cashOutServiceId: (id) => cStmt.cashOutServiceId.get(id),
+
+  // Contract Phase A - allowance caps
+  allowancesFor: (cid) => cStmt.allowancesFor.all(cid),
+  allowanceLive: (id) => cStmt.allowanceLive.get(id) || null,
+  allowanceLinkable: (aid) => cStmt.allowanceLinkable.get(aid),
+  allowanceForContract: (cid, aid) => cStmt.allowanceForContract.get(aid, cid) || null,
+  allowanceCount: (cid) => cStmt.allowanceCount.get(cid).n,
+  insertAllowance: (cid, v) => cStmt.insAllowance.run(cid, v.name, v.cap_kind, v.cap_paise, v.cap_rate_per_sqft_paise, v.area_milli_sqft, v.sort_order),
+  updateAllowance: (id, v) => cStmt.updAllowance.run(v.name, v.cap_kind, v.cap_paise, v.cap_rate_per_sqft_paise, v.area_milli_sqft, id),
+  softDeleteAllowance: (id) => cStmt.delAllowance.run(id),
+  nextAllowanceOrder: (cid) => cStmt.allowanceMaxOrder.get(cid).m + 1,
+  // -> Map(allowanceId -> { spentPaise, entryCount }); absent = no live spend against it yet.
+  allowanceSpendFor: (cid) => new Map(cStmt.allowanceSpendFor.all(cid).map((r) => [r.id, { spentPaise: r.s, entryCount: r.c }])),
+  cashOutReferencingAllowances: (cid) => cStmt.cashOutReferencingAllowances.get(cid).n,
 };
 
 // Column-list INSERT/UPDATE (contract) — statements built ONCE at boot via configure(); keyed by

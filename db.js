@@ -160,8 +160,30 @@ export function init() {
       subledger_custom_name   TEXT,             -- typed sub-ledger name when subledger_code = 'CUSTOM'
       amount_paise            INTEGER,          -- OPTIONAL free-form amount, paise (₹1=100) or NULL
       price_of_contract_paise INTEGER,          -- OPTIONAL stated amount, paise (dues math starts here); NULL = unstated
+      -- Contract Phase A — RATE-BASED PRICING. This household's contract is a fixed unit-rate lump
+      -- sum: the price is a rate per square foot times the FINAL MEASURED built-up area. Both are
+      -- OPTIONAL and independently editable at any time (the area is not known until final
+      -- measurement). When BOTH are non-NULL the stated price above is DERIVED —
+      -- price_of_contract_paise = round(rate_per_sqft_paise * measured_area_milli_sqft / 1000) — and
+      -- rewritten on every contract write, so owed/A/F and every existing consumer keep reading the
+      -- one column they always read. When either is NULL the stated price is whatever was TYPED.
+      -- (reconciliation.contractPriceDerivation flags any drift between the two.)
+      rate_per_sqft_paise     INTEGER,          -- OPTIONAL rate per sq ft, paise (₹1=100); NULL = not rate-priced
+      -- Area is a MEASUREMENT, not money, so it has no paise. Stored as an INTEGER number of
+      -- THOUSANDTHS of a square foot (1 sq ft = 1000) for the same reason money is integer paise:
+      -- rate x area must be exact integer arithmetic, never a float product rounded after the fact.
+      measured_area_milli_sqft INTEGER,         -- OPTIONAL final measured built-up area, milli-sq-ft; NULL = not measured yet
       contract_end_date       TEXT,             -- OPTIONAL 'date ends', ISO 'YYYY-MM-DD' or NULL
-      date_signed             TEXT,             -- Phase 2: required, ISO 'YYYY-MM-DD'
+      date_signed             TEXT,             -- OPTIONAL signing date, ISO 'YYYY-MM-DD' (Contract Phase A relaxed this from required)
+      -- Contract Phase A — OPTIONAL contract metadata. None of it drives a figure; completion_period_months
+      -- is the only one that derives anything (expectedCompletionDate = date_signed + N months, computed
+      -- at read time, never stored). supervision_rate_pct is a PERCENTAGE applied to change orders by
+      -- agreement — informational only, exactly like loans.interest_rate: no code multiplies by it.
+      completion_period_months INTEGER,         -- OPTIONAL whole months from signing to expected completion
+      supervision_rate_pct    REAL,             -- OPTIONAL supervision % on change orders; informational, drives no calculation
+      specified_brands        TEXT,             -- OPTIONAL free text: brands named in the contract
+      excluded_scope          TEXT,             -- OPTIONAL free text: work explicitly OUT of scope
+      owner_obligations       TEXT,             -- OPTIONAL free text: what the owner must supply/do
       created_at              TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at              TEXT,             -- soft-delete: NULL = live
@@ -206,24 +228,56 @@ export function init() {
       tenant_id             INTEGER NOT NULL REFERENCES users(id) -- Tenancy Phase 2: owning household (a users.id)
     );
 
-    -- 2c. contract_services: a contract's line-item services (Services phase, Part A). RETURNS after
-    --     Phase 5 dropped it, but NOT as an offset mechanism. Its job WAS to supply the number that
-    --     went in cash_out.contract_stated_paise; with that offset removed, a service is simply
-    --     something a debit can NAME (cash_out.contract_service_id) as what the spend was for. A
-    --     service is a NAME and an OPTIONAL price. Services need NOT sum to the contract total —
-    --     price_of_contract_paise stays the single source of truth for owed; services are informational
-    --     (the remainder line, Part B) and a pick-list for the debit form (Part C). Soft-delete.
-    --     Hard-cascades if the parent contract is ever hard-deleted (contracts are soft-deleted in
-    --     practice). Only PRICED, live services can be linked from a debit.
+    -- 2c. contract_services: a contract's SCOPE OF WORK — a plain list of names, nothing else.
+    --     History: it began as the source of cash_out.contract_stated_paise (the Phase 5E offset),
+    --     then kept an OPTIONAL price_paise feeding an informational "remainder" line. Contract
+    --     Phase A REMOVED price_paise outright. The contract this app tracks is a fixed unit-rate
+    --     lump sum: its schedule of work lists scope items and attaches NO price to any of them, so
+    --     a price field could only ever be filled with a number the owner made up — which then fed
+    --     a remainder ("stated minus priced services") that meant nothing. A service is now purely
+    --     something a debit can NAME (cash_out.contract_service_id) as what the spend was for.
+    --     Soft-delete. Hard-cascades if the parent contract is ever hard-deleted (contracts are
+    --     soft-deleted in practice). ANY live service can be linked from a debit — the old
+    --     "only a PRICED service is linkable" rule went out with the column.
     CREATE TABLE IF NOT EXISTS contract_services (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
-      name        TEXT    NOT NULL,             -- service name (required)
-      price_paise INTEGER,                      -- OPTIONAL price, paise (₹1=100); NULL = unpriced (can't be picked on a debit)
+      name        TEXT    NOT NULL,             -- service name (required) — the WHOLE row, by design
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at  TEXT,                         -- soft-delete: NULL = live
       tenant_id   INTEGER NOT NULL REFERENCES users(id) -- Services phase: owning household (mirrors the parent contract's tenant)
+    );
+
+    -- 2d. contract_allowances (Contract Phase A): the contract's ALLOWANCE CAPS — the only rupee
+    --     figures the contract itself attaches to anything. Entirely OPTIONAL: a contract with no
+    --     allowance rows behaves exactly as it did before this table existed.
+    --
+    --     Two kinds of cap, because the contract has two kinds:
+    --       'lump'     — a rupee ceiling for a named item (cap_paise).
+    --       'per_sqft' — a RATE ceiling in paise per square foot (cap_rate_per_sqft_paise). That is
+    --                     not a rupee figure until an area is supplied, so area_milli_sqft is
+    --                     OPTIONAL and, when it is absent, the row shows its ceiling as a rate and
+    --                     NO over/under position. Inventing an area to manufacture a rupee cap is
+    --                     precisely the mistake price_paise was removed for.
+    --
+    --     Spend is DERIVED, never typed: the sum of LIVE cash_out rows whose contract_allowance_id
+    --     points here. Position = effective cap − spend (positive = under, negative = over).
+    --     Per the contract, an overrun is added to the next progress payment and an underrun
+    --     subtracted from the final. Plannr DISPLAYS that position and settles nothing: no
+    --     allowance figure touches owed, Total contract, or any Overview total.
+    CREATE TABLE IF NOT EXISTS contract_allowances (
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id             INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      name                    TEXT    NOT NULL,   -- allowance name (required)
+      cap_kind                TEXT    NOT NULL,   -- 'lump' | 'per_sqft'
+      cap_paise               INTEGER,            -- 'lump': the rupee ceiling, paise. NULL for 'per_sqft'
+      cap_rate_per_sqft_paise INTEGER,            -- 'per_sqft': the ceiling rate, paise per sq ft. NULL for 'lump'
+      area_milli_sqft         INTEGER,            -- 'per_sqft' only, OPTIONAL: the area this allowance covers (milli-sq-ft)
+      sort_order              INTEGER NOT NULL DEFAULT 0, -- display order; the ten standard caps seed in contract order
+      created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at              TEXT                -- soft-delete: NULL = live
     );
 
     -- 3. cash_in: money credited / cash inflow. (Sl.No is NOT stored — it is a
@@ -275,7 +329,13 @@ export function init() {
       -- enforces that at most one LIVE debit links any given service. That index was built to stop a
       -- service offsetting dues twice; with the offset removed it now guards a bookkeeping rule
       -- ("record each service once") rather than any figure, and is kept for that reason.
-      contract_service_id INTEGER REFERENCES contract_services(id)
+      contract_service_id INTEGER REFERENCES contract_services(id),
+      -- Contract Phase A: which contract_allowances row this spend DRAWS AGAINST, or NULL (the
+      -- ordinary case). Deliberately NOT unique, unlike contract_service_id: an allowance
+      -- accumulates a RUNNING spend from many debits, which is the entire point of a cap.
+      -- idx_cash_out_allowance_live (non-unique, live rows only) is the rollup index; it is created
+      -- at the END of init() for the same reason the service index is.
+      contract_allowance_id INTEGER REFERENCES contract_allowances(id)
     );
 
     -- 5. loans: one-time loan record. NO EMI/repayment logic. interest_rate is INFORMATIONAL only
@@ -360,6 +420,8 @@ export function init() {
     -- Services phase: FK lookup for a contract's services, and a per-user uniqueness guard so the
     -- saved custom-name list never stores a duplicate for the same user.
     CREATE INDEX IF NOT EXISTS idx_contract_services_cid         ON contract_services(contract_id);
+    -- Contract Phase A: FK lookup for a contract's allowance rows (same shape as the services one).
+    CREATE INDEX IF NOT EXISTS idx_contract_allowances_cid       ON contract_allowances(contract_id);
     -- idx_ledger_customs_name (name-only, post-collapse) is created unconditionally inside the
     -- Step 2a migration below — never here, so a second boot never tries to recreate the OLD
     -- (tenant_id, name) index against a column that Step 2a has already dropped.
@@ -970,15 +1032,21 @@ export function init() {
         'ledger_custom_name', 'subledger_custom_name', 'phase', 'subpart', 'remarks',
         'created_at', 'updated_at', 'deleted_at']);
 
+    // contract_services' shape is no longer fixed here: price_paise exists only on a database that
+    // predates Contract Phase A's A3 drop, which runs LATER in init() than this collapse. A pinned
+    // column list would therefore fail one way or the other — "no such column: price_paise" on a
+    // fresh install (the CREATE above has no such column), or a silent loss of the old prices before
+    // A3 gets the chance to archive them. So: copy the column when it is there, skip it when it is
+    // not. Either way A3 removes it a few hundred lines below, with its own data-loss guard.
+    const csHasPrice = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'price_paise');
     rebuildDroppingTenant('contract_services', `
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
-      name        TEXT    NOT NULL,
-      price_paise INTEGER,
+      name        TEXT    NOT NULL,${csHasPrice ? '\n      price_paise INTEGER,' : ''}
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at  TEXT
-    `, ['id', 'contract_id', 'name', 'price_paise', 'created_at', 'updated_at', 'deleted_at']);
+    `, ['id', 'contract_id', 'name', ...(csHasPrice ? ['price_paise'] : []), 'created_at', 'updated_at', 'deleted_at']);
 
     rebuildDroppingTenant('cash_in', `
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1067,6 +1135,97 @@ export function init() {
     // chain retries next boot).
     const fkViol = db.prepare('PRAGMA foreign_key_check').all();
     if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
+  }
+
+  // ===========================================================================================
+  // Contract Phase A — the contract becomes a fixed unit-rate lump sum.
+  //
+  // Placed HERE, after the Tenancy Step 2a collapse above, ON PURPOSE. That collapse rebuilds
+  // `contract` and `cash_out` create-copy-swap from a FIXED column list, so any column added to
+  // either table EARLIER in init() is silently dropped again on a pre-v2 database (the only reason
+  // `company` survives is that somebody remembered to add it to that list too — an easy trap to
+  // fall into and an invisible one to fall out of). Adding these columns after the rebuild is
+  // order-independent: the collapse can strip whatever it likes, and this puts them back.
+  // ===========================================================================================
+
+  // --- A1. ADDITIVE: rate-based pricing + the optional contract metadata ---------------------
+  // Presence-keyed with no version gate, exactly like the Phase 2 loop: re-adding an absent
+  // nullable column is always correct and can never drop or overwrite anything. Existing rows get
+  // NULL, which is the right value — every one of these fields is optional, and a NULL rate/area
+  // just means the contract keeps whatever stated price was typed.
+  const contractColsPA = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  for (const [col, type] of [
+    ['rate_per_sqft_paise', 'INTEGER'], ['measured_area_milli_sqft', 'INTEGER'],
+    ['completion_period_months', 'INTEGER'], ['supervision_rate_pct', 'REAL'],
+    ['specified_brands', 'TEXT'], ['excluded_scope', 'TEXT'], ['owner_obligations', 'TEXT'],
+  ]) {
+    if (!contractColsPA.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+  }
+
+  // --- A2. ADDITIVE: the allowance link on cash_out, and its rollup index --------------------
+  const cashOutColsAllow = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  if (!cashOutColsAllow.includes('contract_allowance_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_allowance_id INTEGER REFERENCES contract_allowances(id)');
+  // NOT unique, unlike idx_cash_out_service_live. A service is claimed by at most one live debit;
+  // an allowance is a CAP that many debits draw against, so uniqueness here would break the
+  // feature rather than protect it. Partial + non-null, so an ordinary unlinked debit costs nothing.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
+
+  // --- A3. DESTRUCTIVE: drop contract_services.price_paise ------------------------------------
+  // The contract this app tracks prices nothing per service: the schedule of work lists scope items
+  // and attaches no rupee figure to any of them. A price field on a service could therefore only be
+  // filled with an invented number, which then fed an informational "remainder" (stated − sum of
+  // priced services) that meant nothing at all. The column goes.
+  //
+  // This is the one step in Phase A that can DESTROY data, so it follows the Phase 10a taxonomy
+  // guard's shape exactly:
+  //   · MARKER-gated on its own settings key, not the shared user_version counter — several test
+  //     fixtures reset user_version to exercise other migrations, and a "< N" gate would re-fire
+  //     this one every time they did. Presence of the column alone is not a safe key either (a
+  //     future re-add for a new purpose would re-arm the drop — the Phase 5B landmine).
+  //   · If any service actually HAS a price, REFUSE TO BOOT and say so, rather than dropping it
+  //     silently. Throwing leaves the marker unset, so the refusal repeats every boot instead of
+  //     being a one-shot the owner can miss.
+  //   · The common paths are untouched: a fresh install (no such column) and any database whose
+  //     services were all unpriced both proceed with no prompt.
+  //
+  // One difference from the taxonomy guard, because it costs five lines: on an APPROVED drop the
+  // prices are ARCHIVED into settings as JSON before the column goes. settings is in the backup
+  // export, so the figures survive in every future backup even though the column does not — the
+  // guard's "export a backup first" advice would otherwise be hollow, since the export's column
+  // list no longer mentions price_paise.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_service_price_removed_v1'").get()) {
+    const svcCols = db.prepare('PRAGMA table_info(contract_services)').all().map((c) => c.name);
+    if (svcCols.includes('price_paise')) {
+      const priced = db.prepare('SELECT id, name, price_paise FROM contract_services WHERE price_paise IS NOT NULL ORDER BY id ASC').all();
+      const approved = (isNode && process.env.PLANNR_ALLOW_SERVICE_PRICE_DROP === '1')
+        || !!db.prepare("SELECT 1 FROM settings WHERE key = '_service_price_drop_approved' AND value = '1'").get();
+      if (priced.length > 0 && !approved) {
+        const shown = priced.slice(0, 20).map((r) => `  · ${r.name}: ₹${(r.price_paise / 100).toFixed(2)}`).join('\n');
+        const more = priced.length > 20 ? `\n  … and ${priced.length - 20} more` : '';
+        throw new Error(
+          `Plannr stopped to protect your data.\n\n`
+          + `Contract services no longer carry a price, and completing that change DELETES the `
+          + `price column from contract_services. ${priced.length} service${priced.length === 1 ? ' has' : 's have'} a price stored here:\n\n`
+          + `${shown}${more}\n\n`
+          + `Under a fixed unit-rate lump sum contract no service has its own price, so these are `
+          + `figures nothing in the contract backs — which is why the field is being removed rather `
+          + `than kept. Nothing has been deleted by this check.\n\n`
+          + `Write these numbers down if you still want them, EXPORT A BACKUP (Data Backup > Export), `
+          + `then approve the change and start again:\n`
+          + `  · Node / desktop: set PLANNR_ALLOW_SERVICE_PRICE_DROP=1\n`
+          + `  · any build:      INSERT INTO settings (key, value) VALUES ('_service_price_drop_approved', '1');\n\n`
+          + `Until one of those is set, Plannr will keep refusing to start and your data stays untouched.`
+        );
+      }
+      if (priced.length > 0) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('_archived_service_prices_v1', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+          .run(JSON.stringify(priced));
+      }
+      // price_paise is in no index and no constraint, so a plain DROP COLUMN is enough — no
+      // create-copy-swap rebuild, and nothing else about the table changes.
+      db.exec('ALTER TABLE contract_services DROP COLUMN price_paise');
+    }
+    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_service_price_removed_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Phase 10a — the 23-category ledger taxonomy (public/ledgers.js) was replaced with a fresh
