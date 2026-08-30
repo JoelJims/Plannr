@@ -158,17 +158,18 @@
     });
     els.subSelect.addEventListener('change', () => syncCustom(els.subSelect, els.subCustomWrap, els.subCustom));
     els.bySelect.addEventListener('change', () => { els.customWrap.hidden = els.bySelect.value !== 'custom'; });
-    // The contract-stated field is GONE (the reimbursement offset was removed), so the only thing
-    // the 'included' scope reveals is the service picker — which now records PROVENANCE (which
-    // contract service this spend was for), not an offset amount. A non-contract ('extra') row shows
-    // neither, so the everyday entry path keeps its Phase-4 tap cost.
-    let pricedServices = []; // [{ id, name, pricePaise }] — priced + selectable, set by setServices()
+    // The contract-stated field is GONE (the reimbursement offset was removed), so the 'included'
+    // scope reveals only the two CONTRACT LINKS: which contract service this spend was for
+    // (provenance), and which allowance cap it draws against. Neither moves a figure. A non-contract
+    // ('extra') row shows neither, so the everyday entry path keeps its Phase-4 tap cost.
     function syncScope() {
       const on = els.scopeSelect.value === 'included';
       if (els.serviceWrap) els.serviceWrap.hidden = !on;
       if (els.serviceSelect && !on) els.serviceSelect.value = '';
+      if (els.allowanceWrap) els.allowanceWrap.hidden = !on;
+      if (els.allowanceSelect && !on) els.allowanceSelect.value = '';
     }
-    if (els.serviceWrap || els.serviceSelect) els.scopeSelect.addEventListener('change', syncScope);
+    if (els.serviceWrap || els.serviceSelect || els.allowanceWrap || els.allowanceSelect) els.scopeSelect.addEventListener('change', syncScope);
 
     buildLedgers();
     buildSubs('');
@@ -183,13 +184,28 @@
           list.map((u) => `<option value="user:${u.id}">${escapeHtml(u.displayName)}</option>`).join('') +
           `<option value="custom">Add custom…</option>`;
       },
-      // Services phase (Part C) — the priced, selectable services offered by the picker (the page
-      // pre-filters out any already claimed by a live debit, so the one-offset guard rarely trips).
+      // The selectable services (the page pre-filters out any already claimed by a live debit, so
+      // the one-live-debit guard rarely trips). Contract Phase A: a service is a NAME — there is no
+      // price to filter on and none to show in the option label.
       setServices(services) {
-        pricedServices = (services || []).filter((s) => s && s.pricePaise != null);
         if (!els.serviceSelect) return;
-        els.serviceSelect.innerHTML = '<option value="">— none (type the amount) —</option>' +
-          pricedServices.map((s) => `<option value="${s.id}">${escapeHtml(s.name + ' — ₹' + (s.pricePaise / 100).toLocaleString('en-IN'))}</option>`).join('');
+        els.serviceSelect.innerHTML = '<option value="">— none —</option>' +
+          (services || []).map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+      },
+      // Contract Phase A — the allowance caps this spend may draw against. Unlike services, an
+      // allowance is NOT consumed by being picked: many debits draw against one cap, so nothing is
+      // filtered out here. The label carries the cap so the choice is informed at the point of entry
+      // ('— no cap set' for a per-square-foot ceiling with no area recorded yet, which is a real
+      // state and not an error).
+      setAllowances(allowances) {
+        if (!els.allowanceSelect) return;
+        const label = (a) => {
+          if (a.effectiveCapPaise != null) return `${a.name} — cap ₹${(a.effectiveCapPaise / 100).toLocaleString('en-IN')}`;
+          if (a.capRatePerSqftPaise != null) return `${a.name} — ₹${(a.capRatePerSqftPaise / 100).toLocaleString('en-IN')}/sq ft, no area set`;
+          return a.name;
+        };
+        els.allowanceSelect.innerHTML = '<option value="">— none —</option>' +
+          (allowances || []).map((a) => `<option value="${a.id}">${escapeHtml(label(a))}</option>`).join('');
       },
       // Services phase (Part E) — the caller's saved custom LEDGER names, as a <datalist> for the input.
       setCustoms(names) {
@@ -239,6 +255,7 @@
         els.customWrap.hidden = true;
         els.scopeSelect.value = '';
         if (els.serviceSelect) els.serviceSelect.value = '';
+        if (els.allowanceSelect) els.allowanceSelect.value = '';
         syncScope();
         if (!opts.keepLedger) {
           els.ledgerSelect.value = '';
@@ -262,11 +279,15 @@
         if (els.ledgerSelect.value === CUSTOM_CODE) { body.ledgerCustomName = els.ledgerCustom.value.trim(); if (!body.ledgerCustomName) return { error: 'Enter a name for the custom ledger.' }; }
         if (els.subSelect.value === CUSTOM_CODE) { body.subledgerCustomName = els.subCustom.value.trim(); if (!body.subledgerCustomName) return { error: 'Enter a name for the custom sub-ledger.' }; }
         if (!els.scopeSelect.value) return { error: 'Select whether the work is included in the contract (Yes or No).' };
-        // Services phase (Part C): record WHICH service this spend was for (provenance). No longer
-        // gated on a stated amount — that field is gone. Only sent when a service is chosen;
-        // picking none sends no link, which stays perfectly valid.
+        // Record WHICH service this spend was for (provenance) and WHICH allowance cap it draws
+        // against. Both optional and independent: picking neither sends no link, which stays
+        // perfectly valid, and the key being ABSENT is what tells the server to preserve an
+        // existing link on an edit.
         if (els.serviceSelect && els.scopeSelect.value === 'included' && els.serviceSelect.value) {
           body.contractServiceId = Number(els.serviceSelect.value);
+        }
+        if (els.allowanceSelect && els.scopeSelect.value === 'included' && els.allowanceSelect.value) {
+          body.contractAllowanceId = Number(els.allowanceSelect.value);
         }
         return { body };
       },

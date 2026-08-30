@@ -289,6 +289,16 @@
           <small class="co-hint">Which contract service was this for? Leave as “none” if it doesn't map to one.</small>
         </div>
 
+        <!-- 7c. Allowance picker (Contract Phase A) — also only when the item is in the contract.
+             Tagging a debit here is what builds the running spend against that cap on Contract
+             Details. Unlike a service, an allowance is not used up by being picked: many debits draw
+             against one cap. It changes no figure on this page and none on the Overview. -->
+        <div class="field" id="allowanceWrap" hidden>
+          <label for="allowanceSelect">Allowance <span class="co-dim">(optional)</span></label>
+          <select id="allowanceSelect" name="allowanceSelect"></select>
+          <small class="co-hint">Does this spend come out of an allowance? Picking one adds it to that cap's running total on Contract Details — it doesn't change this entry's amount.</small>
+        </div>
+
         <div class="co-actions-row">
           <button type="submit" class="btn primary" id="saveBtn">Add entry</button>
           <button type="button" class="btn ghost" id="cancelBtn" hidden>Cancel</button>
@@ -356,6 +366,7 @@
       dateDay, dateMonth, dateYear,
       reason, scopeSelect,
       serviceSelect: $('serviceSelect'), serviceWrap: $('serviceWrap'), ledgerCustomList: $('ledgerCustomList'),
+      allowanceSelect: $('allowanceSelect'), allowanceWrap: $('allowanceWrap'),
     });
 
     // The SAME bulk-editable table used on the Overview page — ONE implementation.
@@ -407,16 +418,21 @@
       filterBar.setCount(entries.length, total);
     }
 
-    // Services phase (Part C) — the in-contract service picker offers this contract's PRICED services,
-    // MINUS any already claimed by a live debit (one service → one live debit), computed from the loaded
-    // entries. Refreshed after every add so a just-claimed service drops out of the list.
-    async function loadServices() {
+    // The two in-contract pickers, from one /api/contracts call.
+    //   · SERVICES — this contract's scope list MINUS any service already claimed by a live debit
+    //     (one service → one live debit), computed from the loaded entries, so a just-claimed one
+    //     drops out on the next refresh. Contract Phase A removed the price, so there is no longer a
+    //     "priced only" filter: every live service is selectable.
+    //   · ALLOWANCES — every live allowance, unfiltered: a cap is drawn against by many debits, so
+    //     one being used does not remove it from the list.
+    async function loadContractPickers() {
       try {
         const r = await fetch('/api/contracts');
         const contracts = r.ok ? ((await r.json()).contracts || []) : [];
         const claimed = new Set((entries || []).map((e) => e.contractServiceId).filter((x) => x != null));
-        editor.setServices(contracts.flatMap((c) => c.services || []).filter((s) => s.pricePaise != null && !claimed.has(s.id)));
-      } catch { editor.setServices([]); }
+        editor.setServices(contracts.flatMap((c) => c.services || []).filter((s) => !claimed.has(s.id)));
+        editor.setAllowances(contracts.flatMap((c) => c.allowances || []));
+      } catch { editor.setServices([]); editor.setAllowances([]); }
     }
     // Part E — the caller's saved custom ledger names for the datalist. Part 4 adds a removal path:
     // each name is also shown as a removable chip, so a mistyped one ("Cemnt") can be pruned.
@@ -527,7 +543,7 @@
       try {
         const res = await fetch('/api/cash-out', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(built.body) });
         const data = await res.json().catch(() => ({}));
-        if (res.ok) { await loadEntries(); await loadServices(); await loadCustoms(); resetForm({ keepLedger: true }); showCarry(); showMsg('Entry added. Ledger kept for the next entry.', 'success'); }
+        if (res.ok) { await loadEntries(); await loadContractPickers(); await loadCustoms(); resetForm({ keepLedger: true }); showCarry(); showMsg('Entry added. Ledger kept for the next entry.', 'success'); }
         else { showMsg(data.error || 'Could not save the entry.', 'error'); } // failed save: no reset, no carry — defaults stay clean
       } catch { showMsg('Network error. Please try again.', 'error'); }
       finally { saveBtn.disabled = false; }
@@ -536,7 +552,7 @@
     // Warn before leaving with unsaved edits in the table.
     window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
-    (async () => { await loadMe(); await loadEntries(); await loadServices(); await loadCustoms(); })();
+    (async () => { await loadMe(); await loadEntries(); await loadContractPickers(); await loadCustoms(); })();
   });
   </script>
 </body>

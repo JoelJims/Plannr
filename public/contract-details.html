@@ -63,14 +63,44 @@
     .cd-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; margin: 6px 0 0; }
     .cd-hint b { color: var(--accent); font-weight: 600; }
 
-    /* Services phase (Part A/B) — the line-item services list + the remainder line. */
-    .cd-remainder { font-family: var(--font-head); font-weight: 600; font-size: 15px; color: var(--accent); margin: 4px 0 16px; }
-    .cd-remainder.cd-over { color: #f8dca6; }
+    /* Contract services — a SCOPE LIST (name only; Contract Phase A removed the price, and the
+       remainder line it fed with it). */
     .cd-svc-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; }
     .cd-svc-empty { color: var(--text-dim); font-size: 13px; margin: 0 0 16px; }
-    .cd-svc-row, .cd-svc-add { display: grid; grid-template-columns: 1fr 150px auto auto; gap: 8px; align-items: center; }
-    .cd-svc-add { grid-template-columns: 1fr 150px auto; margin-top: 4px; }
+    .cd-svc-row, .cd-svc-add { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+    .cd-svc-add { grid-template-columns: 1fr auto; margin-top: 4px; }
     @media (max-width: 560px) { .cd-svc-row, .cd-svc-add { grid-template-columns: 1fr; } }
+
+    /* Contract Phase A — rate-based pricing: the derived-total readout under the rate/area pair. */
+    .cd-rate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 560px) { .cd-rate-grid { grid-template-columns: 1fr; } }
+    .cd-computed { font-family: var(--font-head); font-weight: 600; font-size: 14px; color: var(--accent); margin: 2px 0 14px; line-height: 1.45; }
+    .cd-computed.cd-partial { color: var(--text-dim); font-weight: 400; font-family: var(--font-body); font-size: 12px; }
+    .cd-derived input:disabled { opacity: 0.45; cursor: not-allowed; }
+    .cd-derived-note { font-size: 11.5px; color: var(--text-dim); margin: 6px 0 0; }
+    .cd-expected { font-size: 12px; color: var(--text-dim); margin: 6px 0 0; }
+    .cd-form textarea {
+      width: 100%; min-height: 84px; font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+      padding: 12px 14px; color: var(--text); background: var(--panel-2);
+      border: 1px solid var(--line-strong); border-radius: 0; outline: none; resize: vertical;
+    }
+    .cd-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+
+    /* Contract Phase A — allowance caps. Each row carries its own over/under position. */
+    .cd-alw-list { display: flex; flex-direction: column; gap: 14px; margin: 0 0 16px; }
+    .cd-alw-empty { color: var(--text-dim); font-size: 13px; margin: 0 0 12px; }
+    .cd-alw-row { border: 1px solid var(--line); padding: 12px; }
+    .cd-alw-grid, .cd-alw-add { display: grid; grid-template-columns: 1.4fr 130px 130px 130px auto auto; gap: 8px; align-items: center; }
+    .cd-alw-add { grid-template-columns: 1.4fr 130px 130px 130px auto; margin-top: 4px; }
+    @media (max-width: 800px) { .cd-alw-grid, .cd-alw-add { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 560px) { .cd-alw-grid, .cd-alw-add { grid-template-columns: 1fr; } }
+    .cd-alw-pos { font-size: 13px; color: var(--text-dim); margin: 10px 0 0; line-height: 1.5; }
+    .cd-alw-pos b { font-family: var(--font-head); font-weight: 600; color: var(--accent); }
+    .cd-alw-pos.cd-over b { color: #f8dca6; }
+    .cd-alw-pos.cd-none b { color: var(--text-dim); }
+    .cd-alw-seed { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px dashed var(--accent-line); border-radius: 0; padding: 11px 16px; cursor: pointer; margin: 0 0 16px; }
+    .cd-alw-seed:hover { background: var(--accent-soft); color: #ffb020; }
+    .cd-alw-seed:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     .amount-wrap { position: relative; }
     .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
@@ -258,16 +288,34 @@
           <input id="cSubCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a sub-ledger name">
         </div>
 
-        <!-- DRIVING field first: price_of_contract_paise. This is the value the dues math (owed) uses.
-             OPTIONAL since the contract-amount change: leaving it blank is allowed, and means the
-             contract contributes nothing to Total contract and nothing to Owed. -->
-        <div class="field">
+        <!-- Contract Phase A — RATE-BASED PRICING. This contract is a fixed unit-rate lump sum: the
+             price is a rate per square foot times the FINAL MEASURED built-up area. Both halves are
+             optional and editable at any time, because the area is not known until final measurement.
+             With both filled the total below is COMPUTED and the typed field is disabled; with either
+             blank the typed total is used, exactly as before. -->
+        <div class="cd-rate-grid">
+          <div class="field">
+            <label for="cRate">Rate per sq ft (₹) <span class="cd-optional">(optional)</span></label>
+            <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
+              <input id="cRate" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
+          </div>
+          <div class="field">
+            <label for="cAreaSqft">Measured built-up area (sq ft) <span class="cd-optional">(optional)</span></label>
+            <input id="cAreaSqft" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 2347.5">
+          </div>
+        </div>
+        <p id="cComputed" class="cd-computed" hidden></p>
+
+        <!-- DRIVING field: price_of_contract_paise. This is the value the dues math (owed) uses —
+             whether it was typed here or computed from the rate and area above. -->
+        <div class="field" id="cStatedField">
           <label for="cStated">Total contract value (₹) <span class="cd-optional">(optional)</span></label>
           <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
             <input id="cStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
           <p class="cd-hint">The full value of the contract. The contractor's <b>owed</b> is calculated from this.
             Leave it blank if there is no stated price — this contract then adds nothing to <b>Total contract</b>
             and nothing to <b>Owed to contractors</b>.</p>
+          <p id="cStatedDerivedNote" class="cd-derived-note" hidden>Set from the rate and measured area above. Clear either one to type a total here instead.</p>
         </div>
 
         <!-- DORMANT field: amount_paise. Stored (kept like phase/subpart) but feeds NO calculation. -->
@@ -277,9 +325,12 @@
             <input id="cAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
         </div>
 
+        <!-- Contract Phase A: the signing date is OPTIONAL now, so it gets the same
+             checkbox-then-picker treatment the end date already had. Unchecked = no date recorded,
+             which also means no expected completion date is claimed below. -->
         <div class="field">
-          <label for="dsDay">Date signed</label>
-          <div class="cd-date-grid">
+          <label class="cd-check"><input type="checkbox" id="hasSignedDate"><span>Record the date signed (optional)</span></label>
+          <div id="dsWrap" class="cd-date-grid" hidden>
             <div><label for="dsDay" class="cd-sub-label">Day</label><select id="dsDay" aria-label="Day (signed)"></select></div>
             <div><label for="dsMonth" class="cd-sub-label">Month</label><select id="dsMonth" aria-label="Month (signed)"></select></div>
             <div><label for="dsYear" class="cd-sub-label">Year</label><select id="dsYear" aria-label="Year (signed)"></select></div>
@@ -302,6 +353,36 @@
           <button type="button" class="cd-add-date" id="addPayDateBtn">+ Add payment date</button>
         </div>
 
+        <!-- Contract Phase A — OPTIONAL contract metadata. None of it drives a figure. The expected
+             completion date is DERIVED from the signing date plus the period, so it is shown rather
+             than asked for, and stays blank whenever either half is missing. -->
+        <div class="field">
+          <label for="cMonths">Completion period (months) <span class="cd-optional">(optional)</span></label>
+          <input id="cMonths" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 12">
+          <p id="cExpected" class="cd-expected" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="cSupervision">Supervision rate on change orders (%) <span class="cd-optional">(optional)</span></label>
+          <input id="cSupervision" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 12.5">
+          <p class="cd-hint">Recorded for reference only — Plannr never applies it to any amount.</p>
+        </div>
+
+        <div class="field">
+          <label for="cBrands">Specified brands <span class="cd-optional">(optional)</span></label>
+          <textarea id="cBrands" maxlength="2000" placeholder="Brands the contract names, e.g. cement, wiring, fittings"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="cExcluded">Excluded scope <span class="cd-optional">(optional)</span></label>
+          <textarea id="cExcluded" maxlength="2000" placeholder="Work explicitly outside this contract"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="cObligations">Owner obligations <span class="cd-optional">(optional)</span></label>
+          <textarea id="cObligations" maxlength="2000" placeholder="What the owner has agreed to supply or do"></textarea>
+        </div>
+
         <div class="cd-actions-row">
           <button type="submit" class="btn primary" id="contractSaveBtn">Add contract</button>
           <button type="button" class="btn ghost" id="contractCancelBtn" hidden>Revert</button>
@@ -309,18 +390,40 @@
         </div>
       </form>
 
-      <!-- ===== Services (Part A) + remainder (Part B). Shown only once a contract exists. ===== -->
+      <!-- ===== Scope of work + allowance caps. Shown only once a contract exists. ===== -->
       <section id="servicesSection" hidden>
         <hr class="cd-sep">
-        <p class="cd-section-title">Contract services</p>
-        <p class="cd-hint">A name and an optional price. Services are informational — they do <b>not</b> change the owed calculation (the Total contract value does). A priced service can be picked on the debit form to fill its stated amount.</p>
-        <p id="remainderLine" class="cd-remainder"></p>
+        <p class="cd-section-title">Scope of work</p>
+        <p class="cd-hint">The items this contract covers, by name. This contract prices the work as a whole
+          (a rate per square foot × the measured area), so a scope item carries <b>no price of its own</b> —
+          listing one here changes no figure. A debit can name the item it was for.</p>
         <div id="servicesMsg" class="msg" role="alert"></div>
         <div id="servicesList" class="cd-svc-list"></div>
         <form id="serviceForm" class="cd-svc-add" novalidate>
-          <input id="svcName" type="text" maxlength="120" autocomplete="off" placeholder="Service name" aria-label="Service name" required>
-          <input id="svcPrice" type="text" inputmode="decimal" autocomplete="off" placeholder="Price ₹ (optional)" aria-label="Service price (optional)">
-          <button type="submit" class="btn primary" id="svcAddBtn">Add service</button>
+          <input id="svcName" type="text" maxlength="120" autocomplete="off" placeholder="Scope item name" aria-label="Scope item name" required>
+          <button type="submit" class="btn primary" id="svcAddBtn">Add item</button>
+        </form>
+
+        <hr class="cd-sep">
+        <p class="cd-section-title">Allowances</p>
+        <p class="cd-hint">Optional. An allowance is a cap the contract sets for a named item — either a
+          rupee amount or a ceiling per square foot. Spend is counted from Money Debited entries you tag
+          with the allowance, so the position below is real spend, never a typed figure.
+          <br>Per the contract, an overrun is added to the next progress payment and an underrun subtracted
+          from the final. Plannr <b>shows you where you stand and settles nothing</b> — no figure here
+          affects Owed or Total contract.</p>
+        <div id="allowancesMsg" class="msg" role="alert"></div>
+        <button type="button" class="cd-alw-seed" id="alwSeedBtn" hidden>+ Add the ten standard allowances from the contract</button>
+        <div id="allowancesList" class="cd-alw-list"></div>
+        <form id="allowanceForm" class="cd-alw-add" novalidate>
+          <input id="alwName" type="text" maxlength="120" autocomplete="off" placeholder="Allowance name" aria-label="Allowance name" required>
+          <select id="alwKind" aria-label="Cap type">
+            <option value="lump">₹ cap</option>
+            <option value="per_sqft">₹ per sq ft</option>
+          </select>
+          <input id="alwCap" type="text" inputmode="decimal" autocomplete="off" placeholder="Cap ₹" aria-label="Cap amount">
+          <input id="alwArea" type="text" inputmode="decimal" autocomplete="off" placeholder="Area sq ft" aria-label="Area in square feet" hidden>
+          <button type="submit" class="btn primary" id="alwAddBtn">Add allowance</button>
         </form>
       </section>
     </main>
@@ -350,13 +453,53 @@
       const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
       return Number.isSafeInteger(p) && p > 0 ? p : null;
     }
+    // Contract Phase A — areas are INTEGER thousandths of a square foot, same reasoning as paise:
+    // rate × area must be exact integer arithmetic. Mirrors parseAreaOptional() on the server.
+    const MILLI_PER_SQFT = 1000;
+    function parseAreaMilli(v) {
+      const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+      if (!/^\d+(\.\d{1,3})?$/.test(s)) return null;
+      const [ip, dp = ''] = s.split('.');
+      const m = Number(ip) * MILLI_PER_SQFT + Number((dp + '000').slice(0, 3));
+      return Number.isSafeInteger(m) && m > 0 ? m : null;
+    }
+    const milliToInput = (milli) => {
+      const whole = Math.floor(milli / MILLI_PER_SQFT);
+      const frac = String(milli % MILLI_PER_SQFT).padStart(3, '0').replace(/0+$/, '');
+      return frac ? `${whole}.${frac}` : String(whole);
+    };
+    // rate × area -> paise, or null unless BOTH halves are present. Mirrors unitPricePaise().
+    function unitPricePaise(ratePaise, areaMilli) {
+      if (ratePaise == null || areaMilli == null) return null;
+      const product = ratePaise * areaMilli;
+      if (!Number.isSafeInteger(product)) return null;
+      return Math.round(product / MILLI_PER_SQFT);
+    }
+    // date_signed + N months, clamped to month end. Mirrors addMonthsIso() on the server so the
+    // page can show the expected completion date before the save round-trips.
+    function addMonthsIso(iso, months) {
+      if (!iso || months == null) return '';
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso));
+      if (!m) return '';
+      const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + months;
+      const ny = Math.floor(total / 12), nm = (total % 12) + 1;
+      const nd = Math.min(Number(m[3]), new Date(Date.UTC(ny, nm, 0)).getUTCDate());
+      const pad = (n, w) => String(n).padStart(w, '0');
+      return `${pad(ny, 4)}-${pad(nm, 2)}-${pad(nd, 2)}`;
+    }
 
     // ===================== Contract form =====================
     const contractForm = $('contractForm'), cContractor = $('cContractor'), cCompany = $('cCompany'), cArea = $('cArea'),
           cAmount = $('cAmount'), cStated = $('cStated'), cSlno = $('cSlno'),
           contractSaveBtn = $('contractSaveBtn'), contractCancelBtn = $('contractCancelBtn'),
           contractDeleteBtn = $('contractDeleteBtn'), hasEndDate = $('hasEndDate'), deWrap = $('deWrap'),
-          payDates = $('payDates'), payDatesEmpty = $('payDatesEmpty'), addPayDateBtn = $('addPayDateBtn');
+          payDates = $('payDates'), payDatesEmpty = $('payDatesEmpty'), addPayDateBtn = $('addPayDateBtn'),
+          // Contract Phase A
+          cRate = $('cRate'), cAreaSqft = $('cAreaSqft'), cComputed = $('cComputed'),
+          cStatedDerivedNote = $('cStatedDerivedNote'), cStatedField = $('cStatedField'),
+          hasSignedDate = $('hasSignedDate'), dsWrap = $('dsWrap'),
+          cMonths = $('cMonths'), cExpected = $('cExpected'), cSupervision = $('cSupervision'),
+          cBrands = $('cBrands'), cExcluded = $('cExcluded'), cObligations = $('cObligations');
 
     const cLedger = createLedgerPicker({
       ledgerSelect: $('cLedgerSelect'), ledgerCustomWrap: $('cLedgerCustomWrap'), ledgerCustom: $('cLedgerCustom'),
@@ -370,6 +513,59 @@
     const payRows = []; // { el, picker }
 
     hasEndDate.addEventListener('change', () => { deWrap.hidden = !hasEndDate.checked; });
+    hasSignedDate.addEventListener('change', () => { dsWrap.hidden = !hasSignedDate.checked; syncExpected(); });
+
+    // Contract Phase A — show the derived total the moment both halves are present, and disable the
+    // typed field while they are, so a number the app is about to ignore can never sit in an
+    // enabled-looking box. The server applies the same rule; this only makes it visible.
+    // The typed total, held aside while the rate price is driving the box. Without this, filling in a
+    // rate and an area would overwrite a total the owner had typed, and clearing the area again would
+    // hand back the COMPUTED figure as though they had typed it — a silent substitution of one
+    // number for another.
+    let typedStated = '';
+    cStated.addEventListener('input', () => { if (!cStated.disabled) typedStated = cStated.value; });
+
+    function syncPricing() {
+      const derived = unitPricePaise(parsePaise(cRate.value), parseAreaMilli(cAreaSqft.value));
+      const partial = derived == null && (cRate.value.trim() !== '' || cAreaSqft.value.trim() !== '');
+      if (derived != null) {
+        // typedStated is captured by the input listener above and set explicitly by
+        // startEditContract/resetContractForm — deliberately NOT re-read here, or loading a
+        // rate-priced contract would record its own DERIVED total as the owner's typed one.
+        cStated.disabled = true;
+      } else {
+        if (cStated.disabled) cStated.value = typedStated;  // hand the box back with what was typed
+        cStated.disabled = false;
+      }
+      cStatedField.classList.toggle('cd-derived', derived != null);
+      cStatedDerivedNote.hidden = derived == null;
+      if (derived != null) {
+        cStated.value = paiseToInput(derived); // shown, not typed — the save recomputes it server-side
+        cComputed.textContent = 'Total contract value = ' + fmtPaise(derived) + ' — rate × measured area.';
+        cComputed.classList.remove('cd-partial');
+        cComputed.hidden = false;
+      } else if (partial) {
+        cComputed.textContent = 'A rate and a measured area together set the total. With only one of them, the typed total below is what counts.';
+        cComputed.classList.add('cd-partial');
+        cComputed.hidden = false;
+      } else {
+        cComputed.hidden = true;
+      }
+    }
+    cRate.addEventListener('input', syncPricing);
+    cAreaSqft.addEventListener('input', syncPricing);
+
+    // The expected completion date is DERIVED from two editable fields, so it is displayed rather
+    // than asked for, and says nothing at all when either half is missing.
+    function syncExpected() {
+      const months = /^\d+$/.test(cMonths.value.trim()) ? Number(cMonths.value.trim()) : null;
+      const iso = hasSignedDate.checked ? dateSignedPicker.getISO() : '';
+      const exp = addMonthsIso(iso, months);
+      cExpected.textContent = exp ? 'Expected completion: ' + fmtDate(exp) : '';
+      cExpected.hidden = !exp;
+    }
+    cMonths.addEventListener('input', syncExpected);
+    for (const el of [$('dsDay'), $('dsMonth'), $('dsYear')]) el.addEventListener('change', syncExpected);
 
     function refreshPayDatesEmpty() { payDatesEmpty.hidden = payRows.length > 0; }
 
@@ -404,14 +600,18 @@
       editingContractId = null;
       contractForm.reset();
       cLedger.reset();
-      dateSignedPicker.reset();
+      hasSignedDate.checked = false; dsWrap.hidden = true; dateSignedPicker.reset();
       hasEndDate.checked = false; deWrap.hidden = true; dateEndsPicker.reset();
+      cStated.disabled = false;
+      typedStated = '';
+      syncPricing();
+      syncExpected();
       clearPayDates();
       contractSaveBtn.textContent = 'Add contract';
       contractCancelBtn.hidden = true;   // nothing to revert to when creating
       contractDeleteBtn.hidden = true;   // nothing to delete yet
       cSlno.value = 1;
-      renderServices(null);              // no contract yet -> hide the services section
+      renderContractSections(null);      // no contract yet -> hide the scope + allowances section
     }
     // Revert: discard unsaved edits by reloading the saved contract (edit mode) or clearing (create).
     contractCancelBtn.addEventListener('click', () => {
@@ -433,15 +633,27 @@
       cLedger.populate(c);
       cAmount.value = c.amountPaise != null ? paiseToInput(c.amountPaise) : '';
       cStated.value = c.statedAmountPaise != null ? paiseToInput(c.statedAmountPaise) : '';
-      dateSignedPicker.setISO(c.dateSigned);
+      cRate.value = c.ratePerSqftPaise != null ? paiseToInput(c.ratePerSqftPaise) : '';
+      cAreaSqft.value = c.measuredAreaMilliSqft != null ? milliToInput(c.measuredAreaMilliSqft) : '';
+      cMonths.value = c.completionPeriodMonths != null ? String(c.completionPeriodMonths) : '';
+      cSupervision.value = c.supervisionRatePct != null ? String(c.supervisionRatePct) : '';
+      cBrands.value = c.specifiedBrands || '';
+      cExcluded.value = c.excludedScope || '';
+      cObligations.value = c.ownerObligations || '';
+      if (c.dateSigned) { hasSignedDate.checked = true; dsWrap.hidden = false; dateSignedPicker.setISO(c.dateSigned); }
+      else { hasSignedDate.checked = false; dsWrap.hidden = true; dateSignedPicker.reset(); }
       if (c.dateEnds) { hasEndDate.checked = true; deWrap.hidden = false; dateEndsPicker.setISO(c.dateEnds); }
       else { hasEndDate.checked = false; deWrap.hidden = true; dateEndsPicker.reset(); }
+      cStated.disabled = false;
+      typedStated = c.pricingMode === 'rate' ? '' : cStated.value;
+      syncPricing();
+      syncExpected();
       clearPayDates();
       (c.paymentDates || []).forEach((d) => addPayDateRow(d));
       contractSaveBtn.textContent = 'Save changes';
       contractCancelBtn.hidden = false;  // "Revert" to the saved values
       contractDeleteBtn.hidden = false;  // the one contract can be soft-deleted (recycle bin)
-      renderServices(c);                 // Part A/B — services + remainder (only when a contract exists)
+      renderContractSections(c);         // scope list + allowance caps (only when a contract exists)
     }
 
     contractForm.addEventListener('submit', async (ev) => {
@@ -460,7 +672,17 @@
       if (statedStr !== '' && parsePaise(statedStr) === null) { contractMsg.show('Total contract value must be greater than 0 (up to 2 decimals), or left blank.', 'error'); return; }
       if (amountStr !== '' && parsePaise(amountStr) === null) { contractMsg.show('Reference amount must be greater than 0 (up to 2 decimals), or left blank.', 'error'); return; }
       // Kept as a nudge, appended to the success message below rather than blocking the save.
-      const statedBlankWithRef = statedStr === '' && amountStr !== '' && parsePaise(amountStr) !== null;
+      // ...and it must not fire on a rate-priced contract, whose total comes from the rate and area.
+      const rateP = parsePaise(cRate.value), areaM = parseAreaMilli(cAreaSqft.value);
+      const statedBlankWithRef = statedStr === '' && amountStr !== '' && parsePaise(amountStr) !== null && unitPricePaise(rateP, areaM) == null;
+
+      // Contract Phase A — the rate/area pair. Sent as typed; the server decides whether they
+      // amount to a price (both present) and, if so, ignores statedAmountRupees. Validate them here
+      // only so an obvious typo is caught before the round trip.
+      const rateStr = cRate.value.trim().replace(/,/g, '');
+      const areaStr = cAreaSqft.value.trim().replace(/,/g, '');
+      if (rateStr !== '' && parsePaise(rateStr) === null) { contractMsg.show('Rate per sq ft must be greater than 0 (up to 2 decimals), or left blank.', 'error'); return; }
+      if (areaStr !== '' && parseAreaMilli(areaStr) === null) { contractMsg.show('Measured area must be greater than 0 square feet (up to 3 decimals), or left blank.', 'error'); return; }
 
       const body = {
         ...led.body,
@@ -469,8 +691,15 @@
         areaOfWork: cArea.value,
         amountRupees: amountStr,
         statedAmountRupees: statedStr,
-        dateSigned: dateSignedPicker.getISO(),
+        ratePerSqftRupees: rateStr,
+        measuredAreaSqft: areaStr,
+        dateSigned: hasSignedDate.checked ? dateSignedPicker.getISO() : '',
         dateEnds: hasEndDate.checked ? dateEndsPicker.getISO() : '',
+        completionPeriodMonths: cMonths.value.trim(),
+        supervisionRatePct: cSupervision.value.trim(),
+        specifiedBrands: cBrands.value,
+        excludedScope: cExcluded.value,
+        ownerObligations: cObligations.value,
         paymentDates: payRows.map((p) => p.picker.getISO()),
       };
 
@@ -521,34 +750,89 @@
       } catch { contractMsg.show('Network error. Please try again.', 'error'); }
     }
 
-    // ===================== Contract services (Part A) + remainder (Part B) =====================
-    const servicesSection = $('servicesSection'), remainderLine = $('remainderLine'),
+    // ============ Scope of work (names only) + allowance caps (Contract Phase A) ============
+    const servicesSection = $('servicesSection'),
           servicesList = $('servicesList'), serviceForm = $('serviceForm'),
-          svcName = $('svcName'), svcPrice = $('svcPrice'), svcAddBtn = $('svcAddBtn');
+          svcName = $('svcName'), svcAddBtn = $('svcAddBtn');
     const servicesMsg = makeMsg($('servicesMsg'));
 
-    // Part B — signed remainder wording (never a bare minus, mirroring Phase 4's "Overpaid by").
-    function remainderText(paise) {
-      if (paise > 0) return fmtPaise(paise) + ' price remains in the contract';
-      if (paise < 0) return fmtPaise(-paise) + ' over the contract price (priced services exceed the total)';
-      return 'Priced services exactly match the contract value.';
+    const allowancesList = $('allowancesList'), allowanceForm = $('allowanceForm'),
+          alwName = $('alwName'), alwKind = $('alwKind'), alwCap = $('alwCap'),
+          alwArea = $('alwArea'), alwAddBtn = $('alwAddBtn'), alwSeedBtn = $('alwSeedBtn');
+    const allowancesMsg = makeMsg($('allowancesMsg'));
+
+    // An area only means anything for a per-square-foot ceiling, so it is only asked for there.
+    function syncAlwKind(kindEl, capEl, areaEl) {
+      const perSqft = kindEl.value === 'per_sqft';
+      capEl.placeholder = perSqft ? 'Ceiling ₹ / sq ft' : 'Cap ₹';
+      areaEl.hidden = !perSqft;
+      if (!perSqft) areaEl.value = '';
     }
-    function renderServices(c) {
+    alwKind.addEventListener('change', () => syncAlwKind(alwKind, alwCap, alwArea));
+    syncAlwKind(alwKind, alwCap, alwArea);
+
+    // The over/under wording. Three genuinely different cases, and the third is the point of the
+    // whole design: a per-square-foot ceiling with no area recorded has NO rupee cap, so it reports
+    // the spend and the ceiling and stops there rather than inventing an area to compare against.
+    function positionText(a) {
+      const spent = a.entryCount
+        ? `<b>${esc(fmtPaise(a.spentPaise))}</b> spent across ${a.entryCount} ${a.entryCount === 1 ? 'entry' : 'entries'}`
+        : 'Nothing spent against this yet';
+      if (a.effectiveCapPaise == null) {
+        return { cls: 'cd-none', html: `Ceiling <b>${esc(fmtPaise(a.capRatePerSqftPaise))} / sq ft</b> · ${spent} · no area recorded yet, so no over/under can be shown.` };
+      }
+      const cap = `cap <b>${esc(fmtPaise(a.effectiveCapPaise))}</b>`;
+      const pos = a.positionPaise;
+      if (pos > 0) return { cls: '', html: `${spent} · ${cap} · <b>${esc(fmtPaise(pos))} under</b>.` };
+      if (pos < 0) return { cls: 'cd-over', html: `${spent} · ${cap} · <b>${esc(fmtPaise(-pos))} over</b>.` };
+      return { cls: '', html: `${spent} · ${cap} · exactly at the cap.` };
+    }
+
+    function allowanceRowHtml(a) {
+      const perSqft = a.capKind === 'per_sqft';
+      const capValue = perSqft
+        ? (a.capRatePerSqftPaise != null ? paiseToInput(a.capRatePerSqftPaise) : '')
+        : (a.capPaise != null ? paiseToInput(a.capPaise) : '');
+      const areaValue = a.areaMilliSqft != null ? milliToInput(a.areaMilliSqft) : '';
+      const pos = positionText(a);
+      return '<div class="cd-alw-row" data-id="' + a.id + '">' +
+        '<div class="cd-alw-grid">' +
+          '<input class="cd-alw-name" type="text" maxlength="120" value="' + esc(a.name) + '" aria-label="Allowance name">' +
+          '<select class="cd-alw-kind" aria-label="Cap type">' +
+            '<option value="lump"' + (perSqft ? '' : ' selected') + '>₹ cap</option>' +
+            '<option value="per_sqft"' + (perSqft ? ' selected' : '') + '>₹ per sq ft</option>' +
+          '</select>' +
+          '<input class="cd-alw-cap" type="text" inputmode="decimal" value="' + esc(capValue) + '" placeholder="' + (perSqft ? 'Ceiling ₹ / sq ft' : 'Cap ₹') + '" aria-label="Cap amount">' +
+          '<input class="cd-alw-area" type="text" inputmode="decimal" value="' + esc(areaValue) + '" placeholder="Area sq ft" aria-label="Area in square feet"' + (perSqft ? '' : ' hidden') + '>' +
+          '<button type="button" class="cd-btn-sm" data-act="save" data-id="' + a.id + '">Save</button>' +
+          '<button type="button" class="cd-btn-sm cd-del" data-act="del" data-id="' + a.id + '">Delete</button>' +
+        '</div>' +
+        '<p class="cd-alw-pos ' + pos.cls + '">' + pos.html + '</p>' +
+      '</div>';
+    }
+
+    // One entry point for both lists: they appear and disappear together with the contract.
+    function renderContractSections(c) {
       if (!c) { servicesSection.hidden = true; return; }
       servicesSection.hidden = false;
-      const rem = c.remainderPaise || 0;
-      remainderLine.textContent = remainderText(rem);
-      remainderLine.classList.toggle('cd-over', rem < 0);
+
       const services = c.services || [];
-      if (!services.length) { servicesList.innerHTML = '<p class="cd-svc-empty">No services yet.</p>'; return; }
-      servicesList.innerHTML = services.map((s) =>
-        '<div class="cd-svc-row" data-id="' + s.id + '">' +
-          '<input class="cd-svc-name" type="text" maxlength="120" value="' + esc(s.name) + '" aria-label="Service name">' +
-          '<input class="cd-svc-price" type="text" inputmode="decimal" value="' + (s.pricePaise != null ? esc(paiseToInput(s.pricePaise)) : '') + '" placeholder="(no price)" aria-label="Service price">' +
-          '<button type="button" class="cd-btn-sm" data-act="save" data-id="' + s.id + '">Save</button>' +
-          '<button type="button" class="cd-btn-sm cd-del" data-act="del" data-id="' + s.id + '">Delete</button>' +
-        '</div>'
-      ).join('');
+      servicesList.innerHTML = services.length
+        ? services.map((s) =>
+            '<div class="cd-svc-row" data-id="' + s.id + '">' +
+              '<input class="cd-svc-name" type="text" maxlength="120" value="' + esc(s.name) + '" aria-label="Scope item name">' +
+              '<button type="button" class="cd-btn-sm" data-act="save" data-id="' + s.id + '">Save</button>' +
+              '<button type="button" class="cd-btn-sm cd-del" data-act="del" data-id="' + s.id + '">Delete</button>' +
+            '</div>').join('')
+        : '<p class="cd-svc-empty">No scope items listed yet.</p>';
+
+      const allowances = c.allowances || [];
+      allowancesList.innerHTML = allowances.length
+        ? allowances.map(allowanceRowHtml).join('')
+        : '<p class="cd-alw-empty">No allowances. This contract works normally without them — add one below, or start from the ten in the contract.</p>';
+      // Offered only when there are none, because seeding refuses on a contract that already has
+      // some rather than merging into a list the owner has already curated.
+      alwSeedBtn.hidden = allowances.length > 0;
     }
 
     serviceForm.addEventListener('submit', async (ev) => {
@@ -556,21 +840,21 @@
       servicesMsg.clear();
       if (editingContractId === null) return;
       const name = svcName.value.trim();
-      if (!name) { servicesMsg.show('Service name is required.', 'error'); return; }
+      if (!name) { servicesMsg.show('Scope item name is required.', 'error'); return; }
       svcAddBtn.disabled = true;
       try {
         const res = await fetch('/api/contracts/' + editingContractId + '/services', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, priceRupees: svcPrice.value.trim() }),
+          body: JSON.stringify({ name }),
         });
         const d = await res.json().catch(() => ({}));
-        if (res.ok) { svcName.value = ''; svcPrice.value = ''; await loadContracts(); servicesMsg.show('Service added.', 'success'); }
-        else servicesMsg.show(d.error || 'Could not add the service.', 'error');
+        if (res.ok) { svcName.value = ''; await loadContracts(); servicesMsg.show('Scope item added.', 'success'); }
+        else servicesMsg.show(d.error || 'Could not add the scope item.', 'error');
       } catch { servicesMsg.show('Network error. Please try again.', 'error'); }
       finally { svcAddBtn.disabled = false; }
     });
 
-    // Delegated Save / Delete on the service rows (CSP-safe: no inline handlers).
+    // Delegated Save / Delete on the scope rows (CSP-safe: no inline handlers).
     servicesList.addEventListener('click', async (ev) => {
       const btn = ev.target.closest && ev.target.closest('button[data-act]');
       if (!btn || editingContractId === null) return;
@@ -579,26 +863,112 @@
       const rowEl = btn.closest('.cd-svc-row');
       servicesMsg.clear();
       if (act === 'del') {
-        if (!window.confirm('Delete this service? It will be removed from the list (soft-deleted).')) return;
+        if (!window.confirm('Delete this scope item? It will be removed from the list (soft-deleted).')) return;
         try {
           const res = await fetch('/api/contracts/' + editingContractId + '/services/' + id, { method: 'DELETE' });
-          if (res.ok) { await loadContracts(); servicesMsg.show('Service deleted.', 'success'); }
+          if (res.ok) { await loadContracts(); servicesMsg.show('Scope item deleted.', 'success'); }
           else { const d = await res.json().catch(() => ({})); servicesMsg.show(d.error || 'Could not delete.', 'error'); }
         } catch { servicesMsg.show('Network error. Please try again.', 'error'); }
       } else if (act === 'save') {
         const name = rowEl.querySelector('.cd-svc-name').value.trim();
-        const price = rowEl.querySelector('.cd-svc-price').value.trim();
-        if (!name) { servicesMsg.show('Service name is required.', 'error'); return; }
+        if (!name) { servicesMsg.show('Scope item name is required.', 'error'); return; }
         try {
           const res = await fetch('/api/contracts/' + editingContractId + '/services/' + id, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, priceRupees: price }),
+            body: JSON.stringify({ name }),
           });
-          if (res.ok) { await loadContracts(); servicesMsg.show('Service saved.', 'success'); }
+          if (res.ok) { await loadContracts(); servicesMsg.show('Scope item saved.', 'success'); }
           else { const d = await res.json().catch(() => ({})); servicesMsg.show(d.error || 'Could not save.', 'error'); }
         } catch { servicesMsg.show('Network error. Please try again.', 'error'); }
       }
     });
+
+    // ---- allowances ----------------------------------------------------------------------------
+    // Body shape mirrors readAllowanceBody() on the server: the cap field means different things
+    // under the two kinds, and areaSqft only travels with a per-square-foot ceiling.
+    function allowanceBody(name, kind, capStr, areaStr) {
+      return kind === 'per_sqft'
+        ? { name, capKind: 'per_sqft', capRatePerSqftRupees: capStr, areaSqft: areaStr }
+        : { name, capKind: 'lump', capRupees: capStr };
+    }
+
+    allowanceForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      allowancesMsg.clear();
+      if (editingContractId === null) return;
+      const name = alwName.value.trim();
+      if (!name) { allowancesMsg.show('Allowance name is required.', 'error'); return; }
+      alwAddBtn.disabled = true;
+      try {
+        const res = await fetch('/api/contracts/' + editingContractId + '/allowances', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(allowanceBody(name, alwKind.value, alwCap.value.trim(), alwArea.value.trim())),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (res.ok) {
+          alwName.value = ''; alwCap.value = ''; alwArea.value = '';
+          await loadContracts();
+          allowancesMsg.show('Allowance added.', 'success');
+        } else allowancesMsg.show(d.error || 'Could not add the allowance.', 'error');
+      } catch { allowancesMsg.show('Network error. Please try again.', 'error'); }
+      finally { alwAddBtn.disabled = false; }
+    });
+
+    alwSeedBtn.addEventListener('click', async () => {
+      if (editingContractId === null) return;
+      allowancesMsg.clear();
+      if (!window.confirm('Add the ten allowance caps from the contract? You can edit or delete any of them afterwards.')) return;
+      alwSeedBtn.disabled = true;
+      try {
+        const res = await fetch('/api/contracts/' + editingContractId + '/allowances/defaults', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        const d = await res.json().catch(() => ({}));
+        if (res.ok) { await loadContracts(); allowancesMsg.show('Ten standard allowances added. The three per-square-foot ceilings need an area before they can show an over/under.', 'success'); }
+        else allowancesMsg.show(d.error || 'Could not add the standard allowances.', 'error');
+      } catch { allowancesMsg.show('Network error. Please try again.', 'error'); }
+      finally { alwSeedBtn.disabled = false; }
+    });
+
+    // Delegated kind-toggle + Save / Delete on the allowance rows.
+    allowancesList.addEventListener('change', (ev) => {
+      const sel = ev.target.closest && ev.target.closest('.cd-alw-kind');
+      if (!sel) return;
+      const rowEl = sel.closest('.cd-alw-row');
+      syncAlwKind(sel, rowEl.querySelector('.cd-alw-cap'), rowEl.querySelector('.cd-alw-area'));
+    });
+
+    allowancesList.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest && ev.target.closest('button[data-act]');
+      if (!btn || editingContractId === null) return;
+      const id = Number(btn.getAttribute('data-id'));
+      const act = btn.getAttribute('data-act');
+      const rowEl = btn.closest('.cd-alw-row');
+      allowancesMsg.clear();
+      if (act === 'del') {
+        if (!window.confirm('Delete this allowance? Entries already tagged with it keep their amounts — only the cap stops being tracked.')) return;
+        try {
+          const res = await fetch('/api/contracts/' + editingContractId + '/allowances/' + id, { method: 'DELETE' });
+          if (res.ok) { await loadContracts(); allowancesMsg.show('Allowance deleted.', 'success'); }
+          else { const d = await res.json().catch(() => ({})); allowancesMsg.show(d.error || 'Could not delete.', 'error'); }
+        } catch { allowancesMsg.show('Network error. Please try again.', 'error'); }
+      } else if (act === 'save') {
+        const name = rowEl.querySelector('.cd-alw-name').value.trim();
+        if (!name) { allowancesMsg.show('Allowance name is required.', 'error'); return; }
+        const kind = rowEl.querySelector('.cd-alw-kind').value;
+        const capStr = rowEl.querySelector('.cd-alw-cap').value.trim();
+        const areaStr = rowEl.querySelector('.cd-alw-area').value.trim();
+        try {
+          const res = await fetch('/api/contracts/' + editingContractId + '/allowances/' + id, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(allowanceBody(name, kind, capStr, areaStr)),
+          });
+          if (res.ok) { await loadContracts(); allowancesMsg.show('Allowance saved.', 'success'); }
+          else { const d = await res.json().catch(() => ({})); allowancesMsg.show(d.error || 'Could not save.', 'error'); }
+        } catch { allowancesMsg.show('Network error. Please try again.', 'error'); }
+      }
+    });
+
 
     (async () => { await loadContracts(); })();
   });
