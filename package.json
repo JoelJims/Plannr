@@ -4,6 +4,13 @@
   "private": true,
   "description": "Plannr — a single-user offline construction-spend ledger, built as an Android app with Capacitor",
   "main": "server.js",
+  "author": "Joel Jims (https://github.com/JoelJims)",
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoelJims/plannr"
+  },
+  "homepage": "https://github.com/JoelJims/plannr",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
@@ -18,6 +25,7 @@
     "test:palette": "node test-ui/palette-distinctness.js",
     "test:contract-layout": "node test-ui/contract-details-layout.js",
     "test:ledger-picker": "node test-ui/ledger-picker.js",
+    "test:disclosure": "node test-ui/disclosure.js",
     "sync:public-modules": "node sync-public-modules.js",
     "android:sync": "node sync-public-modules.js && npx cap sync android"
   },

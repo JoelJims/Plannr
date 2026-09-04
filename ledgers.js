@@ -198,7 +198,7 @@ export const LEDGERS = [
       { code: '19.99', name: 'Misc' },
     ] },
     { code: '20.0', name: 'UTILITY CONNECTIONS', subLedgers: [
-      { code: '20.1', name: 'Electricity connection (KSEB)' },
+      { code: '20.1', name: 'Electricity connection' },
       { code: '20.2', name: 'Water connection' },
       { code: '20.3', name: 'LPG / gas connection' },
       { code: '20.4', name: 'Internet / cable wiring' },
@@ -206,7 +206,7 @@ export const LEDGERS = [
       { code: '20.99', name: 'Misc' },
     ] },
     { code: '21.0', name: 'EQUIPMENT & TRANSPORT', subLedgers: [
-      { code: '21.1', name: 'Equipment rental — mixer, JCB' },
+      { code: '21.1', name: 'Equipment rental — mixer, excavator' },
       { code: '21.2', name: 'Scaffolding' },
       { code: '21.3', name: 'Material transport' },
       { code: '21.99', name: 'Misc' },
@@ -225,13 +225,13 @@ export const LEDGERS = [
       { code: '23.1', name: 'Post-construction cleaning' },
       { code: '23.2', name: 'Debris & scaffolding clearing' },
       { code: '23.3', name: 'Hazardous waste disposal' },
-      { code: '23.4', name: 'Plastic waste — Harithakarmasena' },
+      { code: '23.4', name: 'Plastic waste handover' },
       { code: '23.99', name: 'Misc' },
     ] },
     { code: '24.0', name: 'CONTINGENCY & UNPLANNED', subLedgers: [
       { code: '24.1', name: 'Contingency fund' },
-      { code: '24.2', name: 'Foundation depth beyond 2.5 ft' },
-      { code: '24.3', name: 'Plinth height beyond 1.5 ft' },
+      { code: '24.2', name: 'Additional foundation work' },
+      { code: '24.3', name: 'Additional plinth work' },
       { code: '24.99', name: 'Misc' },
     ] },
 ];

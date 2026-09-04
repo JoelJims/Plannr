@@ -27,8 +27,6 @@
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
 import { db, isStorageFullError } from './db.js';
-// Contract Phase A: the ten standard allowance caps, offered on explicit opt-in (seed data only).
-import { DEFAULT_ALLOWANCES } from './allowances.js';
 import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
@@ -918,29 +916,6 @@ export function installFetchShim(repo) {
     if (v.error) return res.status(400).json({ error: v.error });
     const info = repo.contract.insertAllowance(cid, { ...v.values, sort_order: repo.contract.nextAllowanceOrder(cid) });
     res.status(201).json({ ok: true, allowance: allowanceById(cid, Number(info.lastInsertRowid)) });
-  });
-
-  // Explicit opt-in, never automatic; refuses on a contract that already has allowances rather than
-  // duplicating or merging them.
-  localApp.post('/api/contracts/:id/allowances/defaults', (req, res) => {
-    const cid = Number(req.params.id);
-    if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
-    const existing = repo.contract.allowanceCount(cid);
-    if (existing > 0) {
-      return res.status(409).json({ error: `This contract already has ${existing} allowance${existing === 1 ? '' : 's'}. The standard set is only offered for a contract with none — delete the existing ones first if you want to start over.` });
-    }
-    let order = 0;
-    for (const a of DEFAULT_ALLOWANCES) {
-      repo.contract.insertAllowance(cid, {
-        name: a.name,
-        cap_kind: a.kind,
-        cap_paise: a.kind === 'lump' ? a.capPaise : null,
-        cap_rate_per_sqft_paise: a.kind === 'per_sqft' ? a.capRatePerSqftPaise : null,
-        area_milli_sqft: null, // measured, not assumed
-        sort_order: order++,
-      });
-    }
-    res.status(201).json({ ok: true, contract: contractRow(getContractRow(cid)) });
   });
 
   localApp.put('/api/contracts/:id/allowances/:aid', (req, res) => {

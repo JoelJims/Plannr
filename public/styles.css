@@ -781,3 +781,40 @@ input:-webkit-autofill {
   .lb-row-sub { padding-left: 30px; }
   .lb-parent { display: none; }   /* the sub name plus its code is enough at this width */
 }
+
+/* ---- "What's this" — the one progressive-disclosure control, shared by every page ----
+   Page copy is a heading, ONE line, and the control. Anything that genuinely matters but does not
+   fit that line lives in here, collapsed. Native <details>, so it costs no JS, is keyboard- and
+   screen-reader-operable for free, and survives this app's CSP (no inline styles or handlers).
+   Deliberately lighter than .cd-more on Contract Details: that one wraps a whole form section and
+   reads as a panel; this reads as a small link under a line of text and must not compete with the
+   control it sits beside. Caret idiom and amber are borrowed from .cd-more on purpose — one
+   disclosure language across the app, two weights. */
+.wt { margin: -4px 0 14px; }
+.wt > summary {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer; list-style: none;
+  padding: 5px 0; font-family: var(--font-head); font-weight: 600; font-size: 11px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint);
+  transition: color 0.15s ease;
+}
+.wt > summary::-webkit-details-marker { display: none; }
+.wt > summary::before {
+  content: "\25B8"; color: var(--accent); display: inline-block; transition: transform 0.2s ease;
+}
+.wt[open] > summary::before { transform: rotate(90deg); }
+.wt > summary:hover { color: var(--accent); }
+.wt > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wt-body {
+  margin: 2px 0 0; padding: 11px 14px; border-left: 2px solid var(--accent-line);
+  background: var(--panel-2); color: var(--text-dim);
+  font-size: 12.5px; line-height: 1.55; max-width: 58ch; text-wrap: pretty;
+}
+.wt-body p { margin: 0 0 8px; }
+.wt-body p:last-child { margin-bottom: 0; }
+/* A .wt inside a section that already sets a <p> style must not inherit that section's margins. */
+.bk-section .wt-body p, .cd-form .wt-body p { margin: 0 0 8px; max-width: none; }
+.bk-section .wt-body p:last-child, .cd-form .wt-body p:last-child { margin-bottom: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wt > summary::before { transition: none; }
+}

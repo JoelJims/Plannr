@@ -41,9 +41,6 @@ const getOwner = () => OWNER_STMT.get();
 // The data-access layer. Required AFTER init() so it can prepare its statements against the
 // migrated schema. Every read/write touching one of the ledger tables goes through repo.*.
 const repo = require('./repo');
-// Contract Phase A: the ten standard allowance caps, offered on explicit opt-in. Seed data only
-// (same role as ledgers.js) - once seeded, contract_allowances is the source of truth.
-const { DEFAULT_ALLOWANCES } = require('./allowances');
 
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
@@ -868,9 +865,9 @@ const serviceRow = (s) => ({ id: s.id, name: s.name });
 //                   the row reports its ceiling as a rate and declines to compute an over/under
 //                   rather than inventing an area to make one appear.
 // positionPaise is SIGNED: positive = under the cap, negative = over it. Plannr only DISPLAYS it.
-// Per the contract an overrun is added to the next progress payment and an underrun subtracted
-// from the final — a settlement the owner performs, not one this app performs for them. Nothing
-// here feeds owed, Total contract, or any Overview figure.
+// Where a contract says an overrun is added to the next progress payment and an underrun subtracted
+// from the final, that is a settlement the owner performs, not one this app performs for them.
+// Nothing here feeds owed, Total contract, or any Overview figure.
 const allowanceRow = (a, spend) => {
   const spentPaise = spend ? spend.spentPaise : 0;
   const effectiveCapPaise = a.cap_kind === 'per_sqft'
@@ -1181,32 +1178,6 @@ app.post('/api/contracts/:id/allowances', requireApiAuth, (req, res) => {
   if (v.error) return res.status(400).json({ error: v.error });
   const info = repo.contract.insertAllowance(cid, { ...v.values, sort_order: repo.contract.nextAllowanceOrder(cid) });
   res.status(201).json({ ok: true, allowance: allowanceById(cid, Number(info.lastInsertRowid)) });
-});
-
-// Seed the ten caps this contract's allowance schedule actually names (allowances.js). Explicit
-// opt-in, never automatic. Refuses when the contract already has allowances rather than
-// duplicating or merging them: a half-seeded list of ten rupee caps is worse than none, and
-// "which of these did I add and which came from the contract" is not a question the owner should
-// have to answer. Clear them first if a re-seed is really what is wanted.
-app.post('/api/contracts/:id/allowances/defaults', requireApiAuth, (req, res) => {
-  const cid = Number(req.params.id);
-  if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
-  const existing = repo.contract.allowanceCount(cid);
-  if (existing > 0) {
-    return res.status(409).json({ error: `This contract already has ${existing} allowance${existing === 1 ? '' : 's'}. The standard set is only offered for a contract with none — delete the existing ones first if you want to start over.` });
-  }
-  let order = 0;
-  for (const a of DEFAULT_ALLOWANCES) {
-    repo.contract.insertAllowance(cid, {
-      name: a.name,
-      cap_kind: a.kind,
-      cap_paise: a.kind === 'lump' ? a.capPaise : null,
-      cap_rate_per_sqft_paise: a.kind === 'per_sqft' ? a.capRatePerSqftPaise : null,
-      area_milli_sqft: null, // per-sqft ceilings start with no area: it is measured, not assumed
-      sort_order: order++,
-    });
-  }
-  res.status(201).json({ ok: true, contract: contractRow(getContractRow(cid)) });
 });
 
 app.put('/api/contracts/:id/allowances/:aid', requireApiAuth, (req, res) => {

@@ -98,9 +98,6 @@
     .cd-alw-pos b { font-family: var(--font-head); font-weight: 600; color: var(--accent); }
     .cd-alw-pos.cd-over b { color: #f8dca6; }
     .cd-alw-pos.cd-none b { color: var(--text-dim); }
-    .cd-alw-seed { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); background: var(--panel-2); border: 1px dashed var(--accent-line); border-radius: 0; padding: 11px 16px; cursor: pointer; margin: 0 0 16px; }
-    .cd-alw-seed:hover { background: var(--accent-soft); color: #ffb020; }
-    .cd-alw-seed:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     .amount-wrap { position: relative; }
     .amount-wrap .rupee { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; font-size: 16px; }
@@ -344,7 +341,7 @@
           <input id="cSubCustom" type="text" autocomplete="off" maxlength="80" placeholder="Type a sub-ledger name">
         </div>
 
-        <!-- Contract Phase A — RATE-BASED PRICING. This contract is a fixed unit-rate lump sum: the
+        <!-- Contract Phase A — RATE-BASED PRICING. A fixed unit-rate lump sum contract is priced so the
              price is a rate per square foot times the FINAL MEASURED built-up area. Both halves are
              optional and editable at any time, because the area is not known until final measurement.
              With both filled the total below is COMPUTED and the typed field is disabled; with either
@@ -357,7 +354,7 @@
           </div>
           <div class="field">
             <label for="cAreaSqft">Measured built-up area (sq ft) <span class="cd-optional">(optional)</span></label>
-            <input id="cAreaSqft" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 2347.5">
+            <input id="cAreaSqft" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 1250.5">
           </div>
         </div>
         <p id="cComputed" class="cd-computed" hidden></p>
@@ -368,9 +365,14 @@
           <label for="cStated">Total contract value (₹) <span class="cd-optional">(optional)</span></label>
           <div class="amount-wrap"><span class="rupee" aria-hidden="true">₹</span>
             <input id="cStated" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
-          <p class="cd-hint">The full value of the contract. The contractor's <b>owed</b> is calculated from this.
-            Leave it blank if there is no stated price — this contract then adds nothing to <b>Total contract</b>
-            and nothing to <b>Owed to contractors</b>.</p>
+          <p class="cd-hint">The contractor's <b>owed</b> is calculated from this.</p>
+          <details class="wt">
+            <summary>What's this</summary>
+            <div class="wt-body">
+              <p>Leave it blank if the contract states no price. It then adds nothing to <b>Total contract</b>
+                and nothing to <b>Owed to contractors</b>, while payments against it still count.</p>
+            </div>
+          </details>
           <p id="cStatedDerivedNote" class="cd-derived-note" hidden>Set from the rate and measured area above. Clear either one to type a total here instead.</p>
         </div>
 
@@ -476,9 +478,14 @@
       <section id="scopeSection" hidden aria-labelledby="scopeHeading">
         <hr class="cd-sep">
         <h2 class="cd-section-title" id="scopeHeading">Scope of work</h2>
-        <p class="cd-hint">The items this contract covers, by name. This contract prices the work as a whole
-          (a rate per square foot × the measured area), so a scope item carries <b>no price of its own</b> —
-          listing one here changes no figure. A debit can name the item it was for.</p>
+        <p class="cd-hint">The items this contract covers, by name. Listing one changes no figure.</p>
+        <details class="wt">
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>A fixed-rate contract prices the work as a whole, so a scope item carries <b>no price of its
+              own</b>. Its job is to be named by a debit: "which item was this spend for".</p>
+          </div>
+        </details>
         <div id="servicesMsg" class="msg" role="alert"></div>
         <div id="servicesList" class="cd-svc-list"></div>
         <form id="serviceForm" class="cd-svc-add" novalidate>
@@ -496,20 +503,23 @@
       <section id="allowancesSection" hidden aria-labelledby="allowancesHeading">
         <hr class="cd-sep">
         <h2 class="cd-section-title" id="allowancesHeading">Allowances</h2>
-        <p class="cd-hint" id="allowancesIntro" hidden>An allowance is a cap the contract sets for a named item — either a
-          rupee amount or a ceiling per square foot. Spend is counted from Money Debited entries you tag
-          with the allowance, so the position below is real spend, never a typed figure.
-          <br>Per the contract, an overrun is added to the next progress payment and an underrun subtracted
-          from the final. Plannr <b>shows you where you stand and settles nothing</b> — no figure here
-          affects Owed or Total contract.</p>
+        <p class="cd-hint" id="allowancesIntro" hidden>A cap on a named item. Plannr <b>shows where you stand and settles nothing</b>.</p>
+        <details class="wt" id="allowancesWhat" hidden>
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>A cap is either a rupee amount or a ceiling per square foot. Its running spend is counted from
+              the Money Debited entries you tag with it — real spend, never a figure you type.</p>
+            <p>No figure here touches <b>Owed</b> or <b>Total contract</b>. What an overrun or underrun does to
+              the next payment is between you and the contractor.</p>
+          </div>
+        </details>
         <div id="allowancesMsg" class="msg" role="alert"></div>
 
-        <!-- Empty state: a prompt with the two ways in, not a bare table. -->
+        <!-- Empty state: a prompt with the way in, not a bare table. -->
         <div class="cd-alw-cta" id="allowancesEmpty" hidden>
-          <p>This contract has no allowance caps recorded. That is a normal contract — add them only if yours sets spending limits on named items like sanitaryware, doors or tiling.</p>
+          <p>No allowance caps recorded. Add them only if your contract sets spending limits on named items.</p>
           <div class="cd-alw-cta-actions">
-            <button type="button" class="cd-alw-seed" id="alwSeedBtn">+ Add the ten from the contract</button>
-            <button type="button" class="cd-btn-sm" id="alwAddOneBtn">Add one myself</button>
+            <button type="button" class="cd-btn-sm" id="alwAddOneBtn">Add an allowance</button>
           </div>
         </div>
 
@@ -888,10 +898,11 @@
 
     const allowancesSection = $('allowancesSection'), allowancesList = $('allowancesList'),
           allowancesEmpty = $('allowancesEmpty'), allowancesIntro = $('allowancesIntro'),
+          allowancesWhat = $('allowancesWhat'),
           allowanceForm = $('allowanceForm'),
           alwName = $('alwName'), alwKind = $('alwKind'), alwCap = $('alwCap'),
           alwArea = $('alwArea'), alwAreaWrap = $('alwAreaWrap'),
-          alwAddBtn = $('alwAddBtn'), alwSeedBtn = $('alwSeedBtn'), alwAddOneBtn = $('alwAddOneBtn');
+          alwAddBtn = $('alwAddBtn'), alwAddOneBtn = $('alwAddOneBtn');
     const allowancesMsg = makeMsg($('allowancesMsg'));
 
     // An area only means anything for a per-square-foot ceiling, so it is only asked for there.
@@ -910,6 +921,7 @@
     alwAddOneBtn.addEventListener('click', () => {
       allowanceForm.hidden = false;
       allowancesIntro.hidden = false;
+      allowancesWhat.hidden = false;
       alwName.focus();
     });
 
@@ -982,10 +994,11 @@
       const hasAny = allowances.length > 0;
       allowancesList.innerHTML = hasAny ? allowances.map(allowanceRowHtml).join('') : '';
       allowancesList.hidden = !hasAny;
-      // The add form stays hidden in the empty state — "Add one myself" reveals it — so the prompt
+      // The add form stays hidden in the empty state — "Add an allowance" reveals it — so the prompt
       // is two lines and two buttons rather than a prompt plus a form nobody asked for yet.
       allowanceForm.hidden = !hasAny;
       allowancesIntro.hidden = !hasAny;
+      allowancesWhat.hidden = !hasAny;
       allowancesEmpty.hidden = hasAny;
     }
 
@@ -1066,22 +1079,6 @@
         } else allowancesMsg.show(d.error || 'Could not add the allowance.', 'error');
       } catch { allowancesMsg.show('Network error. Please try again.', 'error'); }
       finally { alwAddBtn.disabled = false; }
-    });
-
-    alwSeedBtn.addEventListener('click', async () => {
-      if (editingContractId === null) return;
-      allowancesMsg.clear();
-      if (!window.confirm('Add the ten allowance caps from the contract? You can edit or delete any of them afterwards.')) return;
-      alwSeedBtn.disabled = true;
-      try {
-        const res = await fetch('/api/contracts/' + editingContractId + '/allowances/defaults', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-        });
-        const d = await res.json().catch(() => ({}));
-        if (res.ok) { await loadContracts(); allowancesMsg.show('Ten standard allowances added. The three per-square-foot ceilings need an area before they can show an over/under.', 'success'); }
-        else allowancesMsg.show(d.error || 'Could not add the standard allowances.', 'error');
-      } catch { allowancesMsg.show('Network error. Please try again.', 'error'); }
-      finally { alwSeedBtn.disabled = false; }
     });
 
     // Delegated kind-toggle + Save / Delete on the allowance rows.

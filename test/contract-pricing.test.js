@@ -53,12 +53,12 @@ test('a contract with no price at all is still valid, and reports pricingMode "n
 
 // ── rate × area ───────────────────────────────────────────────────────────────────────────────────
 test('rate + area DERIVES the stated price; the product is exact integer paise', async () => {
-  // ₹2,150.00/sqft × 2,347.5 sqft = ₹50,47,125.00 exactly.
-  const c = await mk({ ratePerSqftRupees: '2150.00', measuredAreaSqft: '2347.5' });
-  assert.strictEqual(c.ratePerSqftPaise, 215000);
-  assert.strictEqual(c.measuredAreaMilliSqft, 2347500, 'area is stored as thousandths of a sq ft');
-  assert.strictEqual(c.computedPricePaise, 504712500);
-  assert.strictEqual(c.statedAmountPaise, 504712500, 'the derived price is written to the stated column');
+  // ₹1,850.00/sqft × 1,240.5 sqft = ₹22,94,925.00 exactly.
+  const c = await mk({ ratePerSqftRupees: '1850.00', measuredAreaSqft: '1240.5' });
+  assert.strictEqual(c.ratePerSqftPaise, 185000);
+  assert.strictEqual(c.measuredAreaMilliSqft, 1240500, 'area is stored as thousandths of a sq ft');
+  assert.strictEqual(c.computedPricePaise, 229492500);
+  assert.strictEqual(c.statedAmountPaise, 229492500, 'the derived price is written to the stated column');
   assert.strictEqual(c.pricingMode, 'rate');
   assert.strictEqual(Number.isInteger(H.db.prepare('SELECT price_of_contract_paise p FROM contract WHERE id=?').get(c.id).p), true);
 });
@@ -70,12 +70,12 @@ test('a typed price sent alongside a complete rate price is IGNORED, not rejecte
 });
 
 test('either half alone derives nothing and leaves a typed price standing', async () => {
-  const rateOnly = await mk({ ratePerSqftRupees: '2150.00', statedAmountRupees: '2500000.00' });
+  const rateOnly = await mk({ ratePerSqftRupees: '1850.00', statedAmountRupees: '2500000.00' });
   assert.strictEqual(rateOnly.computedPricePaise, null, 'a rate with no area is not a price');
   assert.strictEqual(rateOnly.statedAmountPaise, 250000000, 'the typed value survives');
   assert.strictEqual(rateOnly.pricingMode, 'typed');
 
-  const areaOnly = await put(rateOnly.id, { measuredAreaSqft: '2347.5', statedAmountRupees: '2500000.00' });
+  const areaOnly = await put(rateOnly.id, { measuredAreaSqft: '1240.5', statedAmountRupees: '2500000.00' });
   assert.strictEqual(areaOnly.computedPricePaise, null, 'an area with no rate is not a price either');
   assert.strictEqual(areaOnly.statedAmountPaise, 250000000);
 });
@@ -122,13 +122,13 @@ test('every new metadata field is optional and round-trips', async () => {
     dateSigned: '2026-01-31',
     completionPeriodMonths: '13',
     supervisionRatePct: '12.5',
-    specifiedBrands: 'Cement: UltraTech. Wiring: Finolex.',
+    specifiedBrands: 'Cement: as specified. Wiring: as specified.',
     excludedScope: 'Compound wall, landscaping.',
     ownerObligations: 'Water and power at site.',
   });
   assert.strictEqual(c.completionPeriodMonths, 13);
   assert.strictEqual(c.supervisionRatePct, 12.5);
-  assert.strictEqual(c.specifiedBrands, 'Cement: UltraTech. Wiring: Finolex.');
+  assert.strictEqual(c.specifiedBrands, 'Cement: as specified. Wiring: as specified.');
   assert.strictEqual(c.excludedScope, 'Compound wall, landscaping.');
   assert.strictEqual(c.ownerObligations, 'Water and power at site.');
 

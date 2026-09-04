@@ -379,7 +379,7 @@
         <div class="ov-owed" id="ovOwed" hidden>
           <div class="ov-fig-label">Owed to contractors (F)</div>
           <div class="ov-fig-val" id="figF">₹0.00</div>
-          <div class="ov-owed-note">Total contract value − payments − reimbursement offsets (cumulative). The same figure as the downloadable PDF.</div>
+          <div class="ov-owed-note">Total contract value − payments paid, cumulative. Same figure as the PDF.</div>
         </div>
       </div>
 
@@ -418,7 +418,14 @@
            (no per-date amount, best-effort overdue). Hidden when the contract has no scheduled dates. -->
       <div class="ov-section" id="ovUpcomingSection" hidden>
         <p class="ov-section-title">Upcoming contract payments</p>
-        <p class="ov-up-note">Scheduled payment dates for the contract. Amounts aren’t tracked per scheduled date, and a recorded payment can’t be tied to a specific scheduled date — so an “overdue” note is a best-effort match on the exact date, not a confirmed amount.</p>
+        <p class="ov-up-note">Scheduled payment dates for the contract.</p>
+        <details class="wt">
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>An “overdue” note is a best-effort match on the exact date, not a confirmed amount: amounts
+              aren’t tracked per scheduled date, and a recorded payment can’t be tied to one.</p>
+          </div>
+        </details>
         <div id="ovUpcoming" class="ov-up-list"></div>
       </div>
 

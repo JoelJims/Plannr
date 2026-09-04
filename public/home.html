@@ -161,15 +161,13 @@
           </div>
         </div>
 
-        <span class="chip">Session active</span>
-        <p class="tagline">You are signed in. Your <b>build ledger</b> lives here.</p>
+        <span class="chip">Ledger</span>
+        <p class="tagline">Your <b>build ledger</b> lives here.</p>
       </aside>
 
       <section class="form-panel">
         <div class="welcome">
-          <span class="chip">Signed in</span>
           <p class="big">Welcome, <span id="name">…</span></p>
-          <p class="lead">Cost tracking is next. For now, you can sign out safely below.</p>
           <!-- Part D — last login (time + IP) and any failed attempts since then. Populated from /api/me;
                built via textContent (CSP-safe). The failed-attempts note is the part that does the work. -->
           <p class="home-lastlogin" id="lastLogin" hidden></p>
@@ -177,7 +175,7 @@
 
         <div class="notif-settings">
           <p class="lead">Daily report reminders</p>
-          <p class="notif-hint">A reminder to open Overview and share today's report. Up to 5 times a day — nothing is sent automatically.</p>
+          <p class="notif-hint">Reminds you to open Overview and share the day's report. Up to 5 a day; nothing is sent automatically.</p>
           <ul class="notif-list" id="notifList" aria-label="Configured reminder times"></ul>
           <div class="notif-add">
             <input type="time" id="notifTimeInput" aria-label="New reminder time">
@@ -188,7 +186,14 @@
 
         <div class="notif-settings" id="backupReminderSettings">
           <p class="lead">Backup reminder</p>
-          <p class="notif-hint">Nags (in-app and, on Android, as a notification) if the encrypted full backup on Data Backup is overdue. A JSON export or Ledger List CSV doesn't count — only a full encrypted backup is a complete restore point.</p>
+          <p class="notif-hint">Warns you when the encrypted full backup is overdue.</p>
+          <details class="wt">
+            <summary>What's this</summary>
+            <div class="wt-body">
+              <p>In-app, and as a notification on Android. Only a full encrypted backup clears it — a JSON
+                export or a Ledger List CSV doesn't count, because neither is a complete restore point.</p>
+            </div>
+          </details>
           <label for="backupReminderSelect">Remind me if overdue by</label>
           <select id="backupReminderSelect">
             <option value="off">Off</option>

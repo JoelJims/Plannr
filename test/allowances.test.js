@@ -1,9 +1,10 @@
 // Contract Phase A — allowance caps.
 //
-// The allowance schedule is the only place this contract attaches rupee figures to named items.
+// The allowance schedule is the only place a contract attaches rupee figures to named items.
 // Everything here is optional: a contract with no allowances behaves exactly as it did before the
 // table existed. What this file pins down:
-//   · a contract with no allowances is normal, and the ten standard caps are OPT-IN only
+//   · a contract STARTS WITH NO CAPS - there is no seeded set and no endpoint that installs one;
+//     every cap is one the owner typed
 //   · a 'lump' cap has a rupee ceiling; a 'per_sqft' cap has a RATE ceiling and only acquires a
 //     rupee position once an area is recorded — with no area it reports none rather than inventing one
 //   · running spend is DERIVED from live cash_out rows tagged with the allowance, never typed
@@ -48,60 +49,47 @@ test('a contract with no allowances works normally and reports an empty list', a
   assert.strictEqual(money.totalContractPaise, 250000000, 'nothing about allowances changes figure A');
 });
 
-// ── the ten standard caps ─────────────────────────────────────────────────────────────────────────
-test('the ten standard caps are OPT-IN, seed in contract order, and carry the contract figures', async () => {
+// ── no seeded set ─────────────────────────────────────────────────────────────────────────────────
+// The caps a contract sets are ITS OWN. Plannr once shipped a ten-row default list lifted from one
+// agreement (rupee ceilings on named sanitaryware, doors and a handrail, plus three per-sq-ft
+// ceilings) behind an opt-in POST .../allowances/defaults. Both the list and the route are gone: a
+// new contract starts empty and the owner enters the caps their own contract names. This pins that
+// there is no way back in — a shipped set of rupee figures is exactly the kind of invented number
+// that got contract_services.price_paise removed.
+test('a new contract starts with NO allowance caps and nothing can install a default set', async () => {
   const c0 = await mkContract();
-  assert.deepStrictEqual((await getContract()).allowances, [], 'nothing is seeded automatically');
+  assert.deepStrictEqual((await getContract()).allowances, [], 'a fresh contract has an empty allowance list');
 
   const r = await H.post(`/api/contracts/${c0.id}/allowances/defaults`, {}, { cookie });
-  assert.strictEqual(r.status, 201, JSON.stringify(r.json));
-  const c = await getContract();
-  assert.strictEqual(c.allowances.length, 10);
-  assert.deepStrictEqual(c.allowances.map((a) => a.name), [
-    'Attached bathroom CP and sanitary', 'Common and outside bathrooms', 'Kitchen sink and wash area',
-    'Main entry steel door', 'Other exterior steel doors', 'Interior doors', 'Stair handrail',
-    'Flooring tiles', 'Bathroom tiles', 'Granite',
-  ], 'seeded in contract order');
-
-  // the seven rupee caps
-  assert.strictEqual(byName(c, 'Attached bathroom CP and sanitary').capPaise, 3500000); // ₹35,000
-  assert.strictEqual(byName(c, 'Common and outside bathrooms').capPaise, 1000000);      // ₹10,000
-  assert.strictEqual(byName(c, 'Kitchen sink and wash area').capPaise, 1000000);        // ₹10,000
-  assert.strictEqual(byName(c, 'Main entry steel door').capPaise, 5000000);             // ₹50,000
-  assert.strictEqual(byName(c, 'Other exterior steel doors').capPaise, 2100000);        // ₹21,000
-  assert.strictEqual(byName(c, 'Interior doors').capPaise, 1150000);                    // ₹11,500
-  assert.strictEqual(byName(c, 'Stair handrail').capPaise, 2500000);                    // ₹25,000
-  // the three per-square-foot ceilings
-  assert.strictEqual(byName(c, 'Flooring tiles').capRatePerSqftPaise, 7500);            // ₹75/sqft
-  assert.strictEqual(byName(c, 'Bathroom tiles').capRatePerSqftPaise, 5000);            // ₹50/sqft
-  assert.strictEqual(byName(c, 'Granite').capRatePerSqftPaise, 15000);                  // ₹150/sqft
-  assert.strictEqual(c.allowances.filter((a) => a.capKind === 'lump').length, 7);
-  assert.strictEqual(c.allowances.filter((a) => a.capKind === 'per_sqft').length, 3);
+  assert.strictEqual(r.status, 404, 'the seed-the-defaults route no longer exists');
+  assert.deepStrictEqual((await getContract()).allowances, [], 'and nothing was created by asking');
 });
 
-test('seeding the standard set refuses on a contract that already has allowances', async () => {
+test('every cap on a contract is one the owner entered', async () => {
   const c = await mkContract();
-  await addAllowance(c.id, { name: 'Mine', capKind: 'lump', capRupees: '5000' });
-  const r = await H.post(`/api/contracts/${c.id}/allowances/defaults`, {}, { cookie });
-  assert.strictEqual(r.status, 409, 'no silent merge, no duplicate set');
-  assert.match(r.json.error, /already has 1 allowance/);
-  assert.strictEqual((await getContract()).allowances.length, 1, 'the existing row is untouched');
+  await addAllowance(c.id, { name: 'Sanitaryware', capKind: 'lump', capRupees: '18000' });
+  await addAllowance(c.id, { name: 'Wall tiling', capKind: 'per_sqft', capRatePerSqftRupees: '60' });
+  const c1 = await getContract();
+  assert.strictEqual(c1.allowances.length, 2, 'two typed caps, and no seeded rows alongside them');
+  assert.deepStrictEqual(c1.allowances.map((a) => a.name), ['Sanitaryware', 'Wall tiling'], 'in the order they were added');
+  assert.strictEqual(byName(c1, 'Sanitaryware').capPaise, 1800000);
+  assert.strictEqual(byName(c1, 'Wall tiling').capRatePerSqftPaise, 6000);
 });
 
 // ── the two cap kinds ─────────────────────────────────────────────────────────────────────────────
 test('a lump cap reports a rupee ceiling and a position from the first rupee spent', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Interior doors', capKind: 'lump', capRupees: '11500' });
-  assert.strictEqual(a.capPaise, 1150000);
-  assert.strictEqual(a.effectiveCapPaise, 1150000);
+  const a = await addAllowance(c.id, { name: 'Interior doors', capKind: 'lump', capRupees: '20000' });
+  assert.strictEqual(a.capPaise, 2000000);
+  assert.strictEqual(a.effectiveCapPaise, 2000000);
   assert.strictEqual(a.spentPaise, 0);
-  assert.strictEqual(a.positionPaise, 1150000, 'nothing spent yet -> the whole cap is under');
+  assert.strictEqual(a.positionPaise, 2000000, 'nothing spent yet -> the whole cap is under');
 });
 
 test('a per-sqft ceiling with NO area reports the rate and declines to state a position', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Flooring tiles', capKind: 'per_sqft', capRatePerSqftRupees: '75' });
-  assert.strictEqual(a.capRatePerSqftPaise, 7500);
+  const a = await addAllowance(c.id, { name: 'Flooring tiles', capKind: 'per_sqft', capRatePerSqftRupees: '90' });
+  assert.strictEqual(a.capRatePerSqftPaise, 9000);
   assert.strictEqual(a.areaMilliSqft, null);
   assert.strictEqual(a.effectiveCapPaise, null, 'a rate ceiling is not a rupee cap until an area exists');
   assert.strictEqual(a.positionPaise, null, 'and no over/under is invented to fill the gap');
@@ -114,14 +102,14 @@ test('a per-sqft ceiling with NO area reports the rate and declines to state a p
 
 test('recording the area turns a per-sqft ceiling into a rupee cap and a real position', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Granite', capKind: 'per_sqft', capRatePerSqftRupees: '150' });
+  const a = await addAllowance(c.id, { name: 'Granite', capKind: 'per_sqft', capRatePerSqftRupees: '120' });
   await spend(c.id, a.id, '20000.00');
-  const r = await H.put(`/api/contracts/${c.id}/allowances/${a.id}`, { name: 'Granite', capKind: 'per_sqft', capRatePerSqftRupees: '150', areaSqft: '120.5' }, { cookie });
+  const r = await H.put(`/api/contracts/${c.id}/allowances/${a.id}`, { name: 'Granite', capKind: 'per_sqft', capRatePerSqftRupees: '120', areaSqft: '120.5' }, { cookie });
   assert.strictEqual(r.status, 200, JSON.stringify(r.json));
   assert.strictEqual(r.json.allowance.areaMilliSqft, 120500);
-  assert.strictEqual(r.json.allowance.effectiveCapPaise, 1807500, '₹150 × 120.5 sqft = ₹18,075');
+  assert.strictEqual(r.json.allowance.effectiveCapPaise, 1446000, '₹120 × 120.5 sqft = ₹14,460');
   assert.strictEqual(r.json.allowance.spentPaise, 2000000, '₹20,000 spent');
-  assert.strictEqual(r.json.allowance.positionPaise, -192500, 'over by ₹1,925');
+  assert.strictEqual(r.json.allowance.positionPaise, -554000, 'over by ₹5,540');
 });
 
 test('each cap kind requires its own figure', async () => {
@@ -135,25 +123,25 @@ test('each cap kind requires its own figure', async () => {
 // ── running spend ─────────────────────────────────────────────────────────────────────────────────
 test('spend is the SUM of live tagged debits, and soft-deleting one releases its draw', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Main entry steel door', capKind: 'lump', capRupees: '50000' });
+  const a = await addAllowance(c.id, { name: 'Entrance door', capKind: 'lump', capRupees: '45000' });
   const e1 = await spend(c.id, a.id, '30000.00', '2026-07-12');
   await spend(c.id, a.id, '25000.00', '2026-07-20');
 
-  let row = byName(await getContract(), 'Main entry steel door');
+  let row = byName(await getContract(), 'Entrance door');
   assert.strictEqual(row.spentPaise, 5500000, 'MANY debits draw against one cap — no uniqueness rule');
   assert.strictEqual(row.entryCount, 2);
-  assert.strictEqual(row.positionPaise, -500000, 'over the ₹50,000 cap by ₹5,000');
+  assert.strictEqual(row.positionPaise, -1000000, 'over the ₹45,000 cap by ₹10,000');
 
   assert.strictEqual((await H.del('/api/cash-out/' + e1.id, { cookie })).status, 200);
-  row = byName(await getContract(), 'Main entry steel door');
+  row = byName(await getContract(), 'Entrance door');
   assert.strictEqual(row.spentPaise, 2500000, 'a soft-deleted debit stops counting');
   assert.strictEqual(row.entryCount, 1);
-  assert.strictEqual(row.positionPaise, 2500000, 'back under by ₹25,000');
+  assert.strictEqual(row.positionPaise, 2000000, 'back under by ₹20,000');
 });
 
 test('an untagged debit draws against nothing', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Stair handrail', capKind: 'lump', capRupees: '25000' });
+  const a = await addAllowance(c.id, { name: 'Stair handrail', capKind: 'lump', capRupees: '30000' });
   const r = await H.post('/api/cash-out', { amountRupees: '9000.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '5.0', contractScope: 'included' }, { cookie });
   assert.strictEqual(r.status, 201);
   assert.strictEqual(r.json.entry.contractAllowanceId, null);
@@ -162,7 +150,7 @@ test('an untagged debit draws against nothing', async () => {
 
 test('scope=extra clears the allowance link, and an unknown allowance is rejected', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Interior doors', capKind: 'lump', capRupees: '11500' });
+  const a = await addAllowance(c.id, { name: 'Interior doors', capKind: 'lump', capRupees: '20000' });
   const extra = await H.post('/api/cash-out', { amountRupees: '100.00', txDate: '2026-07-12', byType: 'user', byUserId: userId, ledgerCode: '1.0', contractScope: 'extra', contractAllowanceId: a.id }, { cookie });
   assert.strictEqual(extra.status, 201);
   assert.strictEqual(extra.json.entry.contractAllowanceId, null, 'an out-of-contract debit draws against no allowance');
@@ -183,12 +171,12 @@ test('editing a tagged debit WITHOUT sending contractAllowanceId preserves the d
 // ── displayed, never settled ──────────────────────────────────────────────────────────────────────
 test('an overrun changes NO Overview figure — the position is reported, not settled', async () => {
   const c = await mkContract(); // stated ₹25,00,000
-  const a = await addAllowance(c.id, { name: 'Interior doors', capKind: 'lump', capRupees: '11500' });
+  const a = await addAllowance(c.id, { name: 'Interior doors', capKind: 'lump', capRupees: '15000' });
   assert.strictEqual((await H.post('/api/contractor-payments', { contractId: c.id, amountRupees: '500000.00', payDate: '2026-07-10' }, { cookie })).status, 201);
-  await spend(c.id, a.id, '20000.00'); // ₹8,500 over the ₹11,500 cap
+  await spend(c.id, a.id, '20000.00'); // ₹5,000 over the ₹15,000 cap
 
   const row = byName(await getContract(), 'Interior doors');
-  assert.strictEqual(row.positionPaise, -850000, 'over by ₹8,500 — displayed');
+  assert.strictEqual(row.positionPaise, -500000, 'over by ₹5,000 — displayed');
 
   const o = (await H.get('/api/overview', { cookie })).json;
   assert.strictEqual(o.money.totalContractPaise, 250000000, 'A unchanged by the overrun');
@@ -200,7 +188,7 @@ test('an overrun changes NO Overview figure — the position is reported, not se
 // ── deletion ──────────────────────────────────────────────────────────────────────────────────────
 test('a soft-deleted allowance leaves its drawn spend intact and stops being reported', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Bathroom tiles', capKind: 'lump', capRupees: '10000' });
+  const a = await addAllowance(c.id, { name: 'Bathroom tiles', capKind: 'lump', capRupees: '12000' });
   await spend(c.id, a.id, '4000.00');
   assert.strictEqual((await H.del(`/api/contracts/${c.id}/allowances/${a.id}`, { cookie })).status, 200);
   assert.deepStrictEqual((await getContract()).allowances, [], 'gone from the live list');
@@ -210,7 +198,7 @@ test('a soft-deleted allowance leaves its drawn spend intact and stops being rep
 
 test('hard-deleting a contract is blocked while a cash-out entry still draws against its allowance', async () => {
   const c = await mkContract();
-  const a = await addAllowance(c.id, { name: 'Kitchen sink and wash area', capKind: 'lump', capRupees: '10000' });
+  const a = await addAllowance(c.id, { name: 'Kitchen sink', capKind: 'lump', capRupees: '12000' });
   await spend(c.id, a.id, '4000.00');
   assert.strictEqual((await H.del('/api/contracts/' + c.id, { cookie })).status, 200, 'soft-delete first (Recycle Bin)');
   const hard = await H.del(`/api/trash/contract/${c.id}`, { cookie });
@@ -221,8 +209,8 @@ test('hard-deleting a contract is blocked while a cash-out entry still draws aga
 // ── backup ────────────────────────────────────────────────────────────────────────────────────────
 test('allowances and their draws survive an export/import round trip', async () => {
   const c = await mkContract();
-  const lump = await addAllowance(c.id, { name: 'Main entry steel door', capKind: 'lump', capRupees: '50000' });
-  const rate = await addAllowance(c.id, { name: 'Flooring tiles', capKind: 'per_sqft', capRatePerSqftRupees: '75', areaSqft: '1200' });
+  const lump = await addAllowance(c.id, { name: 'Entrance door', capKind: 'lump', capRupees: '45000' });
+  const rate = await addAllowance(c.id, { name: 'Flooring tiles', capKind: 'per_sqft', capRatePerSqftRupees: '90', areaSqft: '1200' });
   await spend(c.id, lump.id, '52000.00');
 
   const backup = (await H.get('/api/backup/export', { cookie })).json;
@@ -231,10 +219,10 @@ test('allowances and their draws survive an export/import round trip', async () 
 
   const back = await getContract();
   assert.strictEqual(back.allowances.length, 2);
-  assert.strictEqual(byName(back, 'Main entry steel door').spentPaise, 5200000, 'the draw survived');
-  assert.strictEqual(byName(back, 'Main entry steel door').positionPaise, -200000, 'over by ₹2,000');
-  assert.strictEqual(byName(back, 'Flooring tiles').effectiveCapPaise, 9000000, '₹75 × 1,200 sqft = ₹90,000');
-  assert.strictEqual(rate.effectiveCapPaise, 9000000);
+  assert.strictEqual(byName(back, 'Entrance door').spentPaise, 5200000, 'the draw survived');
+  assert.strictEqual(byName(back, 'Entrance door').positionPaise, -700000, 'over by ₹7,000');
+  assert.strictEqual(byName(back, 'Flooring tiles').effectiveCapPaise, 10800000, '₹90 × 1,200 sqft = ₹1,08,000');
+  assert.strictEqual(rate.effectiveCapPaise, 10800000);
 });
 
 test('a backup whose cash_out draws against an allowance not in the file is rejected', async () => {
