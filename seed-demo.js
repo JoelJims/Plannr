@@ -1,4 +1,4 @@
-// Plannr — seed a realistic Kerala house build for scale/UX testing (Phase 3, Part B).
+// Plannr — seed a realistic house build for scale/UX testing (Phase 3, Part B).
 //
 //   npm run seed:demo          -> REFUSES (live DB) via db-guard
 //   PLANNR_DB=/tmp/demo.db npm run seed:demo   -> seeds the isolated copy
@@ -94,7 +94,7 @@ try {
   const contractId = Number(db.prepare(
     `INSERT INTO contract (contractor_name, area_of_work, ledger_code, subledger_code, price_of_contract_paise, date_signed, contract_end_date, created_at, updated_at)
      VALUES (?,?,?,?,?,?,?,?,?)`
-  ).run('Rajan & Sons Builders', '2,400 sqft — G+1 residential, Thrissur', '12.0', '12.7', rupees(2500000), '2025-01-15', '2026-06-30', nowIso, nowIso).lastInsertRowid);
+  ).run('Demo Builders', '2,400 sqft — G+1 residential', '12.0', '12.7', rupees(2500000), '2025-01-15', '2026-06-30', nowIso, nowIso).lastInsertRowid);
 
   // ---- 7 contractor payments across ~12 months (partial — leaves genuine dues) ----
   const payDates = ['2025-02-10', '2025-04-05', '2025-06-12', '2025-08-20', '2025-10-15', '2025-12-18', '2026-02-25'];
@@ -170,8 +170,8 @@ try {
   const payTot = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(amount_paise),0) s FROM contractor_payments').get();
   const inTot = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(amount_paise),0) s FROM cash_in').get();
   const fmt = (paise) => '₹' + (paise / 100).toLocaleString('en-IN');
-  console.log('\n[seed] DONE — realistic Kerala G+1 build seeded (profile: ' + (RECONCILE ? 'RECONCILE — few included rows' : 'OVER-OFFSET — many included rows; NOTE the offset is removed, so this no longer trips the banner') + '):');
-  console.log(`  contract:            ${fmt(rupees(2500000))} (Rajan & Sons Builders)`);
+  console.log('\n[seed] DONE — realistic G+1 build seeded (profile: ' + (RECONCILE ? 'RECONCILE — few included rows' : 'OVER-OFFSET — many included rows; NOTE the offset is removed, so this no longer trips the banner') + '):');
+  console.log(`  contract:            ${fmt(rupees(2500000))} (Demo Builders)`);
   console.log(`  contractor payments: ${payTot.c} rows, ${fmt(payTot.s)} paid`);
   console.log(`  cash_out (debits):   ${q1.c} rows, ${fmt(q1.s)} spent, across ${ledgerCount} of 24 ledgers`);
   console.log(`  · included (label):  ${included} rows   · long remarks (100–200c): ${longRemarks} rows`);
