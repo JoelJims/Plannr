@@ -1,5 +1,16 @@
 # Plannr
 
+## What this is
+
+Plannr is an offline expense ledger for a single building project, packaged as an Android app. One
+person installs it on their own phone and uses it to record what has been paid out, what has come in,
+and what is still owed on a construction contract. There is no server, no account and no sign-in, and
+the app makes no network requests — everything lives in a database file on the device. It is built
+with [Capacitor](https://capacitorjs.com/), so the interface is ordinary HTML and JavaScript running
+in a WebView.
+
+Built by Joel Jims — [github.com/JoelJims](https://github.com/JoelJims).
+
 A **single-user, offline construction-spend ledger**, built as an Android app with
 [Capacitor](https://capacitorjs.com/). One person runs it on their own phone to track money in and
 out of a single building contract — no server, no login, no internet connection required once

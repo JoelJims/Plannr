@@ -189,15 +189,23 @@
       <div class="bk-head">
         <span class="chip">Backup</span>
         <h1>Data Backup</h1>
-        <p class="lead">Save a copy of your ledger, restore it, or export a spreadsheet-friendly copy for Excel. Your account, password and login sessions are never included in a backup.</p>
+        <p class="lead">Save a copy of your ledger, restore it, or export it for Excel.</p>
       </div>
 
       <!-- 1. JSON backup (restorable) -->
       <section class="bk-section">
         <h2>JSON backup <span class="tag">Restorable</span></h2>
-        <p>Downloads your complete ledger — every inflow, outflow, loan, contract and the budget, including entries you've deleted — as one <code>.json</code> file. This is the file to keep for a safe restore.</p>
+        <p>Your whole ledger, deleted entries included, as one <code>.json</code> file — the one to restore from.</p>
         <label class="bk-optin"><input type="checkbox" id="includeContactsChk"> Include Daily Report contacts (Gmail addresses &amp; WhatsApp numbers)</label>
-        <p class="bk-note">Off by default: a backup you email or store elsewhere then carries your family's contact details. Leave this unchecked unless you specifically need them in the file — the budget and schedule times are always included either way, and restoring a backup without contacts leaves any already saved on this device untouched.</p>
+        <p class="bk-note">Off by default, so a backup you share carries no contact details.</p>
+        <details class="wt">
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>The budget and schedule times are always included either way — only the Gmail addresses and
+              WhatsApp numbers depend on this box.</p>
+            <p>Restoring a backup that has no contacts in it leaves any already saved on this device untouched.</p>
+          </div>
+        </details>
         <div id="jsonMsg" class="msg" role="status" aria-live="polite"></div>
         <button type="button" id="downloadJsonBtn" class="btn primary">Download JSON backup</button>
       </section>
@@ -205,8 +213,7 @@
       <!-- 2. Import / restore -->
       <section class="bk-section">
         <h2>Import / Restore <span class="tag">Replaces data</span></h2>
-        <p>Restores a Plannr JSON backup, replacing all current ledger data with the file's contents. Your current data is automatically saved to a snapshot first.</p>
-        <p class="bk-warn">Warning: this replaces everything in the ledger and can't be undone from inside the app.</p>
+        <p class="bk-warn">Restores a Plannr <code>.json</code> backup: replaces everything in the ledger and can't be undone. Your current data is snapshotted first.</p>
         <div id="importMsg" class="msg" role="status" aria-live="polite"></div>
         <input type="file" id="importFile" class="file-input" accept="application/json,.json" aria-label="Choose a Plannr JSON backup to restore">
         <button type="button" id="importBtn" class="btn ghost">Import / Restore</button>
@@ -217,8 +224,15 @@
            snapshots; cross-compatible with those files in both directions). -->
       <section class="bk-section">
         <h2>Encrypted full backup <span class="tag">Restorable</span></h2>
-        <p>Downloads the entire database — every table, exactly as stored — encrypted with a passphrase you choose, as one <code>.db.enc</code> file. Cross-compatible with the encrypted snapshots the desktop install can make.</p>
-        <p class="bk-note">Anyone with this file still needs the passphrase to read it — but anyone with BOTH can read everything, including anything the JSON backup leaves out by default. Store the passphrase somewhere separate from the file.</p>
+        <p>The entire database, exactly as stored, encrypted with a passphrase you choose (<code>.db.enc</code>).</p>
+        <details class="wt">
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>Anyone holding both the file and the passphrase can read everything in it, including the
+              contacts the JSON backup leaves out. Keep the passphrase somewhere other than the file.</p>
+            <p>Interchangeable with the encrypted snapshots a desktop install makes, in both directions.</p>
+          </div>
+        </details>
         <div id="encExportMsg" class="msg" role="status" aria-live="polite"></div>
         <label for="encExportPass">Passphrase</label>
         <input type="password" id="encExportPass" autocomplete="new-password" placeholder="Choose a passphrase">
@@ -227,8 +241,7 @@
 
       <section class="bk-section">
         <h2>Restore from encrypted backup <span class="tag">Replaces data</span></h2>
-        <p>Restores a Plannr encrypted (<code>.db.enc</code>) backup, replacing everything currently stored with the file's contents.</p>
-        <p class="bk-warn">Warning: this replaces the entire database and can't be undone from inside the app.</p>
+        <p class="bk-warn">Restores a <code>.db.enc</code> backup: replaces the entire database and can't be undone.</p>
         <div id="encImportMsg" class="msg" role="status" aria-live="polite"></div>
         <input type="file" id="encImportFile" class="file-input" accept=".enc" aria-label="Choose a Plannr encrypted backup to restore">
         <label for="encImportPass">Passphrase</label>
@@ -239,23 +252,36 @@
       <!-- 3. CSV export (Excel, export-only) -->
       <section class="bk-section">
         <h2>CSV for Excel <span class="tag muted">Export only</span></h2>
-        <p>Downloads a set of clearly-named <code>.csv</code> files (one per table) with amounts in rupees and ledger codes shown with their names — easy to open, read and print in Excel.</p>
+        <p>One <code>.csv</code> per table, amounts in rupees, for reading and printing. Can't be imported back.</p>
+        <details class="wt">
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>Live entries only — deleted rows are left out. Use the JSON backup to restore, and to keep
+              deleted rows.</p>
+          </div>
+        </details>
         <div id="csvMsg" class="msg" role="status" aria-live="polite"></div>
         <button type="button" id="downloadCsvBtn" class="btn ghost">Download CSV (for Excel)</button>
-        <p class="bk-note">CSV is for viewing/printing in Excel and cannot be imported back — use JSON to restore. CSV shows your live entries only (deleted rows are left out; the JSON backup keeps them).</p>
       </section>
 
       <!-- 4. Ledger List (Phase 10b) — the fixed ledger taxonomy itself, editable via CSV. Its own
            import path, separate from the CSV-for-Excel export above, which stays export-only. -->
       <section class="bk-section">
         <h2>Ledger List <span class="tag">Restorable</span></h2>
-        <p>Export the ledger category list as a CSV, edit names or add/remove categories in a spreadsheet, and re-import. A code is how the app matches a row across the round trip — rename freely, but a category still used by existing spend can't be removed.</p>
+        <p>Export the category list as CSV, edit it in a spreadsheet, re-import.</p>
+        <details class="wt">
+          <summary>What's this</summary>
+          <div class="wt-body">
+            <p>A code is how Plannr matches a row across the round trip, so names can change freely — but a
+              code still used by existing spend can't be removed.</p>
+          </div>
+        </details>
         <div id="ledgerCsvMsg" class="msg" role="status" aria-live="polite"></div>
         <button type="button" id="downloadLedgerCsvBtn" class="btn ghost">Download Ledger List (CSV)</button>
 
-        <p class="bk-warn">Before any import, Plannr automatically downloads a full encrypted backup as your restore point — the import only proceeds if that backup succeeds.</p>
+        <p class="bk-warn">Importing replaces the category list. An encrypted safety backup is saved first, and the import only runs if it succeeds.</p>
         <input type="file" id="ledgerCsvFile" class="file-input" accept="text/csv,.csv" aria-label="Choose an edited Ledger List CSV to import">
-        <label for="ledgerCsvBackupPass">Passphrase for the automatic safety backup</label>
+        <label for="ledgerCsvBackupPass">Passphrase for the safety backup</label>
         <input type="password" id="ledgerCsvBackupPass" autocomplete="new-password" placeholder="Choose a passphrase">
         <button type="button" id="importLedgerCsvBtn" class="btn ghost">Import Ledger List</button>
         <div id="ledgerCsvErrors" class="ledger-csv-errors" hidden></div>
@@ -264,7 +290,7 @@
       <!-- 4b. Recycle Bin (Phase 3C) — view / restore / permanently-delete soft-deleted rows. -->
       <section class="bk-section">
         <h2>Recycle Bin <span class="tag muted">Restore / delete</span></h2>
-        <p>Everything you've deleted across Plannr is kept here. <b>Restore</b> returns a row to its page and back into the Overview totals. <b>Delete permanently</b> removes it for good — that one, unlike every other delete in the app, cannot be undone.</p>
+        <p>Everything deleted across Plannr. <b>Restore</b> puts a row back; <b>Delete permanently</b> can't be undone.</p>
         <div id="trashMsg" class="msg" role="status" aria-live="polite"></div>
         <div id="trashBody"><p class="rb-empty">Loading…</p></div>
       </section>
@@ -718,7 +744,7 @@
         if (!file) { ledgerCsvMsg.show('Choose an edited Ledger List CSV first.', 'error'); return; }
         const passphrase = ledgerCsvBackupPass.value;
         if (!passphrase) { ledgerCsvMsg.show('Enter a passphrase for the automatic safety backup first.', 'error'); return; }
-        if (!window.confirm('This replaces the ledger category list. A safety backup saves first; the import only proceeds once you confirm you have it.')) return;
+        if (!window.confirm("Replace the ledger category list? This can't be undone in the app.")) return;
 
         importLedgerCsvBtn.disabled = true;
         try {

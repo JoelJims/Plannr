@@ -1,16 +1,18 @@
 # Plannr Ledger Taxonomy v2
 
-Derived from the residential construction agreement this app tracks: a fixed unit-rate lump sum contract at a rate per square foot of final measured built-up area.
+> **Status: PROPOSED, not implemented.** `ledgers.js` still seeds the v1 taxonomy and nothing in the app reads this file. Replacing the seed is a separate change (and, because sub-ledger codes would be reused with new meanings, a destructive one — see the Phase 10a guard in `db.js`).
 
-Structured so that any expense marked "included in contract" maps to a nameable line in the builder's Schedule of Work. Brand names in parentheses are the brands the contract specifies — buying otherwise is a change order.
+Built for a fixed unit-rate lump sum contract - one priced at a rate per square foot of final measured built-up area - which is the contract shape Plannr models.
+
+Structured so that any expense marked "included in contract" maps to a nameable line in the builder's Schedule of Work. Sub-ledgers name CATEGORIES only: no brand, supplier, rate or contract clause belongs in one. Add your own with the Ledger List CSV round trip if you want them.
 
 Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mechanism is separate and unchanged.
 
 ## Materials
 
 ### 1.0 MATERIALS — CONCRETE & STRUCTURE
-- 1.1 Cement (UltraTech)
-- 1.2 Steel TMT bars (Shyam primary)
+- 1.1 Cement
+- 1.2 Steel TMT bars
 - 1.3 Binding wire
 - 1.4 M-Sand (manufactured rock sand)
 - 1.5 P-Sand
@@ -28,7 +30,7 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 - 2.99 Misc
 
 ### 3.0 MATERIALS — JOINERY
-- 3.1 MS window frames (Tata GI / Simplex)
+- 3.1 MS window frames
 - 3.2 MS ventilator frames
 - 3.3 Main entry steel door
 - 3.4 Other exterior steel doors
@@ -42,11 +44,11 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 
 ### 4.0 MATERIALS — ELECTRICAL
 - 4.1 Conduits & concealed pipes
-- 4.2 Cables & wires (Finolex / V-Guard / RR)
-- 4.3 Modular switches & regulators (GM / Legrand)
+- 4.2 Cables & wires
+- 4.3 Modular switches & regulators
 - 4.4 Metal boxes
-- 4.5 Distribution board (V-Guard / Legrand)
-- 4.6 MCB / ELCB (Hager / Legrand / V-Guard)
+- 4.5 Distribution board
+- 4.6 MCB / ELCB
 - 4.7 Light fixtures
 - 4.8 Fans
 - 4.9 Inverter / UPS
@@ -55,14 +57,14 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 - 4.99 Misc
 
 ### 5.0 MATERIALS — PLUMBING & SANITARY
-- 5.1 Pipes & fittings (ISI star)
+- 5.1 Pipes & fittings
 - 5.2 CP fittings — taps, showers
 - 5.3 Sanitary ware — WC, wash basin
 - 5.4 Geyser
 - 5.5 Kitchen sink & wash counter
-- 5.6 Water storage tank (1000L)
+- 5.6 Water storage tank
 - 5.7 Sump
-- 5.8 Septic tank & sewage rings (United)
+- 5.8 Septic tank & sewage rings
 - 5.9 Motor / pump
 - 5.99 Misc
 
@@ -82,8 +84,8 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 - 7.1 Exterior putty
 - 7.2 Interior putty
 - 7.3 Primer
-- 7.4 Exterior finish (Asian Paints Apex Ultima)
-- 7.5 Interior finish (Asian Paints Apcolite emulsion)
+- 7.4 Exterior finish
+- 7.5 Interior finish
 - 7.6 Enamel — wood & MS
 - 7.7 Epoxy primer
 - 7.99 Misc
@@ -192,10 +194,10 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 
 ### 17.0 CHANGE ORDERS & EXTRAS
 - 17.1 Additional work — builder billed
-- 17.2 Supervision charges (8%)
-- 17.3 Foundation beyond 2.5 ft
-- 17.4 Plinth beyond 1.5 ft
-- 17.5 Client-supplied wood (Rs 1500/CFT)
+- 17.2 Supervision charges
+- 17.3 Additional foundation work
+- 17.4 Additional plinth work
+- 17.5 Client-supplied materials
 - 17.6 Allowance overrun settlement
 - 17.99 Misc
 
@@ -272,5 +274,5 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 
 - 24 main ledgers, 24 `N.99 Misc` sub-ledgers, 152 named sub-ledgers.
 - Contractor stage payments are deliberately absent — they belong in the contractor-payments table, which already feeds the Overview pie. A ledger main for them would double-count.
-- Per-sq-ft allowance caps map to 6.1 flooring tiles, 6.2 bathroom tiles, 6.4 granite.
+- A per-sq-ft allowance cap, where a contract sets one, will usually sit against 6.1 flooring tiles, 6.2 bathroom tiles or 6.4 granite. Plannr seeds no caps of its own - every cap is one the owner enters.
 - Picker grouping: Materials 1–7, Labour 8–11, Pre-construction 12–15, Contract boundaries 16–17, Post-contract 18–21, Money 22, Closing 23–24.

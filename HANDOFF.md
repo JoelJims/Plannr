@@ -44,8 +44,9 @@ See `README.md` for the full table list. The ones worth extra context here:
   that one row to every request.
 - **`ledger_mains` / `ledger_subs`** are seeded once from root `ledgers.js` (24 mains, ~163 subs) the
   first time `init()` runs against an empty pair of tables — a presence check, not a version gate, so
-  it can never re-fire and re-seed duplicates on a later boot. From then on these two tables are the
-  runtime source of truth; every consumer (dropdowns, validation, the Overview pie) reads from them,
+  it can never re-fire and re-seed duplicates on a later boot. The one migration that reaches back into
+  already-seeded rows is the generic-name rename (§7) — five labels, by code AND old name, nothing else.
+  From then on these two tables are the runtime source of truth; every consumer (dropdowns, validation, the Overview pie) reads from them,
   not from `ledgers.js`. `code` is the primary key and the sole identity across an export/edit/import
   round trip — no hidden internal id.
 - **`settings`** has a composite `(tenant_id, key)` primary key, a holdover from an earlier
@@ -105,8 +106,8 @@ third term is gone:
 optional: a contract with no stated price contributes 0 to Total contract (A) and 0 to owed, while its
 payments still count in B/D/pie.
 
-**The stated price may be DERIVED (Contract Phase A).** This contract is a fixed unit-rate lump sum:
-its price is `rate_per_sqft_paise × measured_area_milli_sqft`. Both halves are optional and
+**The stated price may be DERIVED (Contract Phase A).** A fixed unit-rate lump sum contract prices
+the work as `rate_per_sqft_paise × measured_area_milli_sqft`. Both halves are optional and
 independently editable — the rate is fixed at signing, the area is not known until final measurement.
 When both are present the write path MATERIALISES their product into `price_of_contract_paise`, so
 owed, figure A, the PDF and the Contractor Payments "Remaining" line all keep reading the one column
@@ -117,9 +118,11 @@ rather than re-running the write path — so `reconciliation.contractPriceDeriva
 flags it (§4). Re-saving the contract is the repair.
 
 **Allowance caps are DISPLAYED, never settled.** `contract_allowances` holds the only rupee figures
-the contract attaches to named items. Spend against a cap is derived from live `cash_out` rows tagged
-with `contract_allowance_id`; the position is `effective cap − spend`, signed. Per the contract an
-overrun is added to the next progress payment and an underrun subtracted from the final — that is a
+a contract attaches to named items. Plannr SEEDS NONE of them: a contract starts with an empty
+allowance list and every cap is one the owner entered (there was once an opt-in ten-row default set
+lifted from one agreement — file, endpoint and button are all gone). Spend against a cap is derived from live `cash_out` rows tagged
+with `contract_allowance_id`; the position is `effective cap − spend`, signed. Where a contract says an
+overrun is added to the next progress payment and an underrun subtracted from the final, that is a
 decision the owner makes on the day, so **no allowance figure touches owed, Total contract, or any
 Overview total**. A `per_sqft` cap with no area recorded has no rupee ceiling at all and reports no
 position, rather than inventing an area to manufacture one.
@@ -185,14 +188,20 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   sub-ledgers, and — the checks that matter — that picking through the panel leaves the native
   `<select>` holding the right value and fires the `change` the sub-ledger rebuild and the Custom…
   reveal depend on. Plus the phone-width behaviour (full-bleed panel, 48px rows, no overflow).
+- **`npm run test:disclosure`** (`test-ui/disclosure.js`) → the shared "what's this" toggle on every
+  page that carries one: collapsed on load, opens to real text, keyboard-focusable with a visible focus
+  ring, and no horizontal overflow at 390px with every section revealed and every toggle open. Guards
+  the one way this component can fail silently — text that is collapsed AND unreachable has been
+  deleted, not disclosed.
 - **`npm run test:contract-layout`** (`test-ui/contract-details-layout.js`) → Contract Details at
   390px: the optional block collapsed but auto-opening when it holds data, every optional field
   actually inside it and no core field swept in, the allowance table hidden when empty, per-field
   labels appearing when the grid collapses to one column, and no horizontal overflow.
 - **`npm run test:contract-phase-a`** (`test-ui/contract-phase-a.js`) → the Contract Details page in a
   real browser: the derived-total readout appearing and disabling the typed field, the derived
-  expected completion date, the scope list with no price input left on it, seeding the ten allowance
-  caps, the two different over/under wordings, and drawing spend against a cap from the debit form.
+  expected completion date, the scope list with no price input left on it, entering allowance caps by
+  hand (nothing seeds them), the two different over/under wordings, and drawing spend against a cap
+  from the debit form.
   Fails on any console error.
 
 ---
@@ -243,6 +252,24 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   marker-gated and REFUSES TO BOOT if any service actually holds a price, listing the figures in the
   error and archiving them into `settings._archived_service_prices_v1` on an approved run — so they
   survive in every backup even though the column does not. See §6.
+- **One line on the page, the rest behind `.wt`.** Every section is a heading, ONE line of description,
+  and the control. Anything that genuinely matters but does not fit that line goes in a collapsed
+  `<details class="wt">` ("what's this"), defined once in `styles.css` and used by Data Backup, Contract
+  Details, Overview and Home. Native `<details>`: no JS, keyboard- and screen-reader-operable for free,
+  and legal under this app's CSP. Two rules keep it honest — a destructive action states what it destroys
+  ONCE, on the page, in the open (never behind the toggle); and error/validation messages are exempt
+  entirely, because they appear only when something has already gone wrong and need to be specific.
+  Data Backup went from 485 words on load to 217 under this rule.
+- **A taxonomy RENAME is not a taxonomy WIPE.** Five seeded sub-ledger labels were copied out of one
+  agreement ("Foundation depth beyond 2.5 ft", "Plinth height beyond 1.5 ft") or named one region's
+  supplier ("Electricity connection (KSEB)", "Equipment rental — mixer, JCB", "Plastic waste —
+  Harithakarmasena"); `ledgers.js` now seeds generic names, and `_migrated_generic_ledger_names_v1`
+  renames them on an installed database. That migration is deliberately NOT gated behind an approval
+  hatch like the Phase 10a cleanup, because it destroys nothing: no row is deleted and **no code
+  changes**, and a code is the taxonomy's identity across a rename, so every debit keeps pointing at
+  exactly the sub-ledger it always pointed at. Each UPDATE matches the OLD NAME as well as the code, so
+  a label the household already edited via CSV is left alone. Pinned by `test/_ledger-rename-fixture.js`
+  (fresh seed / rename in place / spend and codes intact / owner edit respected / not repeated).
 - **A derived price is materialised, not computed on read.** Rate × area is written into
   `price_of_contract_paise` rather than assembled in `contractRow()`. That keeps owed, figure A, the
   PDF and Contractor Payments reading exactly the column they always read (a one-line change instead

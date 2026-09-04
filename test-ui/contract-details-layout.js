@@ -89,7 +89,7 @@ const OPTIONAL = ['#hasSignedDate', '#hasEndDate', '#cMonths', '#cSupervision', 
   console.log('\n── the count, and auto-opening ───────────────────────────────────');
   check('the summary says "all optional" while nothing is filled', (await page.textContent('#cdOptionalCount')).trim() === 'all optional');
   await page.fill('#cSupervision', '12.5');
-  await page.fill('#cBrands', 'UltraTech');
+  await page.fill('#cBrands', 'As specified');
   await page.waitForTimeout(150);
   check('...and counts the fields as they are filled', (await page.textContent('#cdOptionalCount')).trim() === '2 set', await page.textContent('#cdOptionalCount'));
 
@@ -97,7 +97,7 @@ const OPTIONAL = ['#hasSignedDate', '#hasEndDate', '#cMonths', '#cSupervision', 
   await page.fill('#cContractor', 'Ramesh & Co');
   await page.fill('#cArea', 'Structural');
   await pickLedger(page, '#cLedgerTrigger', '5.0');
-  await page.fill('#cRate', '2150');
+  await page.fill('#cRate', '1850');
   await page.click('#contractSaveBtn');
   await page.waitForTimeout(700);
   check('a contract with optional data re-opens the block on load', (await page.getAttribute('#cdOptional', 'open')) !== null);
@@ -108,16 +108,20 @@ const OPTIONAL = ['#hasSignedDate', '#hasEndDate', '#cMonths', '#cSupervision', 
   check('the table is hidden when there are none', !(await page.isVisible('#allowancesList')));
   check('so is the add form', !(await page.isVisible('#allowanceForm')));
   check('a prompt is shown instead', await page.isVisible('#allowancesEmpty'));
-  check('with both ways in', await page.isVisible('#alwSeedBtn') && await page.isVisible('#alwAddOneBtn'));
+  check('with the one way in', await page.isVisible('#alwAddOneBtn'));
+  check('and no button that installs a default set of caps', (await page.$('#alwSeedBtn')) === null);
 
   await page.click('#alwAddOneBtn');
   await page.waitForTimeout(200);
-  check('"add one myself" reveals the form', await page.isVisible('#allowanceForm'));
+  check('"add an allowance" reveals the form', await page.isVisible('#allowanceForm'));
 
-  page.once('dialog', (d) => d.accept());
-  await page.click('#alwSeedBtn');
+  // One hand-entered cap is what makes the table appear now that nothing seeds a set, so the
+  // phone-width row checks below still have a row to measure.
+  await page.fill('#alwName', 'Sanitaryware');
+  await page.fill('#alwCap', '18000');
+  await page.click('#alwAddBtn');
   await page.waitForTimeout(700);
-  check('seeding shows the table and retires the prompt', await page.isVisible('#allowancesList') && !(await page.isVisible('#allowancesEmpty')));
+  check('a typed cap shows the table and retires the prompt', await page.isVisible('#allowancesList') && !(await page.isVisible('#allowancesEmpty')));
 
   console.log('\n── phone width: the allowance rows ───────────────────────────────');
   // At 390px each row is a single column. Six unlabelled boxes in a stack is a guessing game, so the

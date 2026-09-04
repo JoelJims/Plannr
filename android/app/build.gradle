@@ -47,6 +47,40 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
+    // ---- Release APK filename ---------------------------------------------------------------
+    // Every one of these apps is a Gradle module called "app", so every one shipped its release
+    // build as "app-release.apk". Three of those in one chat or download folder are impossible to
+    // tell apart, and the wrong one gets installed. The release output is now named for its app.
+    //
+    // Two settings, deliberately:
+    //   · base.archivesName (below, outside this block) renames the archives this module produces
+    //     from "app" to "Plannr" — but AGP always appends the variant name, so on its own that
+    //     yields "Plannr-release.apk", not "Plannr.apk".
+    //   · outputFileName here drops that suffix, so the file that actually lands is "Plannr.apk".
+    //
+    // applicationVariants is the deprecated variant API (targeted for removal in AGP 9). Keeping
+    // archivesName set is the hedge: if this block ever stops working, the output degrades to
+    // "Plannr-release.apk" — still unambiguous — rather than silently reverting to
+    // "app-release.apk", which is the exact failure being fixed.
+    //
+    // DEBUG keeps its variant suffix and becomes "Plannr-debug.apk": only the release output is
+    // overridden above, so archivesName renames it and AGP still appends "-debug". Verified by
+    // building one. That is the wanted outcome — a debug build is identifiable as this app AND
+    // unmistakable for the release.
+    applicationVariants.all { variant ->
+        if (variant.buildType.name == 'release') {
+            variant.outputs.all { output ->
+                output.outputFileName = "Plannr.apk"
+            }
+        }
+    }
+}
+
+// Renames this module's archives from the default "app" to the app's own name; see the note in
+// the android block above for why both this and the outputFileName override are set.
+base {
+    archivesName = "Plannr"
 }
 
 repositories {

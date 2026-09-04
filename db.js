@@ -231,7 +231,7 @@ export function init() {
     -- 2c. contract_services: a contract's SCOPE OF WORK — a plain list of names, nothing else.
     --     History: it began as the source of cash_out.contract_stated_paise (the Phase 5E offset),
     --     then kept an OPTIONAL price_paise feeding an informational "remainder" line. Contract
-    --     Phase A REMOVED price_paise outright. The contract this app tracks is a fixed unit-rate
+    --     Phase A REMOVED price_paise outright. A fixed unit-rate lump sum contract is
     --     lump sum: its schedule of work lists scope items and attaches NO price to any of them, so
     --     a price field could only ever be filled with a number the owner made up — which then fed
     --     a remainder ("stated minus priced services") that meant nothing. A service is now purely
@@ -263,8 +263,8 @@ export function init() {
     --
     --     Spend is DERIVED, never typed: the sum of LIVE cash_out rows whose contract_allowance_id
     --     points here. Position = effective cap − spend (positive = under, negative = over).
-    --     Per the contract, an overrun is added to the next progress payment and an underrun
-    --     subtracted from the final. Plannr DISPLAYS that position and settles nothing: no
+    --     Where a contract says an overrun is added to the next progress payment and an underrun
+    --     subtracted from the final, Plannr DISPLAYS that position and settles nothing: no
     --     allowance figure touches owed, Total contract, or any Overview total.
     CREATE TABLE IF NOT EXISTS contract_allowances (
       id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,7 +274,7 @@ export function init() {
       cap_paise               INTEGER,            -- 'lump': the rupee ceiling, paise. NULL for 'per_sqft'
       cap_rate_per_sqft_paise INTEGER,            -- 'per_sqft': the ceiling rate, paise per sq ft. NULL for 'lump'
       area_milli_sqft         INTEGER,            -- 'per_sqft' only, OPTIONAL: the area this allowance covers (milli-sq-ft)
-      sort_order              INTEGER NOT NULL DEFAULT 0, -- display order; the ten standard caps seed in contract order
+      sort_order              INTEGER NOT NULL DEFAULT 0, -- display order; caps list in the order the owner added them
       created_at              TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at              TEXT                -- soft-delete: NULL = live
@@ -1171,7 +1171,7 @@ export function init() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
 
   // --- A3. DESTRUCTIVE: drop contract_services.price_paise ------------------------------------
-  // The contract this app tracks prices nothing per service: the schedule of work lists scope items
+  // A fixed unit-rate lump sum contract prices nothing per service: the schedule of work lists scope items
   // and attaches no rupee figure to any of them. A price field on a service could therefore only be
   // filled with an invented number, which then fed an informational "remainder" (stated − sum of
   // priced services) that meant nothing at all. The column goes.
@@ -1229,16 +1229,17 @@ export function init() {
   }
 
   // Phase 10a — the 23-category ledger taxonomy (public/ledgers.js) was replaced with a fresh
-  // 24-category one derived from the real contract and the owner's tracking spreadsheet. The old
+  // 24-category one covering residential construction more completely. The old
   // and new taxonomies reuse the SAME "N.M" code shape with DIFFERENT meanings per code (old 4.2 =
   // Cement, new 4.2 = Demolition) — so "does this code still exist" is not a safe survival test: a
   // stale row could coincidentally collide with an unrelated new category and silently display the
   // wrong thing forever, which is worse than an obviously-broken one.
   //
   // cash_out.ledger_code is NOT NULL (every debit needs a real category), so a stale row can't be
-  // repaired by clearing the tag — and every existing row is seeded mock data; no real payment has
-  // ever been entered against the old taxonomy (confirmed with the household). Wiping the table
-  // outright loses nothing of value and leaves nothing mislabeled.
+  // repaired by clearing the tag — and at the time this shipped every existing row was seeded mock
+  // data, with no real payment ever entered against the old taxonomy, so wiping the table lost
+  // nothing of value and left nothing mislabeled. The guard below is what protects anyone whose
+  // database does NOT match that assumption.
   //
   // contract.ledger_code/subledger_code and contractor_payments.ledger_code/subledger_code are
   // OPTIONAL — the same stale-code risk applies, but clearing just the tag (not the row) is enough
@@ -1295,6 +1296,35 @@ export function init() {
     db.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
     db.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
     db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  }
+
+  // Generic-taxonomy rename — five seeded sub-ledger LABELS were copied out of one construction
+  // agreement ("Foundation depth beyond 2.5 ft", "Plinth height beyond 1.5 ft") or named a single
+  // supplier/region ("Electricity connection (KSEB)", "Equipment rental — mixer, JCB", "Plastic waste
+  // — Harithakarmasena"). ledgers.js now seeds generic names instead, but that file is read ONLY when
+  // ledger_subs is empty (see the Phase 10b seed above), so an installed database would keep the old
+  // labels forever. This renames them in place.
+  //
+  // NOT the Phase 10a class of change, and deliberately NOT guarded like it. Nothing is deleted and no
+  // CODE changes: "code IS the identity across a rename" is the taxonomy's own rule, so every cash_out /
+  // contract / contractor_payments row keeps pointing at exactly the sub-ledger it always pointed at and
+  // only the label it displays changes. There is no data at stake, so there is nothing to refuse over —
+  // the destructive-migration hatches (PLANNR_ALLOW_TAXONOMY_WIPE and friends) would be theatre here.
+  //
+  // Each UPDATE matches the OLD NAME as well as the code, so a household that already renamed one of
+  // these via the Ledger List CSV round trip is never stomped: a row that no longer reads exactly as
+  // seeded is left exactly as the owner left it. Marker-gated, so a later deliberate rename BACK to one
+  // of these is not undone on the next boot.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_generic_ledger_names_v1'").get()) {
+    const rename = db.prepare('UPDATE ledger_subs SET name = ? WHERE code = ? AND name = ?');
+    for (const [code, from, to] of [
+      ['20.1', 'Electricity connection (KSEB)', 'Electricity connection'],
+      ['21.1', 'Equipment rental — mixer, JCB', 'Equipment rental — mixer, excavator'],
+      ['23.4', 'Plastic waste — Harithakarmasena', 'Plastic waste handover'],
+      ['24.2', 'Foundation depth beyond 2.5 ft', 'Additional foundation work'],
+      ['24.3', 'Plinth height beyond 1.5 ft', 'Additional plinth work'],
+    ]) rename.run(to, code, from);
+    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_generic_ledger_names_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Schema-version marker (Phase 11B) — stamped ONLY here, after every migration above has succeeded,
