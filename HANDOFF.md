@@ -2,8 +2,8 @@
 
 Core reference for how Plannr works: what it is, the schema and its invariants, the dues
 mechanic, the backup/recovery paths, the deliberate decisions and why, the known limitations, and
-troubleshooting by symptom. `README.md` is the fuller feature/setup reference; this file is the model
-and the operational knowledge.
+troubleshooting by symptom. `README.md` is the short introduction for someone meeting the project for
+the first time; this file is the model, the schema and the operational knowledge.
 
 ---
 
@@ -29,16 +29,82 @@ categories) via CSV export/import.
 - No login, no network calls other than to the app's own backend, no email/messaging integration of
   any kind.
 
-**Run it:** see `README.md` → "How it runs" for desktop (`node server.js`) vs. Android
-(`npm run android:sync` + Android Studio) vs. the static-hosting test mode (`node local-server.js`).
+### Running modes
+
+The frontend (`public/`) is the same static HTML/JS on every target; only the backend it talks to
+changes:
+
+| Mode | Backend | Storage | When you'd use it |
+|---|---|---|---|
+| **Android app** | `public/local-api.js` — an in-page `fetch()` shim, no network involved | `@sqlite.org/sqlite-wasm` via OPFS/kvvfs, inside the Capacitor WebView | The actual shipped product |
+| **`node server.js`** | Real Express routes | `node:sqlite` against `data/plannr.db` | Local desktop use, and what most of the automated test suite boots |
+| **`node local-server.js`** | Same `local-api.js` shim as the Android app | Same WASM engine, in a plain Chromium tab | Testing the exact static-hosting model the Android WebView uses, without building an APK |
+
+Because `local-api.js` and `server.js` expose the same API surface, every page works identically
+regardless of which one is running underneath — see §7 for why they are duplicated rather than shared.
+
+**Desktop.** `npm start` = `node server.js` → `http://localhost:3000`. `PORT` overrides the port
+(default 3000). `PLANNR_DB=/path/to.db` overrides the database file — **always use this for testing;
+never test against `data/plannr.db`.** The schema and all migrations are created/run on boot from
+`init()`.
+
+**Android.** `npm run android:sync` = `sync-public-modules.js` (copies `db.js`/`repo.js`/vendor into
+`public/`) + `npx cap sync android`; then open `android/` in Android Studio to build and run on a
+device or emulator. `capacitor.config.json` points `webDir` at `public/` — whatever is in there is
+what ships.
+
+### Pages
+
+`home` · `/cash-flow` · `/cash-inflow` (Money Credited) · `/cash-outflow` (Money Debited) ·
+`/loan-details` · `/contract-details` · `/contractor-payments` · `/overview` · `/data-backup`.
+
+### Layout
+
+```
+server.js         Express app: the ledger CRUD, Overview + PDF, JSON/CSV/encrypted backup, Recycle Bin.
+                  Desktop/dev only — not what ships on Android.
+db.js             SQLite schema + idempotent migrations (run on boot), node:sqlite (Node) or
+                  db-engine.js (WASM, browser) depending on where it's loaded.
+db-engine.js      The @sqlite.org/sqlite-wasm adapter db.js uses in a browser/Android WebView.
+repo.js           The data-access layer — every table read/write goes through here.
+ledgers.js        Seed data for the ledger taxonomy (ledger_mains/ledger_subs); NOT the runtime
+                  source once the DB is seeded — see the "Ledger List" export/import in §6.
+local-api.js      (public/) An in-page fetch() shim exposing the same API surface as server.js,
+                  backed by the WASM engine — this is what the Android app actually runs against.
+local-server.js   A trivial static file server for testing public/ the way a real static host
+                  (or the Android WebView) would, with server.js not running at all.
+public/           Static frontend + shared PlannrUI helpers (public/plannr-ui.js).
+android/          The Capacitor-generated native Android project (`npx cap sync android`).
+reset-db.js       One-shot full wipe (npm run reset-db).
+backup-db.js      Desktop-only: writes a scheduled, encrypted VACUUM INTO snapshot of data/plannr.db
+                  to a folder outside the project — useful if you also run the desktop/server.js mode.
+data/plannr.db    SQLite file used by server.js (created on first run, gitignored). The Android app
+                  keeps its own separate on-device database; the two are never the same file.
+```
 
 ---
 
 ## 2. Schema (`data/plannr.db` under server.js; a separate on-device DB under the Android app)
 
-See `README.md` for the full table list. The ones worth extra context here:
+| table | holds |
+|---|---|
+| `users` | exactly one row: the fixed local owner. `password_hash` is dormant (kept for schema stability; there is no login). |
+| `contract` | the single building contract: contractor, area, headline ledger tag, `price_of_contract_paise` (OPTIONAL stated amount — dues math starts here; NULL = no stated price, contributing 0 to A and 0 to owed), optional free-form amount, optional date signed, optional end date. **Rate-based pricing:** `rate_per_sqft_paise` + `measured_area_milli_sqft` (both optional, both editable at any time — the area isn't known until final measurement). When both are set, `price_of_contract_paise` is their product, rewritten on every save. **Optional metadata:** `completion_period_months` (yields a derived expected completion date), `supervision_rate_pct` (informational, drives nothing), and three free-text notes — `specified_brands`, `excluded_scope`, `owner_obligations`. |
+| `contract_payment_dates` | a contract's scheduled payment dates (0..many); offered as the date dropdown on the Contractor Payments page. Cascades if the contract is hard-deleted. |
+| `contract_services` | a contract's SCOPE OF WORK — a name, and nothing else. The optional `price_paise` was REMOVED: this contract is a fixed unit-rate lump sum whose schedule of work attaches no rupee figure to any scope item, so the field could only hold an invented number (and fed a "remainder" line that meant nothing). Their only downstream job is to be NAMED by a debit via `cash_out.contract_service_id` (provenance: "which item was this spend for"). Soft-delete; cascades if the contract is hard-deleted. |
+| `contract_allowances` | the contract's allowance CAPS — optional, 0..many per contract. `cap_kind` is `lump` (a rupee ceiling in `cap_paise`) or `per_sqft` (a ceiling RATE in `cap_rate_per_sqft_paise`, which only becomes a rupee cap once the optional `area_milli_sqft` is recorded). Running spend is DERIVED from live `cash_out` rows tagged with the allowance, never typed; the over/under position is displayed and settles nothing. Soft-delete; cascades if the contract is hard-deleted. |
+| `ledger_mains` / `ledger_subs` | the ledger taxonomy — 24 main categories and their sub-ledgers, `code` as the primary key. Seeded once from root `ledgers.js` on first boot; from then on the DB is the source of truth. User-editable: export/import as CSV from Data Backup → "Ledger List" (§6). |
+| `ledger_customs` | a saved list of custom ledger names typed by hand, so a typed custom is selectable after first use. |
+| `contractor_payments` | money PAID to the contractor, each tied to the contract. Ledger fields are an optional *display* tag and do NOT drive dues. |
+| `cash_in` | money credited (inflow): amount, `by_type` (`user`/`relative`/`custom`) + attribution, reason. |
+| `cash_out` | money debited (outflow): amount, tx_date, `by_type` (`user`/`custom`) + who paid, ledger/sub-ledger (or `CUSTOM`), `contract_scope` (`included`/`extra`, a descriptive label only), `contract_service_id` (the linked `contract_services` row — provenance; NULL when 'extra' or when no item is picked), and `contract_allowance_id` (the allowance this spend draws against; NULL when 'extra' or untagged — NOT unique, since many debits draw against one cap). `contract_stated_paise` is RETIRED: the column is kept nullable so historical values and backups survive, but nothing writes or reads it (§3). `phase`/`subpart` are dormant, stored but unused. |
+| `loans` | one-time loan records: amount, bank, interest rate, tenure. `interest_rate` is informational (drives no calculation); interest actually *paid* is a `cash_out` row under ledger 22.5 (Loan interest). |
+| `settings` | key/value app options (budget, notification times). Composite `(tenant_id, key)` PK is a holdover from an earlier multi-household design; in this single-owner app it's always keyed to the one owner. |
 
-- **`users`** holds exactly one row — the fixed local owner, seeded on first boot. There is no
+The ones worth extra context:
+
+- **`users`** holds exactly one row — the fixed local owner (`username: 'owner'`), seeded by `init()`
+  on first boot if none exists; every request resolves to that row regardless of any cookie. There is no
   registration and no password check; `password_hash` is a dormant column kept only for schema
   stability. `requireApiAuth` (server.js) / the equivalent in `local-api.js` is a no-op that attaches
   that one row to every request.
@@ -63,17 +129,22 @@ See `README.md` for the full table list. The ones worth extra context here:
   offsetting the dues twice; with the reimbursement offset removed (§3) the link is pure provenance,
   so the index now guards a bookkeeping rule rather than a figure. Kept as-is. Contract Phase A did
   NOT touch it — it never depended on the service price — but it did remove the app-level rule that
-  sat beside it ("only a PRICED service can be linked"), which went out with the column.
-- **Many debits, one allowance — the deliberate non-index.** `idx_cash_out_allowance_live` is
-  partial and **not unique**, unlike its service counterpart. An allowance is a CAP that accumulates
+  sat beside it ("only a PRICED service can be linked"), which went out with the column. The app
+  layers a naming 409 on create/edit/restore on top of the DB constraint, so the failure arrives as a
+  readable error rather than a raw index violation.
+- **Many debits, one allowance — the deliberate non-index.** `idx_cash_out_allowance_live` (partial
+  index on `cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL`)
+  is **not unique**, unlike its service counterpart. An allowance is a CAP that accumulates
   a running spend from many entries; uniqueness there would break the feature rather than protect
   it. The index exists for the rollup query, not as a constraint.
 - **Soft-delete everywhere.** The five Recycle Bin tables (`cash_in`, `cash_out`, `loans`, `contract`,
-  `contractor_payments`) carry `deleted_at` (NULL = live); "delete" sets it, the Recycle Bin restores
+  `contractor_payments`) carry `deleted_at TEXT` (NULL = live); "delete" sets it, the Recycle Bin restores
   or permanently removes. Hard-deleting a contract is blocked while any live `contractor_payments` OR
   any cash-out entry still references one of its `contract_services` rows (the second guard closes a
-  foreign-key crash found in the Phase 11 audit).
-- **Integer paise.** Every `*_paise` column is INTEGER; money is never a float.
+  foreign-key crash found in the Phase 11 audit). The JSON backup keeps soft-deleted rows; the
+  "CSV for Excel" export shows live rows only.
+- **Integer paise.** Every `*_paise` column is INTEGER; money is never a float (₹1 = 100 paise;
+  formatting to ₹ is display-only).
 
 ---
 
@@ -151,9 +222,11 @@ Contractor Payments shows "Remaining = stated − Σ payments", which is now the
 
 ### `reconciliation` — flags, never silent corrections
 Every figure is reported as-is; these only detect + report (and log) inconsistencies:
-`ok` (false if any trip), `orphanedContractorPayments` (payments whose contract is soft-deleted/gone),
-`overOffset` (contractor payments exceed the contract value — the name is a holdover; with the offset
-gone `appliedPaise` is just the payments total), and `contractPriceDerivation` (Contract Phase A: a
+`ok` (false if any trip), `orphanedContractorPayments` `{count, amountPaise, contractIds}` (live
+payments whose parent contract is soft-deleted/missing — their ₹ is still in B/D/pie but is not
+counted in A/F), `overOffset` `{over, contractPaise, appliedPaise, excessPaise}` (contractor payments
+exceed the contract value — the name is a holdover; with the offset gone `appliedPaise` is just the
+payments total), and `contractPriceDerivation` (Contract Phase A: a
 rate-priced contract whose stored `price_of_contract_paise` no longer equals rate × measured area —
 `{ drifted, contracts: [{ contractId, storedPaise, expectedPaise }] }`). `includedDebitsMissingOffset`
 was **removed**: it fired on any `included` debit with a NULL/0 stated amount, which is now every
@@ -165,9 +238,14 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
 
 ## 5. Running the tests
 
-- **`npm test`** (`run-tests.js`) → `node --test` over `test/*.test.js`. Deterministic; asserts the
-  resolved `PLANNR_DB` is never the live path, and checks `data/plannr.db`'s mtime is unchanged across
-  the whole run.
+- **`npm test`** (`run-tests.js`) → `node --test` over `test/*.test.js`, using Node's built-in runner
+  (no test framework dependency). Deterministic; asserts the resolved `PLANNR_DB` is never the live
+  path, and checks `data/plannr.db`'s mtime is unchanged across the whole run. Two absolute safety
+  properties hold it together: **it never opens the live DB** — each test file sets a unique temp
+  `PLANNR_DB` before requiring `db.js`/`server.js`, a test asserts the resolved `DB_PATH` is not the
+  live path, and `run-tests.js` records `data/plannr.db`'s mtime before and after the whole run and
+  fails if it changed; and **`server.js` gates its external side effects** (`app.listen`, signal
+  handlers) behind `require.main === module`, so tests can import it. `npm start` is unchanged.
 - **`npm run test:ui`** (`test-ui/run.js`) → the Playwright visual suite: pie swatch distinctness,
   table width/edit invariants, unclipped large amounts, By-owner attribution, dirty-check no-op save.
   Boots `server.js` in-process on an isolated DB.
@@ -231,6 +309,44 @@ no figures at all now, and an allowance overrun is a normal state of the world, 
   `VACUUM INTO` snapshot, AES-256-GCM-encrypted when `PLANNR_BACKUP_PASSPHRASE` is set; `decrypt-db.js`
   is the restore step. This applies to a `server.js` install; the Android app's own backup/restore
   goes through the in-app encrypted export/import instead.
+
+### The five file formats `/data-backup` produces
+
+- **JSON backup** — full export/import of every ledger table *including soft-deleted rows*, ids and
+  foreign keys preserved. Import validates fully, auto-snapshots current data first, then replaces in
+  one transaction (rolls back on any error). The only fully re-importable whole-database format.
+- **Encrypted backup** — the same full snapshot, AES-256-GCM-encrypted with a passphrase you choose
+  (`backup-crypto.js`). On Android, saving and restoring both go through `Filesystem`/`Share` (the
+  native save/share sheet); in a browser they're a plain download.
+- **Ledger List CSV** — the 24-main taxonomy itself, exportable and re-importable (Code, Main ledger,
+  Sub-code, Sub-ledger columns; `code` is the identity). Renames are allowed and keep historical spend
+  attached (the join is always by code); additions are allowed; deletions only for codes with no spend
+  against them. Every import triggers a mandatory encrypted safety backup first, which you must
+  explicitly confirm you have before the import proceeds — see `data-backup.html`.
+- **CSV for Excel** — one file per table, amounts in rupees, live rows only. View/print only; this one
+  is **not** re-importable (only the Ledger List CSV above is).
+- **PDF (Overview)** — four parts (full / pie / table / ledger) × light/dark. Rendered by headless
+  Chromium under `server.js`, or by the on-device native PDF plugin
+  (`@capgo/capacitor-pdf-generator`) on Android — same HTML/layout either way, and shared/saved
+  through the same native path as the encrypted backup.
+
+### Guards on the destructive scripts
+
+`server.js` defaults to the live `data/plannr.db` (correct — it *is* the app, in desktop mode). Every
+**non-server script** instead goes through `db-guard.js`: it prints the absolute path it will write to
+and **refuses the live DB** (an unset `PLANNR_DB` counts as live) unless you pass
+`--i-really-mean-the-live-db`. So a forgotten `PLANNR_DB=` cannot hit real data by accident.
+
+```sh
+PLANNR_DB=/tmp/x.db npm run reset-db                          # wipe an isolated copy (safe)
+node reset-db.js --confirm --i-really-mean-the-live-db        # wipe the LIVE (desktop-mode) database
+```
+
+`reset-db.js` derives the table list from `sqlite_master` (never a hardcoded array, so a new table
+can't be silently skipped), disables foreign keys for the wipe (set before `BEGIN`, restored after
+`COMMIT`), and runs `PRAGMA foreign_key_check` afterward. `--confirm` confirms intent; the guard
+confirms the target (and requires the live flag for live). There is deliberately **no in-app reset
+button**.
 
 ---
 
