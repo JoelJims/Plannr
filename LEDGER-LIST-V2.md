@@ -1,12 +1,22 @@
-# Plannr Ledger Taxonomy v2
+# Plannr — a proposed list of spending categories
 
-> **Status: PROPOSED, not implemented.** `ledgers.js` still seeds the v1 taxonomy and nothing in the app reads this file. Replacing the seed is a separate change (and, because sub-ledger codes would be reused with new meanings, a destructive one — see the Phase 10a guard in `db.js`).
+> **Nothing in the app reads this file.** It is a proposal for replacing the
+> category list the app currently starts with, which lives in `ledgers.js`.
+> Switching to it would give existing category codes new meanings, so spending
+> already recorded would end up under the wrong headings. Treat it as a change
+> to make deliberately, with a backup taken first — not as a drop-in.
 
-Built for a fixed unit-rate lump sum contract - one priced at a rate per square foot of final measured built-up area - which is the contract shape Plannr models.
+It is written for the kind of contract Plannr models: one priced at a rate per
+square foot of the finished building's measured area.
 
-Structured so that any expense marked "included in contract" maps to a nameable line in the builder's Schedule of Work. Sub-ledgers name CATEGORIES only: no brand, supplier, rate or contract clause belongs in one. Add your own with the Ledger List CSV round trip if you want them.
+The categories are arranged so that anything marked "included in contract" matches
+a line you could point to in the builder's schedule of work. A category names a
+kind of spending and nothing more — no brands, suppliers, rates or contract
+clauses. You can add your own by exporting the category list as a CSV, editing it
+and importing it back.
 
-Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mechanism is separate and unchanged.
+Every main category ends with an `N.99 Misc` entry. Typing a one-off custom
+category still works as it does now, separately from this list.
 
 ## Materials
 
@@ -270,9 +280,15 @@ Every main ledger ends with an `N.99 Misc` sub-ledger. The existing CUSTOM mecha
 - 24.5 Price escalation
 - 24.99 Misc
 
-## Notes for implementation
+## Notes
 
-- 24 main ledgers, 24 `N.99 Misc` sub-ledgers, 152 named sub-ledgers.
-- Contractor stage payments are deliberately absent — they belong in the contractor-payments table, which already feeds the Overview pie. A ledger main for them would double-count.
-- A per-sq-ft allowance cap, where a contract sets one, will usually sit against 6.1 flooring tiles, 6.2 bathroom tiles or 6.4 granite. Plannr seeds no caps of its own - every cap is one the owner enters.
-- Picker grouping: Materials 1–7, Labour 8–11, Pre-construction 12–15, Contract boundaries 16–17, Post-contract 18–21, Money 22, Closing 23–24.
+- 24 main categories, 152 named sub-categories, plus an `N.99 Misc` under each main.
+- There is deliberately no category for stage payments to the contractor. Those are
+  recorded separately and already appear in the Overview chart; a category for them
+  as well would count the same money twice.
+- Where a contract sets a per-square-foot allowance, it usually applies to 6.1
+  flooring tiles, 6.2 bathroom tiles or 6.4 granite. Plannr never creates
+  allowances itself — every one is entered by the owner.
+- The category picker would group these as: Materials 1–7, Labour 8–11,
+  Pre-construction 12–15, Contract boundaries 16–17, Post-contract 18–21, Money 22,
+  Closing 23–24.

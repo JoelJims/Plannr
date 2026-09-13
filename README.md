@@ -72,7 +72,7 @@ two ways of running is only what answers the screens' requests. On the desktop t
 an ordinary Express server reading a database file on your computer. On Android it is
 `public/local-api.js` — a small piece of code that answers the app's requests locally instead of over
 a network — backed by `public/db-engine.js`, a database that runs inside the app itself. `android/`
-holds the native project Capacitor generates. Maintainer-level detail lives in
+holds the native project Capacitor generates. The detail behind all of this is in
 [HANDOFF.md](HANDOFF.md).
 
 ## What it doesn't do
