@@ -1,38 +1,36 @@
-# SETUP.md — getting Plannr running on a new machine
+# Setting Plannr up on a new machine
 
-This is the *setup* document: what to install, in what order, and what to run first.
-For what Plannr **is** and how it works, read `README.md`, then `HANDOFF.md` (the model,
-the money rules, the deliberate decisions, troubleshooting by symptom).
+What to install, in what order, and what to run first. For what Plannr is and how it
+works, read `README.md`, then `HANDOFF.md`.
 
 ---
 
 ## 0. Read this before you install anything
 
-**`server.js` is the reference implementation, not the target.**
+**The Android app is the product. `server.js` is not.**
 
-The product is an **Android app**: `public/` (static HTML/JS) packaged by Capacitor,
-talking to `public/local-api.js` — an in-page `fetch()` shim, no network at all — over
-`@sqlite.org/sqlite-wasm` running inside the WebView. That is what ships. That is what
-the user installs.
+What ships is an Android app: the screens in `public/`, packaged by Capacitor, talking
+to `public/local-api.js` — code that answers the app's requests locally instead of over
+a network — backed by a database that runs inside the app itself. That is what a user
+installs.
 
-`server.js` is a Node/Express desktop mode that serves the *same* `public/` frontend
-against a real SQLite file (`data/plannr.db`) via `node:sqlite`. It exists so the app can
-be developed, driven and tested on a desktop, and it is what most of the automated suite
-boots. **Nothing in `server.js` reaches the phone.**
+`server.js` is a desktop version. It serves the *same* screens from `public/` against an
+ordinary database file on your computer (`data/plannr.db`). It exists so the app can be
+developed and tested on a desktop, and it is what most of the automated tests run
+against. **Nothing in `server.js` reaches the phone.**
 
-Why that distinction matters in practice:
+Why that matters in practice:
 
-- `server.js` and `public/local-api.js` are two deliberately duplicated implementations of
-  the same API surface (see HANDOFF.md §7, "Per-environment duplication"). A change to one
-  is not a change to the other. **Fixing a bug in `server.js` alone fixes nothing on the
-  device.**
-- `server.js` is the more readable statement of the API surface, so it's what you read to
-  understand behaviour — but when the two disagree at runtime, **the Android path is the
+- `server.js` and `public/local-api.js` are two separate pieces of code that answer the
+  same requests. A change to one is not a change to the other. **Fixing a bug in
+  `server.js` alone fixes nothing on the device.**
+- `server.js` is the easier of the two to read, so it is the one to read when you want to
+  understand how something behaves — but when the two disagree, **the Android path is the
   one that is true**, because it is the one users run.
-- `repo.js` is the single deliberate exception: one shared file under both, synced into
+- `repo.js` is the single deliberate exception: one shared file used by both, copied into
   `public/` by `sync-public-modules.js`. Edit it at the project root, never in `public/`.
-- A green `npm test` proves the reference implementation works. It does **not** prove the
-  APK works. `npm run test:static-hosting` is the closest automated proxy for the device.
+- A green `npm test` proves the desktop version works. It does **not** prove the APK
+  works. `npm run test:static-hosting` is the closest automated stand-in for the device.
 
 ---
 
@@ -40,63 +38,59 @@ Why that distinction matters in practice:
 
 | # | What | Version | Notes |
 |---|---|---|---|
-| 1 | **Node.js** | **>= 22.12.0** | `package.json` `engines`. Developed on **24.18.0 / npm 11.16.0**. Must be a version with `node:sqlite` — `server.js` and the whole test suite depend on it. There is no `better-sqlite3` fallback. |
+| 1 | **Node.js** | **>= 22.12.0** | Developed on 24.18.0 / npm 11.16.0. It must be a version that includes `node:sqlite`; `server.js` and the whole test suite depend on it, and there is no fallback. |
 | 2 | **Git** | any recent | |
-| 3 | **Android Studio** | latest stable | Installs the Android SDK and `adb`, and ships the **JetBrains Runtime 21** the project builds against. |
-| 4 | **Android SDK Platform 36** | API 36 | Studio → SDK Manager → SDK Platforms. `compileSdk`/`targetSdk` are both **36** (`android/variables.gradle`); the androidx versions pulled in by Capacitor 8.5 hard-require >= 36 via an AAR metadata check, so 35 will not build. |
-| 5 | **Android SDK Build-Tools + Platform-Tools** | latest | Platform-Tools gives you `adb`. |
-| 6 | **A device or emulator** | **Android 7.0+** | `minSdk = 24`. A physical device with USB debugging is what this was developed against. |
+| 3 | **Android Studio** | latest stable | Brings the Android SDK, `adb`, and the Java 21 runtime the project builds against. |
+| 4 | **Android SDK Platform 36** | API 36 | SDK Manager → SDK Platforms. Both `compileSdk` and `targetSdk` are 36; the libraries Capacitor pulls in require it, so 35 will not build. |
+| 5 | **SDK Build-Tools + Platform-Tools** | latest | Platform-Tools is where `adb` comes from. |
+| 6 | **A device or emulator** | **Android 7.0+** | Developed against a physical device with USB debugging on. |
 
-**Do not install Gradle.** The wrapper pins it: **Gradle 8.14.3**
-(`android/gradle/wrapper/gradle-wrapper.properties`), **AGP 8.13.0** (`android/build.gradle`).
-Always use `./gradlew` / `gradlew.bat`, never a system `gradle`.
+**Do not install Gradle separately.** The version is pinned in the repository, so always
+use `./gradlew` or `gradlew.bat`, never a system `gradle`.
 
-**You do not need a separate JDK if you use Android Studio.** Capacitor's own modules require
-a Java 21 toolchain regardless of `compileSdk`, and `android/settings.gradle` applies the
-`foojay-resolver-convention` plugin so Gradle **auto-provisions JDK 21** if it can't find one.
-Two consequences: Studio's bundled JBR 21 satisfies it with no setup, and **the very first
-Gradle build needs network access** in case it has to download that toolchain.
+**You do not need a separate Java install if you have Android Studio.** Studio's bundled
+Java 21 satisfies the build, and Gradle will download one itself if it can't find it —
+which means the very first build needs an internet connection.
 
 ---
 
-## 2. Files that do NOT come from the repository
+## 2. Files that do not come from the repository
 
-These are `.gitignore`d on purpose. `git clone` will not give you them — they have to be
-copied across out of band, by hand, into the **project root** (next to `package.json`):
+These are deliberately kept out of version control. `git clone` will not give you them;
+they have to be copied across by hand into the **project root**, next to `package.json`:
 
-| File | Why it's out of band | Where it goes |
+| File | What it is | Where it goes |
 |---|---|---|
-| `plannr-release.keystore` | Release signing key. | project root |
-| `keystore.properties` | Its passwords and alias. Four keys: `storeFile` (= `plannr-release.keystore`, resolved relative to the project root), `storePassword`, `keyAlias`, `keyPassword`. | project root |
+| `plannr-release.keystore` | The signing key for release builds. | project root |
+| `keystore.properties` | Its passwords and alias. Four entries: `storeFile` (= `plannr-release.keystore`, relative to the project root), `storePassword`, `keyAlias`, `keyPassword`. | project root |
 
 > ### A missing keystore fails *silently*
 >
-> `android/app/build.gradle` reads `keystore.properties` lazily and guarded — deliberately, so
-> a fresh checkout with no keystore can still run debug builds. If the file is absent,
+> The build reads `keystore.properties` only if it is there — deliberately, so a fresh
+> checkout with no key can still produce debug builds. If the file is absent,
 > `assembleRelease` **does not fail**. It produces an **unsigned** release APK and says
-> nothing. You will only find out when the install is rejected on the phone.
+> nothing about it. You find out when the phone refuses the install.
 >
-> So verify, don't assume, after your first release build:
+> So check, rather than assume, after your first release build:
 >
 > ```sh
 > keytool -printcert -jarfile android/app/build/outputs/apk/release/app-release.apk
 > ```
 >
-> That must print a certificate. An error, or empty output, means your `keystore.properties`
+> That must print a certificate. An error, or empty output, means `keystore.properties`
 > is missing or wrong.
 
 > ### Never lose or replace this key
 >
 > Android refuses to upgrade an installed app with an APK signed by a different key
-> (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). The only way past it is to uninstall first — **which
-> destroys the on-device database**, because Plannr's storage is the app's own sandboxed
-> WASM/OPFS store. There is no server-side copy of anything. Back the keystore up somewhere you
-> will still have in five years, and take an in-app encrypted backup (`/data-backup`) before any
-> risky install.
+> (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). The only way past it is to uninstall first —
+> **which destroys the database on the phone**, because Plannr's storage belongs to the
+> app itself. There is no copy of it anywhere else. Back the keystore up somewhere you
+> will still have it in five years, and take an encrypted backup from inside the app
+> (`/data-backup`) before any install you are unsure about.
 
-Also not in the repo, and not needed to build: `data/` (the desktop-mode database — real
-financial records), and `PLANNR-AUDIT-LIVE.md` (a working audit document, if it was passed to
-you).
+Also absent, and not needed to build: `data/`, the desktop database, which holds real
+financial records.
 
 ---
 
@@ -105,30 +99,31 @@ you).
 ### 3.1 Install dependencies
 
 ```sh
-npm ci          # reproducible install from package-lock.json — prefer this over `npm install`
+npm ci
 ```
 
-**Do this before anything else touches Gradle.** `android/capacitor.settings.gradle` points
-every Capacitor Gradle module at `../node_modules/@capacitor/...`. With no `node_modules/`,
-opening `android/` in Android Studio fails at Gradle configuration with a "project directory
-does not exist" error that looks like a broken Android project and is not one.
+**Do this before anything touches Gradle.** The Android project points at
+`../node_modules/@capacitor/...`. With no `node_modules/`, opening `android/` in Android
+Studio fails with a "project directory does not exist" error that looks like a broken
+Android project and is not one.
 
-### 3.2 Run the reference implementation and prove the checkout is sound
+### 3.2 Run the desktop version and check the checkout is sound
 
 ```sh
 npm start                   # = node server.js  ->  http://localhost:3000   (PORT overrides)
-npm test                    # the behaviour suite — expect green before you change anything
+npm test                    # expect green before you change anything
 ```
 
-`npm test` is the fastest signal that the checkout is complete and correct. It also enforces
-two safety properties worth knowing on day one: every test file points `PLANNR_DB` at its own
-temp database, and `run-tests.js` compares `data/plannr.db`'s mtime before and after the whole
-run and **fails if the live database was touched**.
+`npm test` is the quickest way to tell that the checkout is complete. It also protects the
+real database: every test file points `PLANNR_DB` at its own temporary database, and the
+runner checks `data/plannr.db`'s timestamp before and after the whole run and **fails if
+the live database was touched**.
 
-> **The live-DB rule.** `server.js` defaults to `data/plannr.db` — correct, it *is* the app in
-> desktop mode. Every other script goes through `db-guard.js`, which prints the absolute path it
-> will write to and **refuses the live database** (an unset `PLANNR_DB` counts as live) unless
-> you pass `--i-really-mean-the-live-db`. Always set `PLANNR_DB` when experimenting.
+> **The live-database rule.** `server.js` defaults to `data/plannr.db` — correct, because
+> in desktop mode that *is* the app. Every other script goes through `db-guard.js`, which
+> prints the full path it is about to write to and **refuses the live database** unless you
+> pass `--i-really-mean-the-live-db`. An unset `PLANNR_DB` counts as live. Always set
+> `PLANNR_DB` when experimenting.
 
 ### 3.3 Generate the web assets and the native project
 
@@ -136,36 +131,34 @@ run and **fails if the live database was touched**.
 npm run android:sync        # = sync-public-modules.js  +  npx cap sync android
 ```
 
-This is **not optional on a fresh checkout**, and it is not just a convenience wrapper. Three
-sets of files were removed from this handover because they are generated, and this command is
-what recreates them:
+**Not optional on a fresh checkout.** Several files are generated rather than stored in the
+repository, and this is the command that creates them:
 
 - `public/db.js`, `public/repo.js`, `public/db-engine.js`, `public/ledgers.js`,
-  `public/node-builtins-browser-stub.js` — copies of the root modules (`sync-public-modules.js`)
-- `public/node_modules/` — the vendor packages the import maps reference by absolute path
+  `public/node-builtins-browser-stub.js` — copies of the files at the project root
+- `public/node_modules/` — the packages the app's import maps refer to
 - `android/app/src/main/assets/`, `android/app/src/main/res/xml/config.xml`,
-  `android/capacitor-cordova-android-plugins/` — Capacitor's own output (`npx cap sync`)
+  `android/capacitor-cordova-android-plugins/` — Capacitor's own output
 
-**Never hand-edit any of those.** Edit the root copy and re-run the sync. Re-run this command
-after every change to `public/` or to a root module, and before every build — `webDir` is
-`public/`, so whatever is in there at sync time is exactly what ships.
+**Never hand-edit any of those.** Edit the copy at the project root and re-run the sync.
+Re-run it after every change to `public/` or to a root file, and before every build:
+whatever is in `public/` at sync time is exactly what ships.
 
 ### 3.4 Open the Android project
 
-Open the **`android/`** directory in Android Studio (not the project root). On first open Studio
-will:
+Open the **`android/`** directory in Android Studio, not the project root. On first open
+Studio will:
 
-- write `android/local.properties` with your own `sdk.dir` — machine-specific, gitignored,
-  removed from this handover, regenerated for you. If Studio doesn't, create it yourself:
+- write `android/local.properties` with your own SDK path. If it doesn't, create it:
   `sdk.dir=C\:\\path\\to\\Android\\Sdk` (escape the backslashes) or `sdk.dir=/path/to/Android/Sdk`.
-- recreate `android/.idea/` from scratch — also machine-specific (it stores your last-deployed
-  device serial and your JDK pin) and also gitignored. Leave it that way.
-- run a Gradle sync that downloads the wrapper distribution and, if needed, a JDK 21 toolchain.
-  The first one is slow. Later ones are not.
+- recreate `android/.idea/`. Both of those are specific to your machine and are not
+  shared. Leave them that way.
+- run a first sync that downloads Gradle and, if needed, Java 21. The first one is slow.
+  Later ones are not.
 
 ### 3.5 Build and install
 
-From `android/` (or via Studio's Run button for debug):
+From `android/`, or via Studio's Run button for debug builds:
 
 ```sh
 ./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/app-debug.apk
@@ -173,85 +166,83 @@ From `android/` (or via Studio's Run button for debug):
 adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
 
-App id `com.plannr.app`, `versionCode 1`, `versionName "1.0"` — bump these in
+App id `com.plannr.app`, `versionCode 1`, `versionName "1.0"` — raise these in
 `android/app/build.gradle` for a real release.
 
 ---
 
-## 4. Installing on a phone — the Play Protect warning is expected
+## 4. Installing on a phone — expect a Play Protect warning
 
-Plannr is **sideloaded** and signed with our **own** keystore. It is not distributed through the
-Play Store and has no Play-verified developer identity, so **Google Play Protect will warn about
-it on install.** This is normal. It is not a signing failure, and it is not something to "fix".
+Plannr is installed directly rather than through the Play Store, and is signed with our own
+key, so **Google Play Protect will warn about it.** That is normal. It is not a signing
+failure and not something to fix.
 
-What you'll typically hit, in order (exact wording varies by Android version and OEM skin):
+What you will usually see, in order (wording varies by Android version and manufacturer):
 
-1. **"Install unknown apps"** — Android asks you to grant that permission to whichever app is
-   doing the installing (Files, Chrome, Drive). Grant it to that specific app.
-2. **A Play Protect dialog** — usually along the lines of *"Unsafe app blocked"*, *"App scan
-   recommended"*, or an offer to *send the app to Google for scanning*. Choose
-   **More details → Install anyway** (some builds hide it behind a small text link rather than a
-   button). If it offers to scan, letting it scan is fine — it will pass; it just takes a few
-   seconds.
-3. **A possible second prompt on first launch**, if Play Protect re-scans the newly installed app.
+1. **"Install unknown apps"** — Android asks you to allow whichever app is doing the
+   installing (Files, Chrome, Drive). Grant it to that app.
+2. **A Play Protect dialog** — usually *"Unsafe app blocked"* or an offer to send the app
+   to Google for scanning. Choose **More details → Install anyway**; on some builds that is
+   a small text link rather than a button. Letting it scan is fine — it passes, it just
+   takes a few seconds.
+3. **Possibly a second prompt on first launch**, if Play Protect re-scans the app.
 
 Notes:
 
-- `adb install -r ...` skips the installer UI and the "unknown sources" step entirely, so it's
-  the fastest path during development — but Play Protect can still warn on first launch.
-- **Do not disable signing or switch to debug signing to make the warning go away.** The warning
-  is about *distribution channel*, not about the signature being invalid. Removing release
-  signing would break upgrades over an existing install (see §2).
-- Handing the APK to the end user: warn them about this dialog in advance. Without a heads-up,
-  "Unsafe app blocked" reads as a virus alert and a non-technical user will cancel.
+- `adb install -r ...` skips the installer screens entirely, so it is the fastest route
+  during development. Play Protect can still warn on first launch.
+- **Do not turn off signing, or switch to debug signing, to make the warning go away.**
+  The warning is about how the app was distributed, not about the signature being invalid,
+  and unsigned or debug-signed builds break upgrades over an existing install (see section 2).
+- If you are handing the APK to someone else, warn them about this dialog first. Without
+  warning, "Unsafe app blocked" reads as a virus alert and most people will cancel.
 
 ---
 
-## 5. The three run modes
+## 5. The three ways to run it
 
-You will use all three. They share the whole of `public/`; only the backend under it changes.
+You will use all three. They share the whole of `public/`; only what answers the requests
+underneath changes.
 
-| Command | Backend | Storage | Use it for |
+| Command | What answers requests | Where data lives | Use it for |
 |---|---|---|---|
-| `npm start` (`node server.js`) | real Express routes | `node:sqlite` -> `data/plannr.db` | day-to-day development; what most tests boot |
-| `node local-server.js` | the same `local-api.js` shim the app uses | sqlite-wasm, in a plain Chromium tab | testing the **exact static-hosting model the WebView uses**, without building an APK |
-| the APK | `local-api.js` shim, no network | sqlite-wasm via OPFS/kvvfs, in the WebView | **the actual product** |
+| `npm start` (`node server.js`) | a real web server | a database file on your computer | day-to-day development; what most tests use |
+| `node local-server.js` | the same local code the app uses | a database inside the browser tab | testing the exact setup the app uses, without building an APK |
+| the APK | the same local code, no network | a database inside the app | the actual product |
 
-The middle one is the one people forget exists. It catches most Android-only breakage —
-absolute-path assumptions, import-map resolution, nav-link behaviour under static hosting — in
-seconds instead of a build cycle. Reach for it before you reach for `assembleDebug`.
+The middle one is the one people forget. It catches most Android-only breakage —
+assumptions about absolute paths, how links behave when files are served as plain static
+files — in seconds rather than a build cycle. Reach for it before `assembleDebug`.
 
 ---
 
 ## 6. Test commands
 
 ```sh
-npm test                     # behaviour suite (node --test over test/*.test.js) — the gate
-npm run test:slow            # the slower suite, serialised
-npm run test:ui              # Playwright visual suite against an in-process server.js
-npm run test:static-hosting  # Playwright against a real local-server.js child process
-npm run test:backup-crypto   # round-trips the encrypted backup format through the real routes
+npm test                     # the main suite — the gate
+npm run test:slow            # the slower suite, run one at a time
+npm run test:ui              # visual tests against server.js
+npm run test:static-hosting  # visual tests against a real local-server.js process
+npm run test:backup-crypto   # round-trips the encrypted backup through the real code
 ```
 
-Playwright's browsers are downloaded by its own install step. If a UI suite complains about a
-missing browser, run `npx playwright install chromium`.
+Playwright downloads its own browsers. If a visual suite complains one is missing, run
+`npx playwright install chromium`.
 
-Other useful scripts: `npm run seed:demo` (demo data), `npm run reset-db` (wipe — read the guard
-rules in README.md before pointing it at anything real).
+Also useful: `npm run seed:demo` (demo data) and `npm run reset-db` (wipe — read the
+live-database rule in section 3.2 first).
 
 ---
 
-## 7. Inherited state you should know about
+## 7. Things worth knowing before you start
 
-- **The working tree has uncommitted changes.** `server.js`, `repo.js`, `sync-public-modules.js`,
-  `test-ui/static-hosting.js` and five files under `public/` were modified and never committed,
-  and there is an untracked `flow of program.txt`. Run `git status` and `git diff` first — don't
-  assume `HEAD` is what was running.
-- **The native Filesystem/Share save path has not been verified on a real device.** It was added
-  by analogy to the already-device-verified PDF share path and passes every browser-runnable test
-  (where `Capacitor.isNativePlatform()` is always false). Exercise it on hardware before real data
-  goes in. See HANDOFF.md §8.
-- **`server.js` is one very large file** (~142 KB) and is the main acknowledged structural debt.
+- **The save-and-share path on Android has not been tested on a real device.** It was
+  written to match the PDF sharing path, which has been tested on a device, and it passes
+  every test that can run in a browser — but browsers always report themselves as
+  non-native, so the Android-specific branch is not covered. Try it on real hardware
+  before putting real data in.
+- **`server.js` is one very large file** (~142 KB). It works and it is tested, but it is
+  the main thing that needs tidying.
 
 ---
 
@@ -262,7 +253,7 @@ git clone <repo> && cd Plannr
 # copy plannr-release.keystore + keystore.properties into this directory by hand
 npm ci
 npm test                                  # expect green
-npm start                                 # http://localhost:3000 — sanity-check the app
+npm start                                 # http://localhost:3000 — check the app runs
 npm run android:sync                      # regenerate public/ copies + the native project
 # open the android/ directory in Android Studio, let it sync
 cd android && ./gradlew assembleRelease
