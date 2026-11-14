@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto Backup rules for Android 6 to 11 (android:fullBackupContent in the manifest).
+     Android 12 and later read data_extraction_rules.xml instead; keep the two lists identical.
+
+     With <include> rules, ONLY what is listed is backed up. Android never backs up the app's cache
+     folders (cache/, code_cache/, no_backup/), so the WebView's HTTP and GPU caches stay out.
+     Everything here must stay well under Android's 25 MB per-app limit, or Android skips the whole
+     backup: measured with Plannr's storage full, the ledger is at most ~10 MB and the three gzipped
+     safety snapshots well under 2 MB (test-ui/storage-limit.js checks this budget).
+     Phase 2, Step 5. -->
+<full-backup-content>
+    <!-- The ledger: the database lives in the WebView's localStorage (sqlite-wasm kvvfs).
+         Current Android System WebView keeps it in app_webview/Default/Local Storage/leveldb/. -->
+    <include domain="root" path="app_webview/Default/Local Storage/" />
+    <!-- The same for older WebView versions, which had no "Default" profile folder. -->
+    <include domain="root" path="app_webview/Local Storage/" />
+    <!-- Safety snapshots (public/safety-snapshots.js). Capacitor's Directory.Data is the app's
+         files/ folder (Context.getFilesDir()), which is the "file" domain here. -->
+    <include domain="file" path="safety-snapshots/" />
+</full-backup-content>

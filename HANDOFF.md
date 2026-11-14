@@ -272,8 +272,13 @@ going over an allowance is a normal thing to happen, not an error.
   upgrade, the app copies the current data into its private folder,
   `Directory.Data/safety-snapshots/` (`public/safety-snapshots.js`), and checks the copy before
   going ahead. Only the newest 3 are kept; older ones are deleted only after the new one is
-  safely written. There is no screen to restore one: they are for recovery with `adb` on a
-  debug build, or from Android's Auto Backup.
+  safely written. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
+  no screen to restore one: they are for recovery with `adb` on a debug build, or from Android's
+  Auto Backup.
+- **Android Auto Backup** is on, limited to the ledger (the WebView's localStorage) and the
+  safety snapshots (`android/app/src/main/res/xml/backup_rules.xml` for Android 6-11,
+  `data_extraction_rules.xml` for 12+; keep them identical). Worst case with storage full is
+  about 12 MB, under Android's 25 MB limit (`npm run test:storage-limit` measures it).
 - **A category edit gone wrong.** Every category CSV import forces an encrypted backup
   first, and you have to confirm you have it — a dialog names the exact file — before the
   import will run. An import that would remove a category still used by recorded spending is

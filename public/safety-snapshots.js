@@ -11,6 +11,13 @@
 // clean-up never fails the operation (the new snapshot is safe; old ones simply stay a while longer).
 // The desktop applies the same rule to its own pre-upgrade copies (db.js writeNodeSnapshot()).
 //
+// Compression (Phase 2, Step 5): snapshots are gzip-compressed (.json.gz / .db.gz) with the
+// browser's built-in CompressionStream. Android Auto Backup copies this folder and skips the WHOLE
+// backup if the app's data passes 25 MB; measured with storage full (≈13,400 entries) one JSON
+// snapshot is 6.6 MB raw but 0.17 MB gzipped, a database snapshot 2.9 MB raw, 0.44 MB gzipped.
+// Each compressed file is decompressed again in memory and compared before it is written.
+// To read one on a computer: `gunzip plannr-pre-restore-....db.gz`.
+//
 // No static imports: the Capacitor plugins are loaded on demand, and every function that touches
 // files takes an optional `fsApi` ({ Filesystem, Directory, Encoding }) so the rules can be tested in
 // Node with an in-memory stand-in (test/safety-snapshots.test.js).
@@ -20,7 +27,8 @@
 
 export const DIR = 'safety-snapshots';
 export const KEEP_SNAPSHOTS = 3;
-export const SNAPSHOT_NAME = /^plannr-(safety-snapshot|pre-restore|pre-migration)-.+\.(json|db)$/;
+// Matches compressed and (older, Step 2-4) uncompressed snapshots, so old ones are pruned too.
+export const SNAPSHOT_NAME = /^plannr-(safety-snapshot|pre-restore|pre-migration)-.+\.(json|db)(\.gz)?$/;
 
 async function isNative() {
   const { Capacitor } = await import('@capacitor/core');
@@ -55,19 +63,26 @@ export async function pruneSnapshots(justWritten, fsApi, keep = KEEP_SNAPSHOTS) 
   return deleted;
 }
 
-// Write `data` (a UTF-8 string, or base64 when `base64` is true), confirm it landed in full, then
-// remove snapshots beyond the newest KEEP_SNAPSHOTS. Returns the path written.
-export async function saveSnapshot(filename, data, { base64 = false, expectedBytes }, fsApi) {
+const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+export const gzip = (bytes) => pipe(bytes, new CompressionStream('gzip'));
+export const gunzip = (bytes) => pipe(bytes, new DecompressionStream('gzip'));
+const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+// Compress `bytes`, check the compressed copy decompresses back to exactly `bytes`, write it as
+// `<filename>.gz`, confirm with stat that it landed in full, then remove snapshots beyond the
+// newest KEEP_SNAPSHOTS. Returns the path written.
+export async function saveSnapshot(filename, bytes, fsApi) {
   const { Filesystem, Directory, Encoding } = fsApi || await loadFs();
-  const path = `${DIR}/${filename}`;
-  const opts = { path, data, directory: Directory.Data, recursive: true };
-  if (!base64) opts.encoding = Encoding.UTF8;
-  await Filesystem.writeFile(opts);
+  const packed = await gzip(bytes);
+  if (!sameBytes(await gunzip(packed), bytes)) throw new Error('safety snapshot compression check failed');
+  const name = `${filename}.gz`;
+  const path = `${DIR}/${name}`;
+  await Filesystem.writeFile({ path, data: bytesToBase64(packed), directory: Directory.Data, recursive: true });
   const info = await Filesystem.stat({ path, directory: Directory.Data });
-  if (!info || typeof info.size !== 'number' || info.size < expectedBytes) {
+  if (!info || typeof info.size !== 'number' || info.size < packed.length) {
     throw new Error(`safety snapshot not verified after writing (stat: ${JSON.stringify(info)})`);
   }
-  await pruneSnapshots(filename, { Filesystem, Directory, Encoding });
+  await pruneSnapshots(name, { Filesystem, Directory, Encoding });
   return path;
 }
 
@@ -88,8 +103,7 @@ export async function writeJsonSnapshot(obj) {
     downloadJson(filename, obj);
     return `a downloaded file (${filename})`;
   }
-  const data = JSON.stringify(obj);
-  const path = await saveSnapshot(filename, data, { expectedBytes: data.length });
+  const path = await saveSnapshot(filename, new TextEncoder().encode(JSON.stringify(obj)));
   return `a file inside the app (${path})`;
 }
 
@@ -99,12 +113,12 @@ export function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-// A whole-database copy (a standard SQLite file, unencrypted, inside the app's private folder).
+// A whole-database copy (a standard SQLite file, unencrypted, gzipped, in the app's private folder).
 async function writeDatabaseSnapshot(filename) {
   const { exportSnapshotBytes } = await import('./local-snapshot.js');
   const bytes = exportSnapshotBytes();
   if (!bytes || !bytes.length) throw new Error('the database export for the safety snapshot was empty');
-  return saveSnapshot(filename, bytesToBase64(bytes), { base64: true, expectedBytes: bytes.length });
+  return saveSnapshot(filename, bytes);
 }
 
 // Before an encrypted restore replaces everything. Returns a description, or null in a plain browser.

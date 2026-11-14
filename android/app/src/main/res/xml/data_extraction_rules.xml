@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto Backup and device-to-device transfer rules for Android 12 and later
+     (android:dataExtractionRules in the manifest). Same list as backup_rules.xml (Android 6 to 11);
+     see that file for why each path is here and for the 25 MB budget. Phase 2, Step 5. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="root" path="app_webview/Default/Local Storage/" />
+        <include domain="root" path="app_webview/Local Storage/" />
+        <include domain="file" path="safety-snapshots/" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="root" path="app_webview/Default/Local Storage/" />
+        <include domain="root" path="app_webview/Local Storage/" />
+        <include domain="file" path="safety-snapshots/" />
+    </device-transfer>
+</data-extraction-rules>

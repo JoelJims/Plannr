@@ -7,7 +7,9 @@
 //   2) prints what the database costs in localStorage (fresh install, fixture, per entry);
 //   3) checks the storage meter on the Data Backup page: the numbers, the 70% warning, the 90% one;
 //   4) fills storage to the limit and checks a single add / edit / delete answers "Storage is full"
-//      (not "Something went wrong"), with the data intact and saving working again once there is room.
+//      (not "Something went wrong"), with the data intact and saving working again once there is room;
+//   5) fills the database with real entries until it is full and checks Android Auto Backup's
+//      budget: the ledger plus three gzipped safety snapshots stay well under the 25 MB limit.
 // Android's System WebView is Chromium, so the phone is expected to behave the same; that part is an
 // estimate until checked on a device (docs/PHONE-TEST-CHECKLIST.md).
 const { chromium } = require('playwright');
@@ -170,6 +172,41 @@ const MB = (chars) => (chars * 2 / 1048576).toFixed(2) + ' MB';
     check('the database is intact (integrity_check ok)', integrity === 'ok', integrity);
     const again = await api('POST', '/api/cash-in', body);
     check('once there is room again, saving works', again.status === 201, `${again.status} ${JSON.stringify(again.json).slice(0, 200)}`);
+
+    // ---- 5) Android Auto Backup budget (Step 5) ----
+    // Auto Backup copies the ledger (localStorage) and safety-snapshots/ (up to 3 files), and skips
+    // the whole backup above 25 MB. Fill the database with typical entries until it is full, then size
+    // the biggest snapshot the app could write (a JSON export or a whole-database copy, gzipped).
+    await page.evaluate(() => localStorage.clear());
+    await openFresh();
+    const entries = await page.evaluate(async () => {
+      const { db } = await import('/db.js');
+      const st = db.prepare("INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, ledger_code, subledger_code, reason, contract_scope) VALUES (?, '2026-03-04', 'user', 1, '22.0', '22.5', ?, 'extra')");
+      let i = 0;
+      for (const batch of [500, 100, 10, 1]) {
+        for (;;) {
+          try { db.exec('BEGIN'); for (let j = 0; j < batch; j++, i++) st.run(100000 + i * 7, 'Cement bags x' + (i % 50) + ' — site delivery, paid in cash #' + i); db.exec('COMMIT'); }
+          catch { try { db.exec('ROLLBACK'); } catch { /* already rolled back */ } break; }
+        }
+      }
+      return db.prepare('SELECT COUNT(*) n FROM cash_out').get().n;
+    });
+    const sizes = await page.evaluate(async () => {
+      const { exportSnapshotBytes } = await import('/local-snapshot.js');
+      const { gzip } = await import('/safety-snapshots.js');
+      const json = new TextEncoder().encode(JSON.stringify(await (await fetch('/api/backup/export?includeContacts=1')).json()));
+      const dbBytes = exportSnapshotBytes();
+      let chars = 0;
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); chars += k.length + localStorage.getItem(k).length; }
+      return { chars, json: json.length, jsonGz: (await gzip(json)).length, db: dbBytes.length, dbGz: (await gzip(dbBytes)).length };
+    });
+    const MiB = (b) => (b / 1048576).toFixed(2) + ' MB';
+    const ledgerMax = LIMIT * 2; // upper bound: every character stored as 2 bytes
+    const snapshotMax = Math.max(sizes.jsonGz, sizes.dbGz);
+    const budget = ledgerMax + 3 * snapshotMax;
+    console.log(`  · measured with storage full (${entries.toLocaleString('en')} entries): JSON snapshot ${MiB(sizes.json)} -> ${MiB(sizes.jsonGz)} gzipped; database snapshot ${MiB(sizes.db)} -> ${MiB(sizes.dbGz)} gzipped`);
+    console.log(`  · Auto Backup worst case: ledger ≤ ${MiB(ledgerMax)} (estimated upper bound) + 3 snapshots ≤ ${MiB(3 * snapshotMax)} = ${MiB(budget)} (limit 25 MB); without gzip it would be ${MiB(ledgerMax + 3 * Math.max(sizes.json, sizes.db))}`);
+    check('Auto Backup stays well under 25 MB with storage full (worst case ≤ 15 MB)', budget <= 15 * 1048576, MiB(budget));
 
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (e) {

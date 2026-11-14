@@ -75,9 +75,17 @@ a network — backed by `public/db-engine.js`, a database that runs inside the a
 holds the native project Capacitor generates. The detail behind all of this is in
 [HANDOFF.md](HANDOFF.md).
 
+## Privacy and backups
+
+Plannr makes no network requests. Android's own Auto Backup may copy the app's data to your Google account; you can turn this off in Android settings.
+
+What Auto Backup copies is limited to the ledger and the app's last three safety snapshots
+(`android/app/src/main/res/xml/backup_rules.xml`). The backup files you export yourself from the Data
+Backup page are separate, and the encrypted one is the safest copy to keep.
+
 ## What it doesn't do
 
 - **One person, one project.** There are no accounts and no way to share a ledger with anyone else.
-- **No sync.** Nothing leaves the device on its own. Moving data to another phone means exporting a
-  backup file and importing it there.
+- **No sync.** Plannr never sends your data anywhere itself. Moving data to another phone means
+  exporting a backup file and importing it there.
 - **Not on the Play Store.** You build and install it yourself from this repository.
