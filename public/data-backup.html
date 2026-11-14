@@ -195,7 +195,7 @@
       <!-- 1. JSON backup (restorable) -->
       <section class="bk-section">
         <h2>JSON backup <span class="tag">Restorable</span></h2>
-        <p>Your whole ledger, deleted entries included, as one <code>.json</code> file — the one to restore from.</p>
+        <p>Everything in Plannr — entries (deleted ones too), categories, people and settings — as one <code>.json</code> file. Restoring it on a new phone rebuilds the app exactly.</p>
         <label class="bk-optin"><input type="checkbox" id="includeContactsChk"> Include Daily Report contacts (Gmail addresses &amp; WhatsApp numbers)</label>
         <p class="bk-note">Off by default, so a backup you share carries no contact details.</p>
         <details class="wt">
@@ -486,10 +486,13 @@
       const TABLE_LABEL = {
         cash_in: 'inflow', cash_out: 'outflow', loans: 'loan',
         contract: 'contract row', contract_payment_dates: 'payment date', contractor_payments: 'contractor payment', settings: 'setting',
+        ledger_mains: 'category', ledger_subs: 'sub-category',
       };
       function summariseCounts(imported) {
         // e.g. "3 inflows, 1 outflow, 0 loans, ..." in a fixed, readable order.
-        return ['cash_in', 'cash_out', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments', 'settings']
+        // Categories only appear for a v2 backup (a v1 file leaves this phone's categories as they are).
+        return ['cash_in', 'cash_out', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments', 'settings', 'ledger_mains', 'ledger_subs']
+          .filter((t) => t in imported)
           .map((t) => {
             const n = imported[t] || 0;
             const w = TABLE_LABEL[t];

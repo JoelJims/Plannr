@@ -2066,226 +2066,20 @@ function requireAuth(req, res, next) {
 }
 
 // ---------------------------------------------------------------------------
-// Data backup — restorable JSON export/import. Logged-in only. Covers ONLY the
-// ledger data (contract, contract_payment_dates, contractor_payments, cash_in,
-// cash_out, loans, settings); users/sessions/edit_locks are NEVER exported or
-// touched by an import. Money stays INTEGER paise. Soft-deleted rows and all ids/
-// foreign keys are preserved so rollups still resolve after a restore.
+// Data backup — restorable JSON export/import. The format (which tables and columns, validation,
+// the restore transaction) lives in backup-format.js, shared with the phone's public/local-api.js so
+// the two can never drift. v2 carries EVERY table — people, categories, saved custom names, ledger
+// data, settings and the AUTOINCREMENT high-water marks — so a backup fully rebuilds the app on a
+// new phone. v1 files (ledger data + settings only) still restore. Money stays INTEGER paise.
+// Soft-deleted rows and all ids/foreign keys are preserved.
 // ---------------------------------------------------------------------------
-const BACKUP_SCHEMA_VERSION = 1;
-// Import/insert order = parents before children (foreign keys are ON). Services phase: contract_services
-// sits AFTER contract (its parent) and BEFORE cash_out (which references it via contract_service_id).
-// Contract Phase A: contract_allowances sits AFTER contract (its parent) and BEFORE cash_out
-// (which references it via contract_allowance_id) — same placement rule as contract_services.
-const BACKUP_TABLES = ['contract', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'loans', 'settings', 'cash_in', 'cash_out'];
-// The AUTOINCREMENT tables among them (settings is key/value, not autoincrement).
-const BACKUP_AUTOINC = ['contract', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'loans', 'cash_in', 'cash_out'];
-
-// TABLES THE IMPORT OWNS (clears during teardown). SINGLE SOURCE OF TRUTH for the teardown loop.
-// Ordered CHILDREN-FIRST so DELETE never trips a foreign key and never leans on an implicit
-// ON DELETE CASCADE to remove a child. The teardown skips any table not present on this DB.
-// users/sessions/edit_locks are deliberately NOT owned — the import PRESERVES them (it remaps an
-// unknown by_user_id to NULL precisely so existing users survive a restore).
-// Phase 5C removed contract_services from this list: Phase 5B dropped cash_out.contract_service_id
-// and Phase 5C dropped the contract_services table itself, so no DB has it any more — keeping it
-// here would be dead config. The drift guard below now sees no table referencing it and passes.
-//   fk chain (Services phase): contract ← contract_payment_dates, contractor_payments, contract_services;
-//   and contract_services ← cash_out (contract_service_id). Children-first teardown: cash_out (child of
-//   contract_services) precedes contract_services, which precedes contract.
-//   Contract Phase A adds contract ← contract_allowances ← cash_out (contract_allowance_id), so
-//   contract_allowances slots in after cash_out and before contract, same as contract_services.
-//   assertImportOwnershipComplete() below fails the boot if that is ever forgotten.
-const IMPORT_OWNED_TABLES = ['cash_out', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments', 'contract', 'cash_in', 'loans', 'settings'];
-
-// Startup drift guard. If any table carries a foreign key INTO an import-owned table but is not
-// itself owned, then clearing the owned parent would cascade/orphan that table's rows implicitly
-// (the exact contract_services bug). Fail LOUDLY at boot rather than silently corrupt data during
-// a restore. Derived from PRAGMA foreign_key_list — the real schema, not a maintained list.
-// Runs at startup (called just below): it is O(tables), and it can only fire right after a schema
-// change, so it surfaces the drift the moment it lands in EVERY environment — no test run required.
-function assertImportOwnershipComplete() {
-  const owned = new Set(IMPORT_OWNED_TABLES);
-  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
-  const offenders = [];
-  for (const t of tables) {
-    for (const fk of db.prepare(`PRAGMA foreign_key_list(${t})`).all()) {
-      if (owned.has(fk.table) && !owned.has(t)) offenders.push(`${t}.${fk.from} -> ${fk.table}(${fk.to})`);
-    }
-  }
-  if (offenders.length) {
-    throw new Error(
-      'IMPORT_OWNED_TABLES is incomplete — these tables have a foreign key into an import-owned table but ' +
-      'are not themselves owned, so a backup import would clear their parent and cascade/orphan them ' +
-      'silently: ' + offenders.join('; ') + '. Add them to IMPORT_OWNED_TABLES (children-first).'
-    );
-  }
-}
+const backupFormat = require('./backup-format');
+// Startup drift guard (see backup-format.js): fail at boot, not silently during a restore.
+const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(db);
 assertImportOwnershipComplete();
-
-// Explicit column lists so an import writes ids + every foreign key verbatim.
-const BACKUP_COLS = {
-  contract: ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date', 'date_signed', 'company',
-    'rate_per_sqft_paise', 'measured_area_milli_sqft', 'completion_period_months', 'supervision_rate_pct', 'specified_brands', 'excluded_scope', 'owner_obligations',
-    'created_at', 'updated_at', 'deleted_at'],
-  // Contract Phase A dropped price_paise. An OLDER backup that still carries the key imports
-  // fine — rows are written through this explicit column list, so an extra key is ignored (and
-  // the figures themselves survive in settings._archived_service_prices_v1, written by the
-  // migration that dropped the column).
-  contract_services: ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at'],
-  contract_allowances: ['id', 'contract_id', 'name', 'cap_kind', 'cap_paise', 'cap_rate_per_sqft_paise', 'area_milli_sqft', 'sort_order', 'created_at', 'updated_at', 'deleted_at'],
-  contract_payment_dates: ['id', 'contract_id', 'pay_date', 'created_at'],
-  contractor_payments: ['id', 'contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'remarks', 'created_at', 'updated_at', 'deleted_at'],
-  loans: ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at'],
-  settings: ['key', 'value'],
-  cash_in: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason', 'created_at', 'updated_at', 'deleted_at'],
-  cash_out: ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_stated_paise', 'contract_service_id', 'contract_allowance_id', 'created_at', 'updated_at', 'deleted_at'],
-};
-
-// Phase 8B — settings keys that hold your family's CONTACT details (Gmail addresses + WhatsApp
-// phone numbers for the Daily Report). Excluded from a user-facing export by default so a backup
-// file you share/store doesn't carry them; included only on explicit opt-in. Everything else in
-// settings (budget_paise, the schedule times) is NOT personal and is always exported.
-const CONTACT_SETTINGS_KEYS = ['daily_report_recipients', 'daily_report_whatsapp'];
-
-// A full snapshot of the ledger data as a plain object — raw rows, ALL columns, INCLUDING
-// soft-deleted rows. Shared by /export (includeContacts from the opt-in) and the pre-import safety
-// snapshot (includeContacts:true — a LOCAL rollback file that never leaves the machine, so it MUST
-// keep the contacts or a rollback would lose them).
-function buildBackup({ includeContacts = false } = {}) {
-  const tables = {};
-  for (const t of BACKUP_TABLES) tables[t] = repo.backup.exportTable(t);
-  if (!includeContacts) tables.settings = tables.settings.filter((r) => !CONTACT_SETTINGS_KEYS.includes(r.key));
-  return { app: 'plannr', kind: 'plannr-backup', schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), tables };
-}
-
-// Strict, side-effect-free validation of an uploaded backup. Returns { ok:true }
-// or { error }. Checks schema version, expected tables, per-row required fields
-// + types, money-as-integer, and referential sanity (cash_out links resolve
-// inside the file; ledger codes real-or-CUSTOM; units positive where linked).
-function validateBackup(data) {
-  const isInt = (v) => Number.isInteger(v);
-  const optInt = (v) => v == null || Number.isInteger(v);
-  const optStr = (v) => v == null || typeof v === 'string';
-  const optNum = (v) => v == null || (typeof v === 'number' && Number.isFinite(v));
-
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return { error: 'This is not a valid Plannr backup file.' };
-  if (data.schemaVersion !== BACKUP_SCHEMA_VERSION) return { error: `Unsupported backup version (found ${JSON.stringify(data.schemaVersion)}; this app restores version ${BACKUP_SCHEMA_VERSION}).` };
-  const T = data.tables;
-  if (!T || typeof T !== 'object') return { error: 'Backup is missing its "tables" section.' };
-  for (const t of BACKUP_TABLES) {
-    if ((t === 'contract_payment_dates' || t === 'contractor_payments' || t === 'contract_services' || t === 'contract_allowances') && T[t] === undefined) continue; // optional (older backups predate them)
-    if (!Array.isArray(T[t])) return { error: `Backup is missing or has an invalid "${t}" table.` };
-  }
-
-  const contractIds = new Set();
-  for (const r of T.contract) {
-    if (!isInt(r.id)) return { error: 'contract: a row has a non-integer id.' };
-    if (!optInt(r.amount_paise)) return { error: 'contract: amount_paise must be integer paise or null.' };
-    if (!optInt(r.price_of_contract_paise)) return { error: 'contract: price_of_contract_paise must be integer paise or null.' };
-    if (!optStr(r.area_of_work)) return { error: 'contract: area_of_work must be a string or null.' };
-    if (!(r.ledger_code == null || r.ledger_code === CUSTOM_CODE || LEDGER_BY_CODE.has(r.ledger_code))) return { error: `contract: unknown ledger_code ${JSON.stringify(r.ledger_code)}.` };
-    if (!(r.subledger_code == null || r.subledger_code === CUSTOM_CODE || (r.ledger_code != null && subBelongs(r.ledger_code, r.subledger_code)))) return { error: `contract: subledger_code ${JSON.stringify(r.subledger_code)} does not belong to ledger ${JSON.stringify(r.ledger_code)}.` };
-    { const d = parseIsoDate(r.date_signed); if (!(r.date_signed == null || (!d.error && d.date))) return { error: `contract: date_signed must be ISO YYYY-MM-DD or null (got ${JSON.stringify(r.date_signed)}).` }; }
-    { const d = parseIsoDate(r.contract_end_date); if (!(r.contract_end_date == null || (!d.error && d.date))) return { error: `contract: contract_end_date must be ISO YYYY-MM-DD or null (got ${JSON.stringify(r.contract_end_date)}).` }; }
-    if (!optStr(r.company)) return { error: 'contract: company must be a string or null.' }; // Services phase (Part F)
-    // Contract Phase A — rate-based pricing + optional metadata. All nullable (every pre-Phase-A
-    // backup has them absent, which reads as null and is correct).
-    if (!optInt(r.rate_per_sqft_paise)) return { error: 'contract: rate_per_sqft_paise must be integer paise or null.' };
-    if (!optInt(r.measured_area_milli_sqft)) return { error: 'contract: measured_area_milli_sqft must be an integer number of thousandths of a square foot, or null.' };
-    if (!optInt(r.completion_period_months)) return { error: 'contract: completion_period_months must be a whole number of months or null.' };
-    if (!optNum(r.supervision_rate_pct)) return { error: 'contract: supervision_rate_pct must be a number or null.' };
-    for (const f of ['specified_brands', 'excluded_scope', 'owner_obligations']) {
-      if (!optStr(r[f])) return { error: `contract: ${f} must be a string or null.` };
-    }
-    contractIds.add(r.id);
-  }
-  // Services phase (Part A) — contract_services rows (optional table). Collect valid ids so a debit's
-  // contract_service_id can be checked to resolve inside the file.
-  const serviceIds = new Set();
-  for (const r of (T.contract_services || [])) {
-    if (!isInt(r.id)) return { error: 'contract_services: a row has a non-integer id.' };
-    if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_services: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
-    if (typeof r.name !== 'string' || !r.name.trim()) return { error: 'contract_services: name must be a non-empty string.' };
-    // price_paise is NOT checked: Contract Phase A removed the column. A backup that still carries
-    // the key is accepted and the value dropped on the way in (it is not in BACKUP_COLS).
-    serviceIds.add(r.id);
-  }
-  // Contract Phase A — contract_allowances (optional table). Same shape of checks as services, plus
-  // the cap-kind invariant: a lump cap MUST have its rupee ceiling, a per-sqft cap MUST have its
-  // rate, and the area on a per-sqft cap stays optional (no area = a rate ceiling with no rupee
-  // position, which is a legitimate state, not a broken row).
-  const allowanceIds = new Set();
-  for (const r of (T.contract_allowances || [])) {
-    if (!isInt(r.id)) return { error: 'contract_allowances: a row has a non-integer id.' };
-    if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_allowances: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
-    if (typeof r.name !== 'string' || !r.name.trim()) return { error: 'contract_allowances: name must be a non-empty string.' };
-    if (r.cap_kind !== 'lump' && r.cap_kind !== 'per_sqft') return { error: `contract_allowances: unknown cap_kind ${JSON.stringify(r.cap_kind)} (expected 'lump' or 'per_sqft').` };
-    if (!optInt(r.cap_paise)) return { error: 'contract_allowances: cap_paise must be integer paise or null.' };
-    if (!optInt(r.cap_rate_per_sqft_paise)) return { error: 'contract_allowances: cap_rate_per_sqft_paise must be integer paise or null.' };
-    if (!optInt(r.area_milli_sqft)) return { error: 'contract_allowances: area_milli_sqft must be an integer number of thousandths of a square foot, or null.' };
-    if (!optInt(r.sort_order)) return { error: 'contract_allowances: sort_order must be an integer or null.' };
-    if (r.cap_kind === 'lump' && !isInt(r.cap_paise)) return { error: 'contract_allowances: a lump-sum allowance needs a cap_paise amount.' };
-    if (r.cap_kind === 'per_sqft' && !isInt(r.cap_rate_per_sqft_paise)) return { error: 'contract_allowances: a per-square-foot allowance needs a cap_rate_per_sqft_paise rate.' };
-    allowanceIds.add(r.id);
-  }
-  for (const r of (T.contract_payment_dates || [])) {
-    if (!isInt(r.id)) return { error: 'contract_payment_dates: a row has a non-integer id.' };
-    if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contract_payment_dates: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
-    { const d = parseIsoDate(r.pay_date); if (d.error || !d.date) return { error: `contract_payment_dates: pay_date must be ISO YYYY-MM-DD (got ${JSON.stringify(r.pay_date)}).` }; }
-  }
-  for (const r of (T.contractor_payments || [])) {
-    if (!isInt(r.id)) return { error: 'contractor_payments: a row has a non-integer id.' };
-    if (!isInt(r.contract_id) || !contractIds.has(r.contract_id)) return { error: `contractor_payments: contract_id ${JSON.stringify(r.contract_id)} is not present in the backup's contracts.` };
-    { const d = parseIsoDate(r.pay_date); if (d.error || !d.date) return { error: `contractor_payments: pay_date must be ISO YYYY-MM-DD (got ${JSON.stringify(r.pay_date)}).` }; }
-    if (!isInt(r.amount_paise) || r.amount_paise <= 0) return { error: 'contractor_payments: amount_paise must be a positive integer (paise).' };
-    if (!(r.ledger_code == null || r.ledger_code === CUSTOM_CODE || LEDGER_BY_CODE.has(r.ledger_code))) return { error: `contractor_payments: unknown ledger_code ${JSON.stringify(r.ledger_code)}.` };
-    if (!(r.subledger_code == null || r.subledger_code === CUSTOM_CODE || (r.ledger_code != null && subBelongs(r.ledger_code, r.subledger_code)))) return { error: `contractor_payments: subledger_code ${JSON.stringify(r.subledger_code)} does not belong to ledger ${JSON.stringify(r.ledger_code)}.` };
-  }
-  for (const r of T.loans) {
-    if (!isInt(r.id)) return { error: 'loans: a row has a non-integer id.' };
-    if (!optInt(r.amount_paise)) return { error: 'loans: amount_paise must be integer paise or null.' };
-    if (!optNum(r.interest_rate)) return { error: 'loans: interest_rate must be a number or null.' };
-  }
-  for (const r of T.settings) {
-    if (typeof r.key !== 'string') return { error: 'settings: a row has a non-string key.' };
-    if (!optStr(r.value)) return { error: 'settings: value must be a string or null.' };
-  }
-  for (const r of T.cash_in) {
-    if (!isInt(r.id)) return { error: 'cash_in: a row has a non-integer id.' };
-    if (!isInt(r.amount_paise) || r.amount_paise <= 0) return { error: 'cash_in: amount_paise must be a positive integer (paise).' };
-    if (!['user', 'relative', 'custom'].includes(r.by_type)) return { error: `cash_in: invalid by_type ${JSON.stringify(r.by_type)}.` };
-    if (!optInt(r.by_user_id)) return { error: 'cash_in: by_user_id must be an integer or null.' };
-    // tx_date (Phase 4C): ISO 'YYYY-MM-DD' or null. A PRE-Phase-4 backup omits it entirely
-    // (undefined -> treated as null) and imports fine; those rows stay dateless until edited.
-    { const d = parseIsoDate(r.tx_date); if (!(r.tx_date == null || (!d.error && d.date))) return { error: `cash_in: tx_date must be an ISO YYYY-MM-DD date or null (got ${JSON.stringify(r.tx_date)}).` }; }
-  }
-  for (const r of T.cash_out) {
-    if (!isInt(r.id)) return { error: 'cash_out: a row has a non-integer id.' };
-    if (!isInt(r.amount_paise) || r.amount_paise <= 0) return { error: 'cash_out: amount_paise must be a positive integer (paise).' };
-    // tx_date (Phase 1): ISO 'YYYY-MM-DD' or null. Older backups omit it entirely
-    // (undefined -> treated as null) and import fine; those rows stay dateless.
-    { const d = parseIsoDate(r.tx_date); if (!(r.tx_date == null || (!d.error && d.date))) return { error: `cash_out: tx_date must be an ISO YYYY-MM-DD date or null (got ${JSON.stringify(r.tx_date)}).` }; }
-    // 'contractor' is still ACCEPTED here (legacy rows from old backups must import);
-    // only NEW form writes reject it. Do not remove 'contractor' from this allowlist.
-    if (!['user', 'contractor', 'custom'].includes(r.by_type)) return { error: `cash_out: invalid by_type ${JSON.stringify(r.by_type)}.` };
-    if (!optInt(r.by_user_id)) return { error: 'cash_out: by_user_id must be an integer or null.' };
-    if (!(r.ledger_code === CUSTOM_CODE || LEDGER_BY_CODE.has(r.ledger_code))) return { error: `cash_out: unknown ledger_code ${JSON.stringify(r.ledger_code)}.` };
-    if (!(r.subledger_code == null || r.subledger_code === CUSTOM_CODE || subBelongs(r.ledger_code, r.subledger_code))) return { error: `cash_out: subledger_code ${JSON.stringify(r.subledger_code)} does not belong to ledger ${JSON.stringify(r.ledger_code)}.` };
-    if (!['included', 'extra'].includes(r.contract_scope)) return { error: `cash_out: invalid contract_scope ${JSON.stringify(r.contract_scope)}.` };
-    // contract_stated_paise — the retired Phase 5E offset column. Kept nullable in the schema and
-    // still round-tripped by backups so a historical value survives an export/import, but nothing
-    // reads it any more. Absent on pre-Phase-5 backups (undefined -> NULL). Type-check only.
-    if (!optInt(r.contract_stated_paise)) return { error: 'cash_out: contract_stated_paise must be an integer (paise) or null.' };
-    // Services phase (Part C/D): contract_service_id — optional. Absent on pre-change backups
-    // (undefined -> NULL). If present, it must resolve to a service inside the file (referential
-    // sanity); the DB's partial-unique index is the ultimate one-service-one-live-debit backstop on insert.
-    if (!(r.contract_service_id == null || (isInt(r.contract_service_id) && serviceIds.has(r.contract_service_id)))) return { error: `cash_out: contract_service_id ${JSON.stringify(r.contract_service_id)} is not present in the backup's contract_services.` };
-    // Contract Phase A: the allowance draw must resolve inside the file too. Absent on every
-    // pre-Phase-A backup, which reads as null.
-    if (!(r.contract_allowance_id == null || (isInt(r.contract_allowance_id) && allowanceIds.has(r.contract_allowance_id)))) return { error: `cash_out: contract_allowance_id ${JSON.stringify(r.contract_allowance_id)} is not present in the backup's contract_allowances.` };
-  }
-  return { ok: true };
-}
+const buildBackup = (opts) => backupFormat.buildBackup(db, opts);
+// Read LEDGER_BY_CODE at call time: refreshLedgers() replaces it after a category import or restore.
+const validateBackup = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: LEDGER_BY_CODE, customCode: CUSTOM_CODE, parseIsoDate });
 
 // EXPORT: one JSON object (schema version + timestamp + every ledger table as
 // arrays of full rows, incl. soft-deleted + the budget/settings). The frontend
@@ -2419,7 +2213,6 @@ app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
   // 1. VALIDATE — abort before changing anything.
   const v = validateBackup(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
-  const T = req.body.tables;
 
   // 2. AUTO-SNAPSHOT the current data first, beside the DB file. Report its path.
   let snapshot;
@@ -2433,53 +2226,18 @@ app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
     return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
   }
 
-  // 3. REPLACE in one transaction. Rows whose by_user_id is not a user in THIS
-  // install keep by_type/by_label but drop the id to NULL (displays as "Unknown"
-  // via the existing fallback), so a missing user never fails the import.
-  const userIds = new Set(db.prepare('SELECT id FROM users').all().map((u) => u.id));
-  let remappedUsers = 0;
-  // Which owned tables actually exist here (contract_services is absent on fresh DBs).
-  const existingTables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name));
-
-  db.exec('BEGIN');
+  // 3. REPLACE in one transaction (backup-format.js). Any error rolls back: current data unchanged.
+  let result;
   try {
-    // The teardown clears every import-owned table, CHILDREN-FIRST (IMPORT_OWNED_TABLES). users/
-    // sessions/edit_locks are not owned. Settings is NOT cleared (absent keys keep their current
-    // value); present keys are UPSERTed below.
-    for (const t of IMPORT_OWNED_TABLES) { if (t === 'settings') continue; if (existingTables.has(t)) repo.backup.deleteTenantRows(t); }
-    // No sqlite_sequence reset here. The rows were just freed by the teardown above, so re-inserting
-    // them collides with nothing; the AUTOINCREMENT high-water mark is left as SQLite maintains it
-    // (never reused).
-
-    for (const t of BACKUP_TABLES) {
-      // Settings is UPSERTed (not cleared+inserted).
-      if (t === 'settings') {
-        for (const r of (T.settings || [])) repo.backup.upsertSetting(r.key, r.value === undefined ? null : r.value);
-        continue;
-      }
-      // ids are preserved (FK integrity within the file); a colliding id -> the whole transaction
-      // rolls back, leaving the existing data byte-identical.
-      const cols = BACKUP_COLS[t];
-      for (const r of (T[t] || [])) {
-        const vals = cols.map((col) => {
-          let val = r[col];
-          if (col === 'by_user_id' && val != null && !userIds.has(val)) { val = null; remappedUsers++; }
-          return val === undefined ? null : val;
-        });
-        repo.backup.insertRow(t, cols, vals);
-      }
-    }
-    db.exec('COMMIT');
+    result = backupFormat.applyBackup(db, req.body);
   } catch (e) {
-    db.exec('ROLLBACK');
     if (!IS_PROD) console.error('Backup import failed, rolled back:', e);
     if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the import did not go through. Free up space, then try again.', snapshot });
     return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
   }
+  refreshLedgers(); // a v2 backup may have brought its own categories
 
-  const imported = {};
-  for (const t of BACKUP_TABLES) imported[t] = (T[t] || []).length;
-  res.json({ ok: true, imported, remappedUsers, snapshot });
+  res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
 });
 
 // Guard the protected pages' RAW filenames BEFORE express.static, so a
@@ -2655,7 +2413,7 @@ app._overviewPdfHtml = ({ part = 'full', theme = 'light', range = { start: null,
 };
 // Pre-builds every column/table-dependent repo statement (the makeLedgerCrud/trash factories already
 // built theirs at route-registration time above).
-repo.configure({ contractCols: CONTRACT_COLS, backupTables: BACKUP_TABLES, backupCols: BACKUP_COLS });
+repo.configure({ contractCols: CONTRACT_COLS }); // backup statements now live in backup-format.js
 
 module.exports = app;
 

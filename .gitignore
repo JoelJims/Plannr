@@ -38,6 +38,7 @@ PLANNR-AUDIT-LIVE.md
 /public/db-engine.js
 /public/node-builtins-browser-stub.js
 /public/ledgers.js
+/public/backup-format.js
 /public/allowances.js
 /public/node_modules/
 

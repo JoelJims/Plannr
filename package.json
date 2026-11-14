@@ -26,6 +26,7 @@
     "test:contract-layout": "node test-ui/contract-details-layout.js",
     "test:ledger-picker": "node test-ui/ledger-picker.js",
     "test:disclosure": "node test-ui/disclosure.js",
+    "test:backup-roundtrip": "node test-ui/backup-roundtrip.js",
     "sync:public-modules": "node sync-public-modules.js",
     "android:sync": "node sync-public-modules.js && npx cap sync android"
   },

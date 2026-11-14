@@ -282,8 +282,11 @@ going over an allowance is a normal thing to happen, not an error.
 
 ### The five kinds of file `/data-backup` produces
 
-- **Full backup (JSON)** — every table, including deleted rows, with the links between them
-  preserved. The only format you can restore everything from.
+- **Full backup (JSON)** — every table (entries including deleted rows, categories, saved
+  custom names, people, settings) plus the next-id counters, with the links between them
+  preserved; format v2, defined once in `backup-format.js` for both backends. Restoring it on a
+  new phone rebuilds the app exactly. Older v1 files (no categories or people) still restore
+  and leave the phone's own categories as they are. Old login password hashes are never exported.
 - **Encrypted backup** — the same thing, encrypted with AES-256-GCM under a passphrase you
   choose (`backup-crypto.js`). On Android
   both saving and restoring go through the system share sheet; in a browser it is a plain
