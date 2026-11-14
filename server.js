@@ -10,7 +10,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
-const { db, init, DB_PATH, isStorageFullError } = require('./db');
+const { db, init, DB_PATH, isStorageFullError, rollbackQuietly } = require('./db');
 const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // Phase 10b — the pre-Ledger-List-import safety backup
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -340,7 +340,7 @@ function makeLedgerCrud(opts) {
         for (const w of toWrite) rc.update(w.id, orderedVals(w.values));
         db.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
+        rollbackQuietly(db);
         if (!IS_PROD) console.error(`${table} batch write failed, rolled back:`, e);
         if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
         return res.status(500).json({ error: 'The save failed and was rolled back — no rows were changed.' });
@@ -2195,6 +2195,14 @@ app.put('/api/backup/reminder', requireApiAuth, (req, res) => {
 app.post('/api/backup/mark-exported', requireApiAuth, (req, res) => {
   db.prepare("INSERT INTO settings (key, value) VALUES ('last_encrypted_export_at', datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
   res.json(getBackupReminderStatus());
+});
+
+// Storage meter on the Data Backup page (Phase 2, Step 3). The phone answers this from its app
+// storage limit (public/local-api.js measureStorage()); a desktop database file has no such limit.
+app.get('/api/storage', requireApiAuth, (req, res) => {
+  let databaseBytes = null;
+  try { databaseBytes = fs.statSync(DB_PATH).size; } catch { /* reported as unknown */ }
+  res.json({ mode: 'desktop', databaseBytes, usedBytes: null, limitBytes: null, fraction: null, level: 'ok' });
 });
 
 app.get('/api/backup/export', requireApiAuth, (req, res) => {

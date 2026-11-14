@@ -26,7 +26,7 @@
 // the plain-JSON ledger export/import above — a separate concern (raw database bytes, not the
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
-import { db, isStorageFullError } from './db.js';
+import { db, isStorageFullError, rollbackQuietly } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as backupFormat from './backup-format.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
@@ -36,6 +36,39 @@ import { writeJsonSnapshot } from './safety-snapshots.js';
 // file in on every navigation) even though only the Overview page's PDF button ever needs them —
 // same "only import.js on demand" pattern @capacitor/share and @capacitor/filesystem already use
 // elsewhere in this codebase. Dynamically imported inside the handler instead.
+
+// ── Phase 2 (Step 3): app storage on the phone ──────────────────────────────────────────────────
+// The database lives in the WebView's localStorage (kvvfs: one entry per 8 KB database page), and
+// localStorage has a fixed size limit per app. MEASURED in Playwright's Chromium
+// (test-ui/storage-limit.js): 5,242,880 characters of keys + values, i.e. 10 MiB at the 2 bytes per
+// character Chromium counts. The database hit that limit at about 2.7 MB (≈12,500 typical entries).
+// The Android System WebView is Chromium too, so the phone is EXPECTED to have the same limit; that
+// part is an estimate until it is checked on a device (docs/PHONE-TEST-CHECKLIST.md).
+export const LOCALSTORAGE_LIMIT_CHARS = 5 * 1024 * 1024;
+export const STORAGE_WARN_AT = 0.7;   // "getting full"
+export const STORAGE_STRONG_AT = 0.9; // "export a backup now"
+export function measureStorage(storage = window.localStorage) {
+  let chars = 0, databaseChars = 0;
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    const n = key.length + (storage.getItem(key) || '').length;
+    chars += n;
+    if (key.startsWith('kvvfs-local')) databaseChars += n;
+  }
+  const fraction = chars / LOCALSTORAGE_LIMIT_CHARS;
+  return {
+    mode: 'phone',
+    usedBytes: chars * 2,
+    limitBytes: LOCALSTORAGE_LIMIT_CHARS * 2,
+    databaseBytes: databaseChars * 2,
+    fraction,
+    level: fraction >= STORAGE_STRONG_AT ? 'critical' : fraction >= STORAGE_WARN_AT ? 'warning' : 'ok',
+  };
+}
+
+// "Storage is full" on the phone means Plannr's own space inside the app is used up, not the phone's
+// storage, so "free up space on your phone" would not help. Say what does.
+const storageFull = (what) => `Storage is full — ${what} Your saved data is safe. On the Data Backup page, export a backup, then permanently delete items you no longer need from the Recycle Bin to make room.`;
 
 export function installFetchShim(repo) {
   const originalFetch = window.fetch.bind(window);
@@ -96,7 +129,7 @@ export function installFetchShim(repo) {
     try {
       repo.ledgers.replaceAll(v.mains, v.subs);
     } catch (e) {
-      if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the ledger list was not saved. Free up space, then try again.' });
+      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the ledger list was not saved.') });
       return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
     }
     refreshLedgers();
@@ -189,9 +222,9 @@ export function installFetchShim(repo) {
           for (const w of toWrite) rc.update(w.id, orderedVals(w.values));
           db.exec('COMMIT');
         } catch (e) {
-          db.exec('ROLLBACK');
+          rollbackQuietly(db);
           console.error(`${table} batch write failed, rolled back:`, e);
-          if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
+          if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('this save did not go through.') });
           return res.status(500).json({ error: 'The save failed and was rolled back — no rows were changed.' });
         }
 
@@ -1571,6 +1604,9 @@ export function installFetchShim(repo) {
   // Read LEDGER_BY_CODE at call time: refreshLedgers() replaces it after a category import or restore.
   const validateBackup = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: LEDGER_BY_CODE, customCode: CUSTOM_CODE, parseIsoDate });
 
+  // Storage meter on the Data Backup page (Phase 2, Step 3). See measureStorage() above.
+  localApp.get('/api/storage', (req, res) => { res.json(measureStorage()); });
+
   localApp.get('/api/backup/export', (req, res) => {
     const includeContacts = req.query.includeContacts === '1';
     const backup = buildBackup({ includeContacts });
@@ -1597,7 +1633,7 @@ export function installFetchShim(repo) {
       result = backupFormat.applyBackup(db, req.body);
     } catch (e) {
       console.error('Backup import failed, rolled back:', e);
-      if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the import did not go through. Free up space, then try again.', snapshot });
+      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the import did not go through.'), snapshot });
       return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
     }
     refreshLedgers(); // a v2 backup may have brought its own categories
@@ -1656,7 +1692,7 @@ export function installFetchShim(repo) {
     } catch (e) {
       console.error('Encrypted import failed:', e);
       if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
-      if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the restore did not go through. Free up space, then try again.' });
+      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the restore did not go through.') });
       return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.' });
     }
     res.json({ ok: true });
@@ -1767,7 +1803,9 @@ export function installFetchShim(repo) {
         await r.handler(req, res); // handlers may be sync or async (Phase 7's encrypted backup routes are async)
       } catch (e) {
         console.error('local-api handler error:', e);
-        res.status(500).json({ error: 'Something went wrong.' });
+        // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
+        // hits the storage limit lands here. Say so, instead of the generic message.
+        res.status(500).json({ error: isStorageFullError(e) ? storageFull('this change was not saved.') : 'Something went wrong.' });
       }
       return toResponse(res);
     }

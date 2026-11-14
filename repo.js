@@ -17,7 +17,7 @@
 // open, would throw the moment any statement below tries to `db.prepare(...)` against a not-yet-open
 // connection.
 
-import { db } from './db.js';
+import { db, rollbackQuietly } from './db.js';
 
 // ── generic CRUD (used by makeLedgerCrud) ────────────────────────────────────────────────────────
 // config: { table, select, listWhere, byIdWhere, columns, alias } — alias is the table alias used in
@@ -325,7 +325,7 @@ function ledgerReplaceAll(mains, subs) {
     subs.forEach((s, i) => ledgerStmt.insSub.run(s.code, s.mainCode, s.name, i));
     db.exec('COMMIT');
   } catch (e) {
-    db.exec('ROLLBACK');
+    rollbackQuietly(db);
     throw e;
   }
 }

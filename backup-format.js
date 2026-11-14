@@ -336,7 +336,9 @@ export function applyBackup(db, data) {
     }
     db.exec('COMMIT');
   } catch (e) {
-    db.exec('ROLLBACK');
+    // Same as db.js's rollbackQuietly() (this module stays import-free): after a storage-full error
+    // SQLite has already rolled back, and a second ROLLBACK must not hide the original error.
+    try { db.exec('ROLLBACK'); } catch (r) { if (!/no transaction is active/i.test(String(r && r.message))) throw r; }
     throw e;
   }
   const imported = {};

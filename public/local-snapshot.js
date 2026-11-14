@@ -18,7 +18,7 @@
 // its own tested, idempotent, version-gated chain rather than re-solving "what if this snapshot
 // predates the current schema" here.
 
-import { db, init, SCHEMA_VERSION } from './db.js';
+import { db, init, SCHEMA_VERSION, rollbackQuietly } from './db.js';
 import { getSqlite3 } from './db-engine.js';
 
 export function exportSnapshotBytes() {
@@ -89,7 +89,7 @@ export async function restoreSnapshotBytes(bytes) {
       db.exec(`PRAGMA user_version = ${Number(userVersion) || 0}`);
       db.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      rollbackQuietly(db);
       throw e;
     } finally {
       db.exec('PRAGMA foreign_keys = ON');

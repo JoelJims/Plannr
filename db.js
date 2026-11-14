@@ -130,7 +130,7 @@ export function runMigrations(dbh = db, list = MIGRATIONS) {
       dbh.exec(`PRAGMA user_version = ${m.version}`);
       dbh.exec('COMMIT');
     } catch (e) {
-      dbh.exec('ROLLBACK');
+      rollbackQuietly(dbh);
       const err = new Error(`Database upgrade to schema v${m.version} (${m.name}) failed and was rolled back; your data is unchanged at v${current}. Cause: ${e.message}`);
       err.cause = e;
       throw err;
@@ -547,7 +547,7 @@ function legacyInit() {
       }
       db.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      rollbackQuietly(db);
       throw e;
     }
   }
@@ -641,7 +641,7 @@ function legacyInit() {
       db.exec('ALTER TABLE cash_out_rebuild RENAME TO cash_out');
       db.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      rollbackQuietly(db);
       throw e;
     }
     db.exec('PRAGMA foreign_keys = ON');
@@ -744,7 +744,7 @@ function legacyInit() {
       if (oldSeq != null) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('cash_out', ?)").run(oldSeq);
       db.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      rollbackQuietly(db);
       db.exec('PRAGMA foreign_keys = ON');
       throw e;
     }
@@ -841,7 +841,7 @@ function legacyInit() {
         if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
         db.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
+        rollbackQuietly(db);
         db.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
@@ -888,7 +888,7 @@ function legacyInit() {
         db.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
         db.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
+        rollbackQuietly(db);
         db.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
@@ -1026,7 +1026,7 @@ function legacyInit() {
         db.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
         db.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
+        rollbackQuietly(db);
         db.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
@@ -1075,7 +1075,7 @@ function legacyInit() {
         if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
         db.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
+        rollbackQuietly(db);
         db.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
@@ -1444,6 +1444,16 @@ function legacyInit() {
 // storage-ceiling spike: exceeding the quota surfaces as a clean, atomically-rolled-back SQLITE_IOERR,
 // never silent corruption — so a write path seeing this can safely tell the user "storage is full"
 // instead of a raw SQLite message.
+// Roll back after a failed write, without hiding why it failed. When a write hits the phone's storage
+// limit (SQLITE_IOERR from kvvfs) SQLite has usually rolled the transaction back by itself already, and
+// a second ROLLBACK throws "cannot rollback - no transaction is active" — which would replace the real
+// error, so the user saw "Something went wrong" instead of "Storage is full" (measured in Phase 2,
+// Step 3; test-ui/storage-limit.js). Every catch block that rolls back uses this and then rethrows
+// the ORIGINAL error. Any other rollback failure is still thrown.
+export function rollbackQuietly(dbh = db) {
+  try { dbh.exec('ROLLBACK'); } catch (e) { if (!/no transaction is active/i.test(String(e && e.message))) throw e; }
+}
+
 export function isStorageFullError(err) {
   const code = err && (err.errcode ?? err.resultCode);
   if (typeof code === 'number' && (code & 0xff) === 10) return true;

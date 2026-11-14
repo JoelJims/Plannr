@@ -234,6 +234,12 @@ going over an allowance is a normal thing to happen, not an error.
   and import round trip including every rejection case, and the save/confirm flow on all
   four file-producing paths in Data Backup.
 - **`npm run test:backup-crypto`** — round-trips the encrypted backup through the real code.
+- **`npm run test:backup-roundtrip`** — the phone's backups rebuild the app exactly: fill with
+  the fixture, back up (JSON and encrypted), wipe, restore, compare every table row by row.
+- **`npm run test:storage-limit`** — the phone's storage limit, measured in Chromium (the
+  phone's database lives in WebView localStorage: about 10 MB, roughly 12,000 entries), the
+  storage meter on Data Backup (warnings at 70% and 90%), and "Storage is full" (never
+  "Something went wrong") when a save hits the limit, with the data left intact.
 - **`npm run test:palette`** — renders the real Overview chart, reads the colours back out
   of it, and checks every pair is far enough apart to tell apart. It replaced a check that
   only compared colour *names*, and so passed while two pale greens sat side by side in the

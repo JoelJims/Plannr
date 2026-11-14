@@ -87,6 +87,11 @@
     }
     .bk-section h2 .tag.muted { color: var(--text-dim); border-color: var(--line-strong); background: rgba(255,255,255,0.04); }
     .bk-section p { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; max-width: 54ch; }
+    /* Phase 2 (Step 3): storage meter */
+    .st-bar { height: 10px; max-width: 54ch; background: var(--panel-2); border: 1px solid var(--line-strong); margin: 0 0 14px; }
+    .st-fill { height: 100%; width: 0; background: var(--text-dim); transition: width .3s; }
+    .st-fill.warning, .st-fill.critical { background: var(--accent); }
+    .msg.st-critical { font-weight: 600; }
     .bk-note { color: var(--text-faint); font-size: 12px; line-height: 1.45; margin: 12px 0 0; }
     .bk-warn { color: #ffb020; font-size: 12.5px; line-height: 1.45; margin: 0 0 12px; } /* amber-only (was coral) */
     .ledger-csv-errors { color: #f87171; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-width: 54ch; }
@@ -191,6 +196,14 @@
         <h1>Data Backup</h1>
         <p class="lead">Save a copy of your ledger, restore it, or export it for Excel.</p>
       </div>
+
+      <!-- 0. Storage used (Phase 2, Step 3) — filled in from /api/storage -->
+      <section class="bk-section" id="storageSection" hidden>
+        <h2>Storage <span class="tag muted" id="storageTag">This phone</span></h2>
+        <p id="storageText">Checking…</p>
+        <div class="st-bar" id="storageBar" role="meter" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="st-fill" id="storageFill"></div></div>
+        <div id="storageMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
 
       <!-- 1. JSON backup (restorable) -->
       <section class="bk-section">
@@ -315,6 +328,49 @@
       const { paiseToInput, formatDate: fmtDate, makeMsg, confirmModal } = window.PlannrUI;
 
       const jsonMsg = makeMsg(document.getElementById('jsonMsg'));
+
+      // Storage meter (Phase 2, Step 3). On the phone Plannr's data has a fixed amount of room inside
+      // the app (see measureStorage() in local-api.js); warn at 70%, and at 90% tell the user to export
+      // a backup before new entries start failing to save.
+      const mb = (bytes) => (bytes < 0.1 * 1048576 ? 'under 0.1' : (bytes / 1048576).toFixed(1).replace(/\.0$/, ''));
+      async function refreshStorage() {
+        let s;
+        try {
+          const r = await fetch('/api/storage');
+          if (!r.ok) return;
+          s = await r.json();
+        } catch { return; }
+        const section = document.getElementById('storageSection');
+        const text = document.getElementById('storageText');
+        const bar = document.getElementById('storageBar');
+        const fill = document.getElementById('storageFill');
+        const box = document.getElementById('storageMsg');
+        section.hidden = false;
+        if (s.mode !== 'phone' || !s.limitBytes) {
+          document.getElementById('storageTag').textContent = 'Desktop';
+          text.textContent = s.databaseBytes != null
+            ? `Desktop dev server: the database file is ${mb(s.databaseBytes)} MB. There is no app storage limit here (the phone app has one).`
+            : 'Desktop dev server: there is no app storage limit here (the phone app has one).';
+          bar.hidden = true;
+          return;
+        }
+        const pct = Math.min(100, Math.round(s.fraction * 100));
+        text.textContent = `Used ${mb(s.usedBytes)} MB of about ${mb(s.limitBytes)} MB (${pct}%).`;
+        bar.setAttribute('aria-valuenow', String(pct));
+        bar.setAttribute('aria-valuetext', `${pct}% used`);
+        fill.style.width = pct + '%';
+        fill.className = 'st-fill ' + s.level;
+        box.className = 'msg';
+        box.textContent = '';
+        if (s.level === 'critical') {
+          box.className = 'msg show error st-critical';
+          box.textContent = `Storage is almost full (${pct}%). Export a backup now: new entries may soon fail to save. Then permanently delete items you no longer need from the Recycle Bin below to make room.`;
+        } else if (s.level === 'warning') {
+          box.className = 'msg show error';
+          box.textContent = `Storage is getting full (${pct}%). Export a backup soon, and permanently delete items you no longer need from the Recycle Bin below.`;
+        }
+      }
+      refreshStorage();
       const importMsg = makeMsg(document.getElementById('importMsg'));
       const csvMsg = makeMsg(document.getElementById('csvMsg'));
 
