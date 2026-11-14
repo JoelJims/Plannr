@@ -30,7 +30,7 @@ import { db, isStorageFullError, rollbackQuietly } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as backupFormat from './backup-format.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
-import { writeJsonSnapshot } from './safety-snapshots.js';
+import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
 // static import here was loaded unconditionally by every page (local-bootstrap.js pulls this whole
 // file in on every navigation) even though only the Overview page's PDF button ever needs them —
@@ -1687,15 +1687,25 @@ export function installFetchShim(repo) {
       return res.status(400).json({ error: 'Decryption succeeded but the result does not look like a SQLite database — the file may be corrupt.' });
     }
 
+    // Phase 2 (Step 4): a whole-database copy of the CURRENT data before the restore replaces it
+    // (safety-snapshots.js; inside the app's private folder, checked with stat). No copy, no restore.
+    let snapshot = null;
+    try {
+      snapshot = await writePreRestoreSnapshot();
+    } catch (e) {
+      console.error('Pre-restore snapshot failed:', e);
+      return res.status(500).json({ error: 'Could not write the safety snapshot, so the restore was not started — your current data is unchanged.' });
+    }
+
     try {
       await restoreSnapshotBytes(plain);
     } catch (e) {
       console.error('Encrypted import failed:', e);
       if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
       if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the restore did not go through.') });
-      return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.' });
+      return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.', snapshot });
     }
-    res.json({ ok: true });
+    res.json({ ok: true, snapshot });
   });
 
   // ---------------------------------------------------------------------------

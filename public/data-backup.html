@@ -256,7 +256,7 @@
 
       <section class="bk-section">
         <h2>Restore from encrypted backup <span class="tag">Replaces data</span></h2>
-        <p class="bk-warn">Restores a <code>.db.enc</code> backup: replaces the entire database and can't be undone.</p>
+        <p class="bk-warn">Restores a <code>.db.enc</code> backup: replaces the entire database and can't be undone from this screen. Inside the app, a copy of your current data is saved first (the newest 3 copies are kept).</p>
         <div id="encImportMsg" class="msg" role="status" aria-live="polite"></div>
         <input type="file" id="encImportFile" class="file-input" accept=".enc" aria-label="Choose a Plannr encrypted backup to restore">
         <label for="encImportPass">Passphrase</label>
@@ -657,7 +657,7 @@
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
-            encImportMsg.show('Restored ✓ — reloading…', 'success');
+            encImportMsg.show(data.snapshot ? `Restored ✓ — your previous data was saved to ${data.snapshot}. Reloading…` : 'Restored ✓ — reloading…', 'success');
             setTimeout(() => location.reload(), 800);
           } else {
             encImportMsg.show(data.error || 'Restore failed. Your current data may be unchanged.', 'error');
