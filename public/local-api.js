@@ -27,7 +27,7 @@
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
 import { db, isStorageFullError } from './db.js';
-import { encrypt, decrypt, looksLikeSqlite } from './backup-crypto.js';
+import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
 // static import here was loaded unconditionally by every page (local-bootstrap.js pulls this whole
@@ -1721,10 +1721,27 @@ export function installFetchShim(repo) {
     res.json(backup);
   });
 
-  // Design decision (flagged): server.js writes the pre-import safety snapshot to a file beside the
-  // DB (fs.writeFileSync). There is no such filesystem here, so this triggers a browser download of
-  // the same JSON instead — the user ends up with the identical safety net (a file they can restore
-  // from), just delivered as a download rather than a silent server-side write.
+  // Pre-import safety snapshot. server.js writes it to a file beside the DB (fs.writeFileSync).
+  // Inside the Android app a browser download does NOT work (HANDOFF.md), so on a native platform the
+  // snapshot is written with Capacitor Filesystem into the app's private data folder and checked with
+  // Filesystem.stat() before the import is allowed to touch anything. In a plain browser (the
+  // local-server.js test mode) the download path below is used, which works there.
+  async function writeSafetySnapshot(filename, obj) {
+    const { Capacitor } = await import('@capacitor/core');
+    if (!Capacitor.isNativePlatform()) {
+      downloadJson(filename, obj);
+      return `a downloaded file (${filename})`;
+    }
+    const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
+    const filePath = `safety-snapshots/${filename}`;
+    const data = JSON.stringify(obj);
+    await Filesystem.writeFile({ path: filePath, data, directory: Directory.Data, encoding: Encoding.UTF8, recursive: true });
+    const info = await Filesystem.stat({ path: filePath, directory: Directory.Data });
+    if (!info || typeof info.size !== 'number' || info.size < data.length) {
+      throw new Error(`safety snapshot not verified after writing (stat: ${JSON.stringify(info)})`);
+    }
+    return `a file inside the app (${filePath})`;
+  }
   function downloadJson(filename, obj) {
     const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1733,7 +1750,7 @@ export function installFetchShim(repo) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  localApp.post('/api/backup/import', (req, res) => {
+  localApp.post('/api/backup/import', async (req, res) => {
     const v = validateBackup(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
     const T = req.body.tables;
@@ -1742,8 +1759,7 @@ export function installFetchShim(repo) {
     try {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = `plannr-safety-snapshot-${stamp}.json`;
-      downloadJson(filename, buildBackup({ includeContacts: true }));
-      snapshot = `a downloaded file (${filename})`;
+      snapshot = await writeSafetySnapshot(filename, buildBackup({ includeContacts: true }));
     } catch (e) {
       console.error('Backup snapshot failed:', e);
       return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
@@ -1795,6 +1811,7 @@ export function installFetchShim(repo) {
   localApp.post('/api/backup/export-encrypted', async (req, res) => {
     const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
     if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
+    if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
     try {
       const plain = exportSnapshotBytes();
       const enc = await encrypt(plain, passphrase);

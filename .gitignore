@@ -4,6 +4,12 @@ node_modules/
 # data & secrets — NEVER commit
 data/
 .env
+# any SQLite database or backup, wherever it lands (a stray .db once reached the history)
+*.db
+*.db-wal
+*.db-shm
+*.db.enc
+plannr-safety-snapshot-*.json
 
 # WhatsApp session / state — and every sibling (_old, _snapshot, _snapshot_dead, .state.json, _diag)
 .wwebjs_auth*

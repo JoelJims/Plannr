@@ -114,6 +114,12 @@ npm start                   # = node server.js  ->  http://localhost:3000   (POR
 npm test                    # expect green before you change anything
 ```
 
+The desktop server has no login, so it listens on `127.0.0.1` only: other devices on your
+Wi-Fi cannot reach it. To open it to your network on purpose, set both `PLANNR_HOST=0.0.0.0`
+and `PLANNR_TOKEN` (a random string of 16+ characters). Then open
+`http://<this PC's IP>:3000/?token=<PLANNR_TOKEN>` once on each device. Without a long enough
+token, the server refuses to start in that mode.
+
 `npm test` is the quickest way to tell that the checkout is complete. It also protects the
 real database: every test file points `PLANNR_DB` at its own temporary database, and the
 runner checks `data/plannr.db`'s timestamp before and after the whole run and **fails if

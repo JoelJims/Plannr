@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const { db, init, DB_PATH, isStorageFullError } = require('./db');
-const { encrypt } = require('./backup-crypto'); // Phase 10b — the pre-Ledger-List-import safety backup
+const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // Phase 10b — the pre-Ledger-List-import safety backup
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
 // upcoming-payment day counts. IST has no DST, so no seasonal complexity.
@@ -24,6 +24,76 @@ function istStampFull(d = new Date()) {
 
 const app = express();
 app.disable('x-powered-by'); // don't advertise the framework/version
+
+// ---------------------------------------------------------------------------
+// Network access. Plannr has no login, so this server must never be reachable from other machines
+// by accident. Default: listen on 127.0.0.1 (this PC only). LAN access is an explicit opt-in —
+// PLANNR_HOST=0.0.0.0 (or a LAN IP) — and then every request that does not come from this PC must
+// carry PLANNR_TOKEN; the server refuses to start in LAN mode without a long enough token.
+// Read from the environment on every call (not once at load) so tests can switch modes per case.
+// ---------------------------------------------------------------------------
+const LOOPBACK_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const MIN_TOKEN_LEN = 16;
+function accessConfig(env = process.env) {
+  const host = String(env.PLANNR_HOST || '127.0.0.1').trim();
+  return { host, lan: !LOOPBACK_NAMES.has(host.toLowerCase()), token: String(env.PLANNR_TOKEN || '') };
+}
+// "[::1]:3000" -> "::1", "LocalHost:3000" -> "localhost", missing -> ""
+function hostNameOf(hostHeader) {
+  const h = String(hostHeader || '').trim().toLowerCase();
+  if (h.startsWith('[')) { const end = h.indexOf(']'); return end > 0 ? h.slice(1, end) : ''; }
+  return h.replace(/:\d+$/, '');
+}
+const isIPv4 = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+const isLoopbackAddr = (a) => { const s = String(a || ''); return s === '::1' || s.startsWith('127.') || s.startsWith('::ffff:127.'); };
+function tokenMatches(given, expected) {
+  const a = Buffer.from(String(given || '')), b = Buffer.from(String(expected || ''));
+  return b.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function cookieValue(cookieHeader, name) {
+  for (const part of String(cookieHeader || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) {
+      try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return ''; }
+    }
+  }
+  return '';
+}
+function accessGate(req, res, next) {
+  const cfg = accessConfig();
+  // 1) Host allow-list. Blocks DNS rebinding: a page on evil.example that re-points its name at
+  //    127.0.0.1 still sends "Host: evil.example". Loopback names always pass; in LAN mode a bare
+  //    IPv4 address passes too (rebinding needs a domain name, so an IP literal is safe).
+  const name = hostNameOf(req.headers.host);
+  if (!(LOOPBACK_NAMES.has(name) || (cfg.lan && isIPv4(name)))) {
+    return res.status(403).type('text/plain').send('Plannr: unexpected Host header.');
+  }
+  // 2) LAN mode: a request from another machine needs the token — once via ?token= (which sets an
+  //    HttpOnly cookie and redirects the token out of the address bar), then by cookie or Bearer.
+  if (cfg.lan && !isLoopbackAddr(req.socket && req.socket.remoteAddress)) {
+    const fromQuery = typeof req.query.token === 'string' ? req.query.token : '';
+    if (fromQuery && tokenMatches(fromQuery, cfg.token)) {
+      res.setHeader('Set-Cookie', `plannr_token=${encodeURIComponent(cfg.token)}; HttpOnly; SameSite=Strict; Path=/`);
+      return res.redirect(302, req.path.startsWith('//') ? '/' : req.path); // '//x' would be an open redirect
+    }
+    const auth = String(req.headers.authorization || '');
+    const given = auth.startsWith('Bearer ') ? auth.slice(7) : cookieValue(req.headers.cookie, 'plannr_token');
+    if (!tokenMatches(given, cfg.token)) {
+      return res.status(401).type('text/plain').send('Plannr: open this address once with ?token=<PLANNR_TOKEN> first.');
+    }
+  }
+  next();
+}
+app.use(accessGate);
+// Basic hardening headers on every response. (No Content-Security-Policy yet: the pages still carry
+// inline scripts and import maps, which a strict CSP would block.)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 const SERVER_START = new Date(); // Phase 2 — process start time, surfaced by GET /api/health
@@ -2249,6 +2319,7 @@ function vacuumSnapshotBytes() {
 app.post('/api/backup/export-encrypted', requireApiAuth, (req, res) => {
   const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
   if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
+  if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
   try {
     const plain = vacuumSnapshotBytes();
     const enc = encrypt(plain, passphrase);
@@ -2571,6 +2642,8 @@ function watchStopSentinel(sentinelPath, onStop, intervalMs = 1000) {
 app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: exercised by schema tests
 app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview warm Playwright; teardown closes it
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?
+app._accessGate = accessGate; // Phase 1 safety: LAN/Host gate, unit-tested with fake requests
+app._accessConfig = accessConfig;
 app._watchStopSentinel = watchStopSentinel; // Phase 11B: test that a sentinel file routes into the same stop callback as SIGINT
 // Phase 10G — the exact HTML page.pdf() rasterizes, for rendering the table to an image in tests
 // (the authoritative composition path; the endpoint's compressed stream is a weaker check).
@@ -2591,6 +2664,15 @@ module.exports = app;
 // is what makes the suite structurally unable to schedule a real send. `npm start` is unchanged:
 // there, require.main === module.
 if (require.main === module) {
+  // This PC only by default; LAN access only with PLANNR_HOST + PLANNR_TOKEN (see accessGate above).
+  // Checked first, before anything else at startup touches the disk.
+  const access = accessConfig();
+  if (access.lan && access.token.length < MIN_TOKEN_LEN) {
+    console.error(`[startup] PLANNR_HOST=${access.host} would open Plannr, which has no login, to your whole network. ` +
+      `Set PLANNR_TOKEN to a random string of at least ${MIN_TOKEN_LEN} characters, or unset PLANNR_HOST to keep it on this PC.`);
+    process.exit(1);
+  }
+
   let sigints = 0;
   process.on('SIGINT', () => {
     if (++sigints >= 2) {
@@ -2607,13 +2689,11 @@ if (require.main === module) {
   // stale sentinel on boot so a leftover can't stop this start.
   watchStopSentinel(STOP_SENTINEL, shutdown);
 
-  // Bind to 0.0.0.0 so phones/laptops on the same Wi-Fi can reach Plannr, not just this machine.
-  const os = require('os');
   const lanIp = Object.values(os.networkInterfaces()).flat()
     .find((i) => i && (i.family === 'IPv4' || i.family === 4) && !i.internal)?.address;
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, access.host, () => {
     console.log(`Plannr running at http://localhost:${PORT}`);
-    if (lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}`);
+    if (access.lan && lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}/?token=<your PLANNR_TOKEN>  (open once per device)`);
   });
 }

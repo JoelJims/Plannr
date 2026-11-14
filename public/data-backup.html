@@ -235,7 +235,9 @@
         </details>
         <div id="encExportMsg" class="msg" role="status" aria-live="polite"></div>
         <label for="encExportPass">Passphrase</label>
-        <input type="password" id="encExportPass" autocomplete="new-password" placeholder="Choose a passphrase">
+        <input type="password" id="encExportPass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
+        <label for="encExportPass2">Type the passphrase again</label>
+        <input type="password" id="encExportPass2" autocomplete="new-password" placeholder="The same passphrase">
         <button type="button" id="encExportBtn" class="btn primary">Download encrypted backup</button>
       </section>
 
@@ -282,7 +284,9 @@
         <p class="bk-warn">Importing replaces the category list. An encrypted safety backup is saved first, and the import only runs if it succeeds.</p>
         <input type="file" id="ledgerCsvFile" class="file-input" accept="text/csv,.csv" aria-label="Choose an edited Ledger List CSV to import">
         <label for="ledgerCsvBackupPass">Passphrase for the safety backup</label>
-        <input type="password" id="ledgerCsvBackupPass" autocomplete="new-password" placeholder="Choose a passphrase">
+        <input type="password" id="ledgerCsvBackupPass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
+        <label for="ledgerCsvBackupPass2">Type the passphrase again</label>
+        <input type="password" id="ledgerCsvBackupPass2" autocomplete="new-password" placeholder="The same passphrase">
         <button type="button" id="importLedgerCsvBtn" class="btn ghost">Import Ledger List</button>
         <div id="ledgerCsvErrors" class="ledger-csv-errors" hidden></div>
       </section>
@@ -329,6 +333,17 @@
 
       const errText = (err) => (err && err.message) ? err.message : String(err);
 
+      // A new encrypted backup's passphrase is typed twice: one typo in a passphrase typed once makes
+      // the backup impossible to open, and nobody finds out until they need it. The length rule is
+      // also enforced by the export route (MIN_PASSPHRASE_LEN in backup-crypto.js; keep the two equal).
+      const MIN_PASSPHRASE_LEN = 10;
+      function newPassphraseProblem(pass, again) {
+        if (!pass) return 'Enter a passphrase first.';
+        if ([...pass].length < MIN_PASSPHRASE_LEN) return `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.`;
+        if (pass !== again) return "The two passphrases don't match. Type them again.";
+        return null;
+      }
+
       // Phase 11 audit — confirmed via overview.html's PDF share path (Phase 6a, verified on-device):
       // a plain <a download> click is a dead end on Android's WebView (no visible effect), so a blob
       // download alone is not a real delivery path there. Capacitor's Filesystem+Share is the only one
@@ -364,8 +379,9 @@
       // Phase 15: an encrypted full backup (fname ends ".db.enc" — the main "Download encrypted
       // backup" button AND the Ledger List CSV import's automatic safety backup both produce one, and
       // both are equally real, restorable snapshots) marks /api/backup/mark-exported right at the
-      // point each path treats the file as actually existing — post-Filesystem.stat() on native, post-
-      // download-trigger in the browser fallback (there's no stat to wait for there). Best-effort: a
+      // point each path treats the file as actually handed over — on native, only after Share.share()
+      // resolves (a file left in the app's cache folder is not a backup the user has); in the browser
+      // fallback, after the download is triggered (there's nothing further to wait for). Best-effort: a
       // failed recording must never fail an otherwise-successful backup.
       const markBackupExported = () => fetch('/api/backup/mark-exported', { method: 'POST' }).catch(() => {});
       async function saveFile(blob, fname, dialogTitle, msg) {
@@ -424,11 +440,11 @@
         catch (err) { bail('could not verify the file exists after writing (Filesystem.stat failed)', err); }
         if (!info || typeof info.size !== 'number') bail('Filesystem.stat returned no usable size (got ' + JSON.stringify(info) + ')');
         ok(`file verified on disk: ${info.size} bytes`);
-        if (fname.endsWith('.db.enc')) await markBackupExported();
 
         try { await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }), 20000, 'Opening the share sheet'); }
         catch (err) { bail('Share.share threw', err); }
         ok('share sheet invoked');
+        if (fname.endsWith('.db.enc')) await markBackupExported();
 
         report('success');
       }
@@ -521,11 +537,13 @@
       // ---- Encrypted full backup (Phase 7) -----------------------------------
       const encExportMsg = makeMsg(document.getElementById('encExportMsg'));
       const encExportPass = document.getElementById('encExportPass');
+      const encExportPass2 = document.getElementById('encExportPass2');
       const encExportBtn = document.getElementById('encExportBtn');
       encExportBtn.addEventListener('click', async () => {
         encExportMsg.clear();
         const passphrase = encExportPass.value;
-        if (!passphrase) { encExportMsg.show('Enter a passphrase first.', 'error'); return; }
+        const problem = newPassphraseProblem(passphrase, encExportPass2.value);
+        if (problem) { encExportMsg.show(problem, 'error'); return; }
         encExportBtn.disabled = true;
         try {
           const res = await fetch('/api/backup/export-encrypted', {
@@ -541,6 +559,7 @@
           const blob = await res.blob();
           await saveFile(blob, `plannr-backup-${today()}.db.enc`, 'Save encrypted backup', encExportMsg);
           encExportPass.value = '';
+          encExportPass2.value = '';
         } catch (err) {
           if (!err.alreadyShown) encExportMsg.show('Could not save the encrypted backup: ' + errText(err), 'error');
         } finally {
@@ -711,6 +730,7 @@
       const downloadLedgerCsvBtn = document.getElementById('downloadLedgerCsvBtn');
       const ledgerCsvFile = document.getElementById('ledgerCsvFile');
       const ledgerCsvBackupPass = document.getElementById('ledgerCsvBackupPass');
+      const ledgerCsvBackupPass2 = document.getElementById('ledgerCsvBackupPass2');
       const importLedgerCsvBtn = document.getElementById('importLedgerCsvBtn');
       const ledgerCsvErrorsEl = document.getElementById('ledgerCsvErrors');
 
@@ -744,6 +764,8 @@
         if (!file) { ledgerCsvMsg.show('Choose an edited Ledger List CSV first.', 'error'); return; }
         const passphrase = ledgerCsvBackupPass.value;
         if (!passphrase) { ledgerCsvMsg.show('Enter a passphrase for the automatic safety backup first.', 'error'); return; }
+        const problem = newPassphraseProblem(passphrase, ledgerCsvBackupPass2.value);
+        if (problem) { ledgerCsvMsg.show(problem, 'error'); return; }
         if (!window.confirm("Replace the ledger category list? This can't be undone in the app.")) return;
 
         importLedgerCsvBtn.disabled = true;
@@ -794,6 +816,7 @@
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
             ledgerCsvBackupPass.value = '';
+            ledgerCsvBackupPass2.value = '';
             ledgerCsvFile.value = '';
             ledgerCsvMsg.show('Ledger List imported ✓. Keep the safety backup\'s passphrase somewhere separate from the file.', 'success');
           } else {

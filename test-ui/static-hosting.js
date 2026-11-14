@@ -307,6 +307,7 @@ function attachErrorCollector(page) {
     errors.length = 0;
     await page.waitForTimeout(300);
     await page.fill('#encExportPass', 'correct horse battery staple');
+    await page.fill('#encExportPass2', 'correct horse battery staple');
     const [encDl] = await Promise.all([page.waitForEvent('download'), page.click('#encExportBtn')]);
     check('Encrypted export: download fired', !!encDl, '');
     await page.waitForTimeout(300);

@@ -41,6 +41,11 @@ const VENDOR_PACKAGES = [
   path.join('@capacitor', 'filesystem'), path.join('@capacitor', 'synapse'),
 ];
 
+// local-server.js reads these two lists to decide which project-root files it may serve. Requiring
+// this file only hands over the lists; the copying below runs only via `node sync-public-modules.js`.
+module.exports = { FILES, VENDOR_PACKAGES };
+if (require.main !== module) return; // top-level return is valid in a CommonJS module
+
 for (const f of FILES) {
   fs.copyFileSync(path.join(ROOT, f), path.join(PUBLIC, f));
   console.log(`[sync-public-modules] copied ${f}`);

@@ -52,6 +52,10 @@ async function deriveKey(passphrase, salt) {
 }
 
 // Uint8Array -> encrypted Uint8Array.
+// Minimum passphrase length for NEW encrypted backups (checked by the export routes, not by
+// decrypt(), so older backups made with shorter passphrases still open). Mirrors ../backup-crypto.js.
+export const MIN_PASSPHRASE_LEN = 10;
+
 export async function encrypt(plain, passphrase) {
   if (!(plain instanceof Uint8Array)) throw new Error('encrypt() expects a Uint8Array.');
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
