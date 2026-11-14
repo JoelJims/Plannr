@@ -21,7 +21,9 @@ const path = require('node:path'), os = require('node:os'), crypto = require('no
 const assert = require('node:assert');
 const { DatabaseSync } = require('node:sqlite');
 
-const dbPath = path.join(os.tmpdir(), `plannr-tenmig-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
+// Its own temp folder: init() writes a pre-upgrade safety snapshot into <db folder>/safety-snapshots/.
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `plannr-tenmig-${process.pid}-${crypto.randomBytes(4).toString('hex')}-`));
+const dbPath = path.join(tmpDir, 'plannr.db');
 
 // ---- build the PRE-tenancy, PRE-Services-phase shape (a trimmed but faithful old schema) ----
 {
@@ -106,5 +108,5 @@ const afterSecond = snapshot();
 assert.strictEqual(afterSecond, afterFirst, 'a second init() against the same file must be a complete no-op (same schema, counts, user_version)');
 
 db.close();
-for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(dbPath + s); } catch {} }
+fs.rmSync(tmpDir, { recursive: true, force: true });
 console.log('FIXTURE OK');

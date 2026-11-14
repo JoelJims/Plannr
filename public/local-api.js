@@ -30,6 +30,7 @@ import { db, isStorageFullError } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as backupFormat from './backup-format.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
+import { writeJsonSnapshot } from './safety-snapshots.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
 // static import here was loaded unconditionally by every page (local-bootstrap.js pulls this whole
 // file in on every navigation) even though only the Overview page's PDF button ever needs them —
@@ -1562,7 +1563,7 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   // Data backup. The format (tables, columns, validation, the restore transaction) lives in
   // backup-format.js, shared with server.js, so the phone and the desktop cannot drift. The one
-  // phone-specific part is the pre-import safety snapshot (writeSafetySnapshot below): there is no
+  // phone-specific part is the pre-import safety snapshot (safety-snapshots.js): there is no
   // file beside the DB here, so it goes into the app's data folder through Capacitor Filesystem.
   // ---------------------------------------------------------------------------
   backupFormat.assertImportOwnershipComplete(db);
@@ -1576,43 +1577,15 @@ export function installFetchShim(repo) {
     res.json(backup);
   });
 
-  // Pre-import safety snapshot. server.js writes it to a file beside the DB (fs.writeFileSync).
-  // Inside the Android app a browser download does NOT work (HANDOFF.md), so on a native platform the
-  // snapshot is written with Capacitor Filesystem into the app's private data folder and checked with
-  // Filesystem.stat() before the import is allowed to touch anything. In a plain browser (the
-  // local-server.js test mode) the download path below is used, which works there.
-  async function writeSafetySnapshot(filename, obj) {
-    const { Capacitor } = await import('@capacitor/core');
-    if (!Capacitor.isNativePlatform()) {
-      downloadJson(filename, obj);
-      return `a downloaded file (${filename})`;
-    }
-    const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
-    const filePath = `safety-snapshots/${filename}`;
-    const data = JSON.stringify(obj);
-    await Filesystem.writeFile({ path: filePath, data, directory: Directory.Data, encoding: Encoding.UTF8, recursive: true });
-    const info = await Filesystem.stat({ path: filePath, directory: Directory.Data });
-    if (!info || typeof info.size !== 'number' || info.size < data.length) {
-      throw new Error(`safety snapshot not verified after writing (stat: ${JSON.stringify(info)})`);
-    }
-    return `a file inside the app (${filePath})`;
-  }
-  function downloadJson(filename, obj) {
-    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
+  // Pre-import safety snapshot: safety-snapshots.js writes it into the app's private data folder
+  // (Capacitor Filesystem, checked with stat) before the import may touch anything. server.js writes
+  // its own to a file beside the DB. In a plain browser it falls back to a download.
   localApp.post('/api/backup/import', async (req, res) => {
     const v = validateBackup(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
     let snapshot;
     try {
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `plannr-safety-snapshot-${stamp}.json`;
-      snapshot = await writeSafetySnapshot(filename, buildBackup({ includeContacts: true }));
+      snapshot = await writeJsonSnapshot(buildBackup({ includeContacts: true }));
     } catch (e) {
       console.error('Backup snapshot failed:', e);
       return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
@@ -1682,6 +1655,7 @@ export function installFetchShim(repo) {
       await restoreSnapshotBytes(plain);
     } catch (e) {
       console.error('Encrypted import failed:', e);
+      if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
       if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the restore did not go through. Free up space, then try again.' });
       return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.' });
     }

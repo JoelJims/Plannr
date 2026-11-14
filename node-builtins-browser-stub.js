@@ -18,8 +18,15 @@
 //
 // All three map to this one file; db.js only imports the named bindings below from each.
 
-export function mkdirSync() {} // node:fs — never called in a browser (see db.js's `isNode` guard)
-export function join(...parts) { return parts.join('/'); } // node:path — never called either
+// node:fs — never called in a browser (see db.js's `isNode` guard; the desktop-only safety snapshot
+// before a schema upgrade uses readdirSync/rmSync/statSync).
+export function mkdirSync() {}
+export function readdirSync() { return []; }
+export function rmSync() {}
+export function statSync() { throw new Error('node-builtins-browser-stub: statSync is desktop-only.'); }
+// node:path — never called either
+export function join(...parts) { return parts.join('/'); }
+export function dirname(p) { return String(p).replace(/[\\/][^\\/]*$/, '') || '.'; }
 
 export class DatabaseSync { // node:sqlite
   constructor() {

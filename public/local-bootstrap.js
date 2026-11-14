@@ -31,11 +31,37 @@ const probe = await fetch(location.pathname, { method: 'HEAD' }).catch(() => nul
 if (probe && probe.headers.has('etag')) {
   console.log('[local-bootstrap] a real API server is present (ETag from express.static) — leaving fetch alone (not local-only mode).');
 } else {
-  const { ready, init } = await import('./db.js');
+  const { ready, init, migrationPlan } = await import('./db.js');
   await ready();
-  init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
+  // Phase 2 (Step 2): before a schema upgrade touches existing data, copy the whole database into the
+  // app's private folder (safety-snapshots.js). If that copy cannot be written and verified, stop
+  // here: the data stays exactly as it is, at its old version. init() itself refuses a database from
+  // a newer app version (an older APK installed over newer data) without changing anything.
+  const plan = migrationPlan();
+  try {
+    if (plan.needsSnapshot && !plan.tooNew) {
+      const { writePreMigrationSnapshot } = await import('./safety-snapshots.js');
+      await writePreMigrationSnapshot(plan);
+    }
+    init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
+  } catch (e) {
+    showStartupError(e);
+    throw e;
+  }
   const repo = await import('./repo.js');
   const { installFetchShim } = await import('./local-api.js');
   installFetchShim(repo);
   console.log('[local-bootstrap] local-only mode: fetch shim installed, no network requests will be made for /api/*.');
+}
+
+// A start-up failure would otherwise leave a blank page. Show the reason (plain text, never HTML).
+function showStartupError(e) {
+  const show = () => {
+    const box = document.createElement('div');
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'margin:16px;padding:16px;border:2px solid #b00020;border-radius:8px;background:#fff4f4;color:#5f0010;font:16px/1.4 system-ui,sans-serif;white-space:pre-wrap';
+    box.textContent = 'Plannr could not open your data. ' + (e && e.message ? e.message : String(e));
+    document.body.prepend(box);
+  };
+  if (document.body) show(); else document.addEventListener('DOMContentLoaded', show, { once: true });
 }

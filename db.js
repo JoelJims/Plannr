@@ -17,8 +17,8 @@
 // module finishes loading, synchronously, as today); under a browser it's what a caller MUST await
 // before using `db`/`init` — see `ready()`'s own comment.
 
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
 import { LEDGERS as SEED_LEDGERS } from './ledgers.js';
 
@@ -75,10 +75,107 @@ export function ready() {
 // on "does column X exist?" wrongly re-runs after some later, unrelated change recreates column X, and
 // a re-run of a create-copy-swap rebuild risks data. Bump this + gate the new step on
 // `userVersion < N` when a future migration needs the same protection.
-const SCHEMA_VERSION = 2; // v2 = Phase 2 Step 2a: the tenant_id dimension is dropped back off (see the
-                          // `userVersion < 2` migration near the end of init()).
+//
+// Phase 2 (Step 2) of the review roadmap turned this into a versioned migration chain (see CONTRIBUTING.md):
+//   · BASELINE_VERSION (2): everything legacyInit() below does — the historic, hand-gated migrations
+//     that bring any older database (or an empty new one) up to the v2 shape. Kept exactly as it was.
+//   · MIGRATIONS: every schema change AFTER v2, one numbered step each, applied in order by
+//     runMigrations(), each inside its own transaction together with its user_version stamp.
+//   · init() refuses a database stamped NEWER than this code understands (an older app installed
+//     over newer data), and on the desktop writes a safety snapshot before any step runs. The phone
+//     writes its own (async, Capacitor Filesystem) in local-bootstrap.js before calling init().
+// This file is shared by server.js (desktop/dev) and the phone app, so both run the same chain.
+const BASELINE_VERSION = 2; // v2 = the tenant_id dimension dropped back off (the `userVersion < 2` step in legacyInit()).
 
-export function init() {
+// Schema changes after v2. Append only — never edit or reorder a step that has shipped. Each:
+//   { version: <previous + 1>, name: 'what it does', up(db) { ...SQL via db.exec / db.prepare... } }
+// up() runs inside a transaction, so it must not BEGIN/COMMIT or toggle PRAGMA foreign_keys itself.
+export const MIGRATIONS = [];
+
+export function assertMigrationList(list, baseline = BASELINE_VERSION) {
+  list.forEach((m, i) => {
+    const want = baseline + 1 + i;
+    if (m.version !== want) throw new Error(`MIGRATIONS[${i}] has version ${m.version}; expected ${want} (versions must count up by one from ${baseline + 1}).`);
+    if (typeof m.up !== 'function' || !m.name) throw new Error(`MIGRATIONS[${i}] (v${m.version}) needs a name and an up(db) function.`);
+  });
+}
+assertMigrationList(MIGRATIONS);
+export const SCHEMA_VERSION = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : BASELINE_VERSION;
+
+export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').get().user_version;
+
+// What init() would do to this database, without changing anything. needsSnapshot: there is existing
+// data and at least one step will run (a brand-new, empty database needs no snapshot).
+export function migrationPlan(dbh = db, list = MIGRATIONS) {
+  const from = schemaVersionOf(dbh);
+  const to = list.length ? list[list.length - 1].version : BASELINE_VERSION;
+  const hasTables = !!dbh.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get();
+  const steps = [];
+  if (from < BASELINE_VERSION) steps.push({ version: BASELINE_VERSION, name: 'baseline: historic migrations up to schema v2' });
+  for (const m of list) if (m.version > from) steps.push({ version: m.version, name: m.name });
+  return { from, to, steps, tooNew: from > to, needsSnapshot: hasTables && steps.length > 0 };
+}
+
+// Apply every migration newer than the database's user_version, oldest first. Each step runs inside
+// its own transaction together with its user_version stamp, so a failing step rolls back completely
+// and leaves the database at the previous version (the next start retries it). Returns the versions applied.
+export function runMigrations(dbh = db, list = MIGRATIONS) {
+  const applied = [];
+  for (const m of list) {
+    const current = schemaVersionOf(dbh);
+    if (m.version <= current) continue;
+    dbh.exec('BEGIN');
+    try {
+      m.up(dbh);
+      dbh.exec(`PRAGMA user_version = ${m.version}`);
+      dbh.exec('COMMIT');
+    } catch (e) {
+      dbh.exec('ROLLBACK');
+      const err = new Error(`Database upgrade to schema v${m.version} (${m.name}) failed and was rolled back; your data is unchanged at v${current}. Cause: ${e.message}`);
+      err.cause = e;
+      throw err;
+    }
+    applied.push(m.version);
+  }
+  return applied;
+}
+
+// Desktop only: a whole-database copy beside the database file, before any upgrade step runs. Keeps
+// the newest 3 (the same rule as the phone's Directory.Data/safety-snapshots/).
+const KEEP_SNAPSHOTS = 3;
+function writeNodeSnapshot(plan) {
+  const dir = join(dirname(DB_PATH), 'safety-snapshots');
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = join(dir, `plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stamp}.db`);
+  db.exec(`VACUUM INTO '${file.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  if (!(statSync(file).size > 0)) throw new Error(`Safety snapshot ${file} is empty; the upgrade was not started.`);
+  // Only after the new copy is written and non-empty: delete all but the newest KEEP_SNAPSHOTS (by
+  // modification time), and never the one just written.
+  const old = readdirSync(dir).filter((f) => /^plannr-pre-migration-.*\.db$/.test(f))
+    .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
+    .slice(KEEP_SNAPSHOTS);
+  for (const { f } of old) if (join(dir, f) !== file) rmSync(join(dir, f), { force: true });
+  if (process.env.PLANNR_TEST !== '1') console.log(`[db] safety snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${file}`);
+  return file;
+}
+
+// Bring the database up to SCHEMA_VERSION. Called once at startup by server.js and by the phone's
+// local-bootstrap.js (and after an encrypted restore). Options: { snapshot: false } skips the desktop
+// snapshot (the caller already has one, e.g. a restore that just copied a backup in).
+export function init({ snapshot = true } = {}) {
+  const plan = migrationPlan();
+  if (plan.tooNew) {
+    throw new Error(`This Plannr database was saved by a newer version of the app (schema v${plan.from}; this version understands up to v${SCHEMA_VERSION}). `
+      + 'Nothing was changed. Install the newer version of Plannr, or restore a backup made with this one.');
+  }
+  if (plan.needsSnapshot && snapshot && isNode) writeNodeSnapshot(plan);
+  legacyInit();
+  runMigrations(db);
+}
+
+function legacyInit() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1256,7 +1353,7 @@ export function init() {
     // ---- DATA-LOSS GUARD (added after this block silently wiped a real ledger) -------------------
     // The DELETE below removes EVERY cash_out row, and this block is MARKER-gated, not version-gated
     // (see the note above for why). So `user_version` is no warning at all: a database already
-    // stamped at the current SCHEMA_VERSION still runs this on its first pass. Installing an update
+    // stamped at the current schema version still runs this on its first pass. Installing an update
     // onto any database that predates Phase 10a therefore wipes the whole Money Debited history with
     // no prompt and no error. A silent DELETE of a construction ledger is the worst failure this app
     // can have, so: if there is anything to lose, REFUSE TO BOOT and say why.
@@ -1332,7 +1429,9 @@ export function init() {
   // the historical presence-keyed DESTRUCTIVE rebuild(s) above: those run only while user_version is 0,
   // so re-adding a same-named column later can never re-arm them. Additive ADD-COLUMN guards stay
   // presence-keyed on purpose — adding an absent column is always correct, so they need no version gate.
-  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  // Phase 2: only ever RAISE the version here — a database already past the baseline (stamped by a
+  // later MIGRATIONS step) must never be pulled back to 2, or that step would re-run on every start.
+  if (db.prepare('PRAGMA user_version').get().user_version < BASELINE_VERSION) db.exec(`PRAGMA user_version = ${BASELINE_VERSION}`);
 }
 
 // Phase 4a/4c (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which

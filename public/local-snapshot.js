@@ -18,7 +18,7 @@
 // its own tested, idempotent, version-gated chain rather than re-solving "what if this snapshot
 // predates the current schema" here.
 
-import { db, init } from './db.js';
+import { db, init, SCHEMA_VERSION } from './db.js';
 import { getSqlite3 } from './db-engine.js';
 
 export function exportSnapshotBytes() {
@@ -38,6 +38,13 @@ export async function restoreSnapshotBytes(bytes) {
 
   try {
     const userVersion = tempDb.selectValue('PRAGMA user_version');
+    // Phase 2 (Step 2): a backup from a NEWER Plannr has a schema this version cannot read. Refuse
+    // before anything is touched (init() would refuse it after the copy, leaving the app unusable).
+    if (Number(userVersion) > SCHEMA_VERSION) {
+      const err = new Error(`This backup was made by a newer version of Plannr (schema v${userVersion}; this version understands up to v${SCHEMA_VERSION}). Nothing was changed — update Plannr, then restore it.`);
+      err.code = 'BACKUP_TOO_NEW';
+      throw err;
+    }
     const tableSchema = tempDb.selectObjects("SELECT name, sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL AND name <> 'sqlite_sequence'");
     const indexSchema = tempDb.selectObjects("SELECT sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
 
@@ -90,7 +97,7 @@ export async function restoreSnapshotBytes(bytes) {
 
     // Outside the transaction above — init() manages its own BEGIN/COMMIT internally for whichever
     // migrations it decides to run, and SQLite does not support nesting a second BEGIN inside one.
-    init();
+    init({ snapshot: false });
 
     const fkViol = db.prepare('PRAGMA foreign_key_check').all();
     if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));

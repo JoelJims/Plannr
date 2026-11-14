@@ -38,6 +38,15 @@ function sameDb(name, actual, expected) {
   const wipe = async () => { await page.evaluate(() => localStorage.clear()); await openFresh(); };
   const dump = () => page.evaluate(async (src) => { const { db } = await import('/db.js'); return new Function('return ' + src)()(db); }, F.dumpAll.toString());
   const seed = () => page.evaluate(async ([seedSrc, data]) => { const { db } = await import('/db.js'); new Function('return ' + seedSrc)()(db, data); }, [F.seedInto.toString(), F.DATA]);
+  const exportEncrypted = (passphrase) => page.evaluate(async (pp) => {
+    const r = await fetch('/api/backup/export-encrypted', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pp }) });
+    if (!r.ok) return null;
+    const buf = new Uint8Array(await (await r.blob()).arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < buf.length; i += 0x8000) binary += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return btoa(binary);
+  }, passphrase);
+  const setVersion = (v) => page.evaluate(async (n) => { const { db } = await import('/db.js'); db.exec(`PRAGMA user_version = ${n}`); }, v);
   const api = (method, url, body) => page.evaluate(async ([m, u, b]) => {
     const r = await fetch(u, { method: m, headers: { 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) });
     return { status: r.status, json: await r.json() };
@@ -68,19 +77,38 @@ function sameDb(name, actual, expected) {
     // ---- Encrypted backup ----
     const beforeEnc = await dump();
     const pass = 'roundtrip-passphrase-123';
-    const dataBase64 = await page.evaluate(async (passphrase) => {
-      const r = await fetch('/api/backup/export-encrypted', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase }) });
-      if (!r.ok) return null;
-      const buf = new Uint8Array(await (await r.blob()).arrayBuffer());
-      let binary = '';
-      for (let i = 0; i < buf.length; i += 0x8000) binary += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-      return btoa(binary);
-    }, pass);
+    const dataBase64 = await exportEncrypted(pass);
     check('encrypted export succeeds', !!dataBase64);
     await wipe();
     const encImp = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64 });
     check('encrypted restore succeeds on the new install', encImp.status === 200, JSON.stringify(encImp.json).slice(0, 300));
     sameDb('encrypted restore: every table, counter and the schema version match the original', await dump(), beforeEnc);
+
+    // ---- Schema version guards (Step 2): data from a NEWER Plannr is refused, never half-read ----
+    const SCHEMA_VERSION = await page.evaluate(async () => (await import('/db.js')).SCHEMA_VERSION);
+    const beforeNewer = await dump();
+    await setVersion(SCHEMA_VERSION + 1);
+    const newerBackup = await exportEncrypted(pass);
+    await setVersion(SCHEMA_VERSION);
+    const refused = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64: newerBackup });
+    check('an encrypted backup from a newer Plannr is refused (400) before anything changes', refused.status === 400 && /newer version of Plannr/.test(refused.json.error || ''), JSON.stringify(refused.json).slice(0, 300));
+    sameDb('…and the data is unchanged', await dump(), beforeNewer);
+
+    // An older app opened over a newer database (e.g. an old APK installed over a newer one).
+    await setVersion(SCHEMA_VERSION + 1);
+    const newerDb = await dump();
+    await page.goto(`${BASE}/data-backup.html`, { waitUntil: 'networkidle' });
+    const bootError = await page.evaluate(() => import('/local-bootstrap.js').then(() => null, (e) => e.message));
+    check('start-up refuses a database from a newer Plannr', /newer version of the app/.test(bootError || ''), String(bootError));
+    const shown = await page.getByRole('alert').filter({ hasText: 'could not open your data' }).count();
+    check('…and says so on screen instead of a blank page', shown === 1, `${shown} alert(s)`);
+    sameDb('…and leaves the data untouched', await dump(), newerDb);
+    await setVersion(SCHEMA_VERSION);
+    await openFresh();
+    check('the same data opens again once the versions match', (await api('GET', '/api/ledgers')).status === 200);
+    // That refusal is meant to surface as an uncaught error on the page (the page's own import of
+    // local-bootstrap.js rejects); it is not a failure of this suite.
+    for (let i = errors.length - 1; i >= 0; i--) if (/newer version of the app/.test(errors[i])) errors.splice(i, 1);
 
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (e) {
