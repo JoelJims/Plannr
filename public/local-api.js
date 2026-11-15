@@ -32,6 +32,7 @@ import * as backupFormat from './backup-format.js';
 import * as requestRules from './request-rules.js';
 import * as peopleRoutes from './core/routes/people.js';
 import * as ledgerListRoutes from './core/routes/ledger-list.js';
+import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
@@ -87,7 +88,7 @@ export function installFetchShim(repo) {
     return { regex: new RegExp('^' + parts.join('/') + '$'), paramNames };
   }
   // Mimics app.get/post/put/delete(path, ...middleware, handler) — only the LAST function matters;
-  // requireApiAuth/editGate are no-ops here (there is no session to check in this single-user app),
+  // requireApiAuth is a no-op here (there is no session to check in this single-user app),
   // and the body is read in window.fetch below by request-rules.js, the same rules as server.js.
   function on(method) {
     return (routePath, ...fns) => routes.push({ method, ...compilePath(routePath), handler: fns[fns.length - 1] });
@@ -116,107 +117,18 @@ export function installFetchShim(repo) {
   // Cross-platform plan, step 1.3: the route groups already moved to core/routes/ (the one copy the
   // dev server runs too). coreContext is what they need from the phone's side.
   const coreContext = {
-    db, repo, getOwner, isStorageFullError, istDateStamp, storageFull,
+    db, repo, getOwner, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
     auth: requireApiAuth, // never called here: localApp runs only the last handler
+    logError: (...args) => console.error(...args),
     ledgers: () => LEDGERS, // read per request: refreshLedgers() replaces the list
     refreshLedgers,
   };
   peopleRoutes.register(localApp, coreContext);
   ledgerListRoutes.register(localApp, coreContext);
 
-  // ---------------------------------------------------------------------------
-  // Shared ledger CRUD factory — ported from server.js's makeLedgerCrud() verbatim (routes register
-  // against localApp instead of Express's app; everything else is unchanged, including the batch
-  // transaction and its storage-full handling).
-  // ---------------------------------------------------------------------------
-  const BATCH_MAX_ROWS = 500;
-  const LEDGER_CRUDS = {};
-  function makeLedgerCrud(opts) {
-    const { basePath, table, select, listWhere, byIdWhere, shape, columns, validate, listKey, itemKey, notFoundMsg, invalidIdMsg, auditField, finalize, afterWrite, alias } = opts;
-    const rc = repo.crud({ table, select, listWhere, byIdWhere, columns, alias: alias || '', searchCols: opts.searchCols || null });
-    LEDGER_CRUDS[table] = rc;
-    const orderedVals = (values) => columns.map((c) => values[c]);
-
-    localApp.get(basePath, (req, res) => {
-      if (opts.searchCols) {
-        const f = parseLedgerFilters(req);
-        if (f.error) return res.status(400).json({ error: f.error });
-        return res.json({ [listKey]: rc.search(f.filters).map(shape), total: rc.liveCount(), filtered: f.active });
-      }
-      res.json({ [listKey]: rc.list().map(shape) });
-    });
-
-    localApp.post(basePath, (req, res) => {
-      const v = validate(req);
-      if (v.error) return res.status(400).json({ error: v.error });
-      if (finalize) { const f = finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-      const info = rc.insert(orderedVals(v.values));
-      if (afterWrite) afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
-      res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(info.lastInsertRowid)) });
-    });
-
-    localApp.put(`${basePath}/:id`, (req, res) => {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || !rc.existsLive(id)) return res.status(404).json({ error: notFoundMsg });
-      const existing = (finalize || afterWrite || auditField) ? rc.fullRow(id) : null;
-      const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
-      const v = validate(req, oldVal);
-      if (v.error) return res.status(400).json({ error: v.error });
-      if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-      if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
-      rc.update(id, orderedVals(v.values));
-      if (afterWrite) afterWrite(v.values, { req, id });
-      res.json({ ok: true, [itemKey]: shape(rc.getById(id)) });
-    });
-
-    localApp.delete(`${basePath}/:id`, (req, res) => {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id)) return res.status(400).json({ error: invalidIdMsg });
-      const info = rc.softDelete(id);
-      if (info.changes === 0) return res.status(404).json({ error: notFoundMsg });
-      res.json({ ok: true });
-    });
-
-    if (opts.batch) {
-      localApp.post(`${basePath}/batch`, (req, res) => {
-        const rows = req.body && Array.isArray(req.body.rows) ? req.body.rows : null;
-        if (!rows) return res.status(400).json({ error: 'Expected a { rows: [...] } array.' });
-        if (rows.length > BATCH_MAX_ROWS) return res.status(413).json({ error: `Too many rows in one save (${rows.length}); the maximum is ${BATCH_MAX_ROWS}. Save in smaller batches.` });
-
-        const results = new Array(rows.length);
-        const toWrite = [];
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          const id = Number(row && row.id);
-          if (!Number.isInteger(id) || !rc.existsLive(id)) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
-          const existing = (finalize || auditField) ? rc.fullRow(id) : null;
-          const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
-          const v = validate({ body: row }, oldVal);
-          if (v.error) { results[i] = { id, ok: false, error: v.error }; continue; }
-          if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) { results[i] = { id, ok: false, error: f.error }; continue; } }
-          toWrite.push({ i, id, values: v.values, oldVal });
-        }
-
-        db.exec('BEGIN');
-        try {
-          for (const w of toWrite) rc.update(w.id, orderedVals(w.values));
-          db.exec('COMMIT');
-        } catch (e) {
-          rollbackQuietly(db);
-          console.error(`${table} batch write failed, rolled back:`, e);
-          if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('this save did not go through.') });
-          return res.status(500).json({ error: 'The save failed and was rolled back — no rows were changed.' });
-        }
-
-        for (const w of toWrite) {
-          if (auditField && w.oldVal !== w.values[auditField]) console.warn(`[audit] ${table} id=${w.id}: ${auditField} ${w.oldVal} -> ${w.values[auditField]} (attribution changed on edit)`);
-          if (afterWrite) afterWrite(w.values, { req, id: w.id });
-          results[w.i] = { id: w.id, ok: true, [itemKey]: shape(rc.getById(w.id)) };
-        }
-        res.json({ results, saved: toWrite.length, failed: rows.length - toWrite.length });
-      });
-    }
-  }
+  // The shared list/add/edit/delete/batch routes for the ledger tables: core/ledger-crud.js (step
+  // 1.3). Each table below registers through makeLedgerCrud.
+  const { makeLedgerCrud, LEDGER_CRUDS } = ledgerCrud.createLedgerCrud(localApp, coreContext);
 
   // ---------------------------------------------------------------------------
   // Everything below is ported verbatim from server.js — validation helpers, resolveLedger/

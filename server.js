@@ -140,7 +140,7 @@ const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
 // JSON body parsing, one size limit per kind of route. The limits, which route gets which, and the
 // "too large" / "Invalid request." answers live in request-rules.js, shared with the phone
 // (public/local-api.js applies the same rules). 32 KB for every normal route; 256 KB for Save All
-// batches (the batch route ALSO caps the row count, BATCH_MAX_ROWS); 20 MB for restoring a backup.
+// batches (the batch route ALSO caps the row count: BATCH_MAX_ROWS in core/ledger-crud.js); 20 MB for restoring a backup.
 // Errors are answered by the global error handler at the end of this file.
 const JSON_PARSERS = Object.fromEntries(Object.entries(requestRules.BODY_LIMITS)
   .map(([kind, limit]) => [kind, express.json({ limit })]));
@@ -165,8 +165,9 @@ const str = (v) => String(v ?? '').trim();
 // both this server and the phone (public/local-api.js) run. coreContext is what those routes need
 // from this side; the phone builds its own. Routes still written here come after.
 const coreContext = {
-  db, repo, getOwner, isStorageFullError, istDateStamp,
+  db, repo, getOwner, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
   auth: requireApiAuth,
+  logError: (...args) => { if (!IS_PROD) console.error(...args); },
   storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
   ledgers: () => LEDGERS, // read per request: refreshLedgers() replaces the list
   refreshLedgers,
@@ -188,122 +189,9 @@ function requireApiAuth(req, res, next) {
   next();
 }
 
-// Shared CRUD for the ledger list-tables (cash_in, loans; Cash Outflow will
-// reuse this). Registers, for one resource: GET (list, oldest→newest, stable
-// Sl.No) / POST (create) / PUT (edit) / DELETE (soft-delete). All logged-in only.
-// Every behaviour that differs between resources — SQL, columns, validation,
-// response keys, and error strings — is supplied via opts, so each route stays
-// EXACTLY as before (same paths, JSON shapes, status codes, and error text).
-const LEDGER_CRUDS = {}; // table -> its repo.crud runners (populated as each resource registers below)
-function makeLedgerCrud(opts) {
-  const { basePath, table, select, listWhere, byIdWhere, shape, columns, validate, listKey, itemKey, notFoundMsg, invalidIdMsg, editGate, auditField, finalize, afterWrite, alias } = opts;
-  // ALL SQL for this resource is built by repo.crud. Handlers never touch the raw table.
-  //  · finalize(values, { req, id, existing }) — after validate, before the write; may MUTATE values
-  //    and/or return { error, status } to reject (e.g. the one-service-one-offset 409 guard).
-  //  · afterWrite(values, { req, id }) — after a successful create/edit (e.g. save a custom name).
-  //  · auditField — when an EDIT changes this raw column (by_user_id), log old->new.
-  const rc = repo.crud({ table, select, listWhere, byIdWhere, columns, alias: alias || '', searchCols: opts.searchCols || null });
-  LEDGER_CRUDS[table] = rc; // exposed so other tenant-scoped surfaces (e.g. the PDF's cash_out rows) reuse it
-  const orderedVals = (values) => columns.map((c) => values[c]); // column values in declared order
-  const byIdChain = editGate ? [requireApiAuth, editGate] : [requireApiAuth];
-
-  app.get(basePath, requireApiAuth, (req, res) => {
-    // Part A — when a resource opts into search (cash_out), any of ?q/start/end/min/max/ledger/subledger
-    // filters the list IN SQL. Absent params → unchanged "all live rows" behaviour, so every other
-    // resource and the no-filter fetch are untouched. `total` is the unfiltered live count (for
-    // "N of M" + the add-form's next Sl.No, which must not shrink when a filter hides rows).
-    if (opts.searchCols) {
-      const f = parseLedgerFilters(req);
-      if (f.error) return res.status(400).json({ error: f.error });
-      return res.json({ [listKey]: rc.search(f.filters).map(shape), total: rc.liveCount(), filtered: f.active });
-    }
-    res.json({ [listKey]: rc.list().map(shape) });
-  });
-
-  app.post(basePath, requireApiAuth, (req, res) => {
-    const v = validate(req);
-    if (v.error) return res.status(400).json({ error: v.error });
-    if (finalize) { const f = finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-    const info = rc.insert(orderedVals(v.values));
-    if (afterWrite) afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
-    res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(info.lastInsertRowid)) });
-  });
-
-  app.put(`${basePath}/:id`, ...byIdChain, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !rc.existsLive(id)) return res.status(404).json({ error: notFoundMsg });
-    // Fetch the existing row for the audit old-value + finalize's `existing`.
-    const existing = (finalize || afterWrite || auditField) ? rc.fullRow(id) : null;
-    const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
-    const v = validate(req, oldVal);
-    if (v.error) return res.status(400).json({ error: v.error });
-    if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-    if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
-    rc.update(id, orderedVals(v.values));
-    if (afterWrite) afterWrite(v.values, { req, id });
-    res.json({ ok: true, [itemKey]: shape(rc.getById(id)) });
-  });
-
-  app.delete(`${basePath}/:id`, ...byIdChain, (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) return res.status(400).json({ error: invalidIdMsg });
-    const info = rc.softDelete(id);
-    if (info.changes === 0) return res.status(404).json({ error: notFoundMsg });
-    res.json({ ok: true });
-  });
-
-  // Phase 6B — batch edit (Save All in ONE round trip). Only registered for resources that opt in
-  // (cash_out). Validates EVERY row FIRST, then writes only the valid rows in a SINGLE transaction,
-  // and returns a per-row result array — so per-row hold-back survives exactly ("saved 19, held
-  // back 1"): invalid/not-found rows are left untouched and individually reported. Phase 2.1
-  // preserved: the attribution audit line logs per changed by_user_id, and a stored-NULL
-  // by_user_id round-trips via validate(oldVal).
-  if (opts.batch) {
-    app.post(`${basePath}/batch`, ...byIdChain, (req, res) => {
-      const rows = req.body && Array.isArray(req.body.rows) ? req.body.rows : null;
-      if (!rows) return res.status(400).json({ error: 'Expected a { rows: [...] } array.' });
-      if (rows.length > BATCH_MAX_ROWS) return res.status(413).json({ error: `Too many rows in one save (${rows.length}); the maximum is ${BATCH_MAX_ROWS}. Save in smaller batches.` });
-
-      // 1) VALIDATE every row before any write. Not-found / invalid rows are recorded, not written.
-      const results = new Array(rows.length);
-      const toWrite = []; // { i, id, values, oldVal } for the rows that passed
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const id = Number(row && row.id);
-        if (!Number.isInteger(id) || !rc.existsLive(id)) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
-        const existing = (finalize || auditField) ? rc.fullRow(id) : null;
-        const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
-        const v = validate({ body: row }, oldVal);
-        if (v.error) { results[i] = { id, ok: false, error: v.error }; continue; }
-        if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) { results[i] = { id, ok: false, error: f.error }; continue; } }
-        toWrite.push({ i, id, values: v.values, oldVal });
-      }
-
-      // 2) WRITE only the valid rows, in one transaction.
-      db.exec('BEGIN');
-      try {
-        for (const w of toWrite) rc.update(w.id, orderedVals(w.values));
-        db.exec('COMMIT');
-      } catch (e) {
-        rollbackQuietly(db);
-        if (!IS_PROD) console.error(`${table} batch write failed, rolled back:`, e);
-        if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
-        return res.status(500).json({ error: 'The save failed and was rolled back — no rows were changed.' });
-      }
-
-      // 3) Audit each attribution change + shape the saved rows.
-      for (const w of toWrite) {
-        if (auditField && w.oldVal !== w.values[auditField]) console.warn(`[audit] ${table} id=${w.id}: ${auditField} ${w.oldVal} -> ${w.values[auditField]} (attribution changed on edit)`);
-        if (afterWrite) afterWrite(w.values, { req, id: w.id });
-        results[w.i] = { id: w.id, ok: true, [itemKey]: shape(rc.getById(w.id)) };
-      }
-      res.json({ results, saved: toWrite.length, failed: rows.length - toWrite.length });
-    });
-  }
-}
-// Phase 6B — explicit per-request cap for the batch endpoint (clear error instead of the opaque
-// 256kb body-parser failure). ~700 rows fit in 256kb; 500 is a comfortable ceiling for one ledger.
-const BATCH_MAX_ROWS = 500;
+// The shared list/add/edit/delete/batch routes for the ledger tables live in core/ledger-crud.js
+// (step 1.3). Each table below registers through makeLedgerCrud.
+const { makeLedgerCrud, LEDGER_CRUDS } = require('./core/ledger-crud.js').createLedgerCrud(app, coreContext);
 
 const CASH_IN_BY_TYPES = new Set(['user', 'relative', 'custom']);
 const REASON_MAX = 300;
