@@ -4,7 +4,8 @@ Status: **approved by the owner on 2026-11-15**, with the decisions recorded in 
 step at a time, starting with step 1.1 (§8); each step's report comes back to the owner before
 the next. Written 2026-11-15 on branch `plannr-phase2`.
 
-Progress: steps 1.1 and 1.2 done on 2026-11-15 (see the notes under the §8 table).
+Progress: steps 1.1 and 1.2 done on 2026-11-15; step 1.3 under way (see the notes under the §8
+table).
 
 Plannr stays single-user and offline-first everywhere. Each person on Android, Windows, macOS or
 Linux has their own separate data. There is no sync and no server. Data moves between devices only
@@ -535,6 +536,21 @@ Phase 2 scripts.
 
   `test/phone-code-differences.json` therefore does not shrink to zero. It keeps the 17
   differences that are by design: 16 tests of dev-server-only features, plus `/api/storage`.
+
+- **1.3 (under way):** one commit per group, full suite after each. `core/` is the one copy;
+  `sync-public-modules.js` copies it to `public/core/` for the phone, and
+  `test/core-routes.test.js` checks that each moved group stays moved (both copies register it,
+  neither still defines its routes or functions, the phone's copy is the same file). Moved so far:
+  - 1.3a `core/routes/people.js` (`/api/me`, `/api/users`) and `core/routes/ledger-list.js` (the
+    category list, its CSV, the saved custom names);
+  - 1.3b `core/ledger-crud.js` (the shared list/add/edit/delete/batch routes);
+  - 1.3c `core/parsers.js` (the pure input checks);
+  - 1.3d `core/ledger-index.js` (the in-memory category list);
+  - 1.3e `core/routes/cash-and-loans.js` (cash in, loans, cash out).
+
+  Still to move: contracts and contractor payments, the Recycle Bin, the budget, reminder times,
+  and the overview and its PDF. The backup and restore routes wait for 1.4, because they decide how
+  data is stored and restored.
 
 **Rough effort:**
 
