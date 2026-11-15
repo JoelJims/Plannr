@@ -78,6 +78,16 @@ a network — backed by `public/db-engine.js`, a database that runs inside the a
 holds the native project Capacitor generates. The detail behind all of this is in
 [HANDOFF.md](HANDOFF.md).
 
+More documents:
+
+| Document | For |
+|---|---|
+| [SETUP.md](SETUP.md) | Setting up a new computer, building the Android app |
+| [HANDOFF.md](HANDOFF.md) | How everything works, in detail |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Changing the database safely (migrations, backups, tests) |
+| [docs/RELEASE.md](docs/RELEASE.md) | Releasing an update to the phone without losing data |
+| [CHANGELOG.md](CHANGELOG.md) | What changed |
+
 ## Privacy and backups
 
 Plannr makes no network requests. Android's own Auto Backup may copy the app's data to your Google account; you can turn this off in Android settings.

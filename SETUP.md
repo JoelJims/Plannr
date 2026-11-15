@@ -80,7 +80,7 @@ they have to be copied across by hand into the **project root**, next to `packag
 > So check, rather than assume, after your first release build:
 >
 > ```sh
-> keytool -printcert -jarfile android/app/build/outputs/apk/release/app-release.apk
+> keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk
 > ```
 >
 > That must print a certificate. An error, or empty output, means `keystore.properties`
@@ -173,13 +173,15 @@ Studio will:
 From `android/`, or via Studio's Run button for debug builds:
 
 ```sh
-./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/app-release.apk  (signed)
-adb install -r android/app/build/outputs/apk/release/app-release.apk
+./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/Plannr-debug.apk
+./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/Plannr.apk  (signed)
+adb install -r android/app/build/outputs/apk/release/Plannr.apk
 ```
 
-App id `com.plannr.app`, `versionCode 1`, `versionName "1.0"` — raise these in
-`android/app/build.gradle` for a real release.
+App id `com.plannr.app`. For a real release use `npm run release:android`: it runs every test,
+raises `versionCode`/`versionName` in `android/app/build.gradle`, syncs and builds the signed APK.
+The whole procedure — back up the phone, build, install over the old app, check the data — is
+in [`docs/RELEASE.md`](docs/RELEASE.md).
 
 ---
 

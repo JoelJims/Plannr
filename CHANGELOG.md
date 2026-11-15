@@ -19,6 +19,14 @@ development and test tool.
   encrypted restore now takes one first.
 - **Android Auto Backup** is limited to the ledger and the safety snapshots, well under 25 MB.
 
+### Safe updates
+- `test/release-guards.test.js` fails if the app id (`com.plannr.app`) or the page origin
+  (`https://localhost`: `server.androidScheme`, `server.hostname`) would change — either one
+  would open an empty database after an update — or if the release key could be committed.
+- `npm run release:android` runs every test, raises `versionCode`/`versionName`, runs
+  `android:sync` and builds the signed release APK (`--dry-run` to preview).
+- `docs/RELEASE.md`: back up the phone, build, install over the old app, check the data.
+
 ### Desktop server is dev-only
 - `server.js` prints `DEV MODE – not used by the phone app` on start, and marks its responses with
   `X-Plannr-Dev-Server`. Pages decide where `/api` goes with `public/runtime-mode.js`: inside the
