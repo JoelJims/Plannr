@@ -40,6 +40,7 @@ PLANNR-AUDIT-LIVE.md
 /public/ledgers.js
 /public/backup-format.js
 /public/request-rules.js
+/public/core/
 /public/allowances.js
 /public/node_modules/
 

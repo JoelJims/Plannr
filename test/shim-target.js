@@ -27,7 +27,9 @@ const { pathToFileURL, fileURLToPath } = require('node:url');
 
 const ROOT = path.join(__dirname, '..');
 const PUB = path.join(ROOT, 'public');
-const SHARED = ['db.js', 'repo.js', 'ledgers.js', 'backup-format.js', 'request-rules.js'];
+// core/ (step 1.3) is shared too: public/core/<rel> loads as core/<rel>, like the files above.
+const { CORE_FILES } = require('../sync-public-modules');
+const SHARED = ['db.js', 'repo.js', 'ledgers.js', 'backup-format.js', 'request-rules.js', ...CORE_FILES];
 const LOCAL_API = path.join(PUB, 'local-api.js');
 const CAPACITOR_IMPORTS = ['@capacitor/core', '@capgo/capacitor-pdf-generator'];
 const FAKE_CAPACITOR = pathToFileURL(path.join(__dirname, 'shim-capacitor-fake.mjs')).href;
@@ -51,9 +53,8 @@ function useRootCopiesOfSharedModules() {
       if (r.url && r.url.startsWith('file:')) {
         const p = fileURLToPath(r.url);
         if (p.toLowerCase() === LOCAL_SNAPSHOT.toLowerCase()) return { ...r, url: FAKE_SNAPSHOT };
-        if (path.dirname(p) === PUB && SHARED.includes(path.basename(p))) {
-          return { ...r, url: pathToFileURL(path.join(ROOT, path.basename(p))).href };
-        }
+        const rel = path.relative(PUB, p).split(path.sep).join('/');
+        if (SHARED.includes(rel)) return { ...r, url: pathToFileURL(path.join(ROOT, rel)).href };
       }
       return r;
     },

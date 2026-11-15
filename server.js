@@ -132,10 +132,8 @@ const BUDGET_STMT = db.prepare("SELECT value FROM settings WHERE key = 'budget_p
 //  contracts, paidByContract, outsAll/outsRange, paymentsAll/paymentsRange, loansSum. The
 //  cumulative aggregates are never range-filtered (owed is a running balance); the range forms
 //  use the open sentinels + partial indexes.
-// Phase 2: the user roster for the "By" attribution pickers (id + display name ONLY — never
-// username/hash), and an existence check for validating a chosen by_user_id. Single-user app: the
-// roster is just the one owner account.
-const USERS_ROSTER_STMT = db.prepare('SELECT id, display_name AS displayName FROM users ORDER BY id ASC');
+// Phase 2: an existence check for validating a chosen by_user_id. (The roster itself is read in
+// core/routes/people.js.)
 const USER_EXISTS_STMT = db.prepare('SELECT 1 FROM users WHERE id = ?');
 const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
 
@@ -163,68 +161,18 @@ const str = (v) => String(v ?? '').trim();
 // API routes
 // ---------------------------------------------------------------------------
 
-// Keep: /api/me — 8 pages call it, 3 use the response to populate "By" dropdowns. Returns the
-// fixed local owner with no auth check.
-app.get('/api/me', (req, res) => {
-  res.json({ user: getOwner() });
-});
-
-// User roster for the "By" attribution pickers. Auth-gated (requireApiAuth): a public
-// roster would be a user-enumeration vector on the login page. Returns ONLY id +
-// displayName, ordered by id — never username, password_hash, or created_at.
-app.get('/api/users', requireApiAuth, (req, res) => {
-  res.json({ users: USERS_ROSTER_STMT.all() });
-});
-
-// Phase 10b — the fixed ledger taxonomy itself (ledger_mains/ledger_subs), user-editable via CSV on
-// the Data Backup page. GET returns the current list for dropdowns; the CSV pair is export/import.
-app.get('/api/ledgers', requireApiAuth, (req, res) => {
-  res.json({ ledgers: LEDGERS });
-});
-app.get('/api/ledgers/csv', requireApiAuth, (req, res) => {
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="plannr-ledger-list-${istDateStamp()}.csv"`);
-  res.send(repo.ledgers.toCsv(LEDGERS));
-});
-// Validate fully -> replace in ONE transaction -> refresh the in-memory cache. The mandatory
-// pre-import encrypted backup (non-negotiable per spec) is sequenced by the CLIENT, which must call
-// POST /api/backup/export-encrypted and have it succeed before it ever calls this route — appropriate
-// for a single-user app where the only person who could skip that step is the same person the
-// safety net protects, but noted here because it is a real design choice, not enforced server-side.
-app.post('/api/ledgers/csv', requireApiAuth, (req, res) => {
-  const csvText = typeof req.body.csv === 'string' ? req.body.csv : '';
-  if (!csvText.trim()) return res.status(400).json({ error: 'No CSV content received.' });
-  const v = repo.ledgers.validateImport(csvText);
-  if (!v.ok) return res.status(400).json({ error: v.error, rowErrors: v.rowErrors });
-  try {
-    repo.ledgers.replaceAll(v.mains, v.subs);
-  } catch (e) {
-    if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the ledger list was not saved. Free up space, then try again.' });
-    return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
-  }
-  refreshLedgers();
-  res.json({ ok: true, ledgers: LEDGERS });
-});
-
-// Services phase (Part E) — the caller's saved custom LEDGER names, for the debit form's pick-list.
-// FILTERED by the caller (a genuinely PER-USER list, unlike the shared household ledger tables), so
-// one user's private category names are never visible to another. Names are auto-saved on first use
-// (see saveLedgerCustom / afterWrite on cash_out). The 24 built-ins live in ledger_mains/ledger_subs
-// (Phase 10b), not here — this table is only ever free-text CUSTOM names.
-app.get('/api/ledger-customs', requireApiAuth, (req, res) => {
-  res.json({ customs: repo.ledgerCustoms.list() });
-});
-// Part 4 (Phase 11B): remove a saved custom LEDGER name from the caller's pick-list — the delete path
-// that was missing (a typo like "Cemnt" used to be stuck in the dropdown forever, and the Recycle Bin
-// doesn't cover ledger_customs). Name passed as ?name= (query, so any characters survive encoding).
-// Idempotent (removing an absent name is a no-op 200) and tenant-scoped in repo. Denormalised: past
-// debits keep their stored ledger_custom_name, so this prunes the autocomplete only, never rewrites history.
-app.delete('/api/ledger-customs', requireApiAuth, (req, res) => {
-  const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
-  if (!name) return res.status(400).json({ error: 'Which name? Pass it as ?name=…' });
-  repo.ledgerCustoms.remove(name);
-  res.json({ ok: true, customs: repo.ledgerCustoms.list() });
-});
+// Cross-platform plan, step 1.3: route groups move one at a time into core/routes/, the one copy
+// both this server and the phone (public/local-api.js) run. coreContext is what those routes need
+// from this side; the phone builds its own. Routes still written here come after.
+const coreContext = {
+  db, repo, getOwner, isStorageFullError, istDateStamp,
+  auth: requireApiAuth,
+  storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
+  ledgers: () => LEDGERS, // read per request: refreshLedgers() replaces the list
+  refreshLedgers,
+};
+require('./core/routes/people.js').register(app, coreContext);
+require('./core/routes/ledger-list.js').register(app, coreContext);
 
 // ---------------------------------------------------------------------------
 // Cash Inflow API (cash_in) + the shared "people" source. Logged-in only.

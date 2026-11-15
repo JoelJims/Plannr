@@ -30,7 +30,12 @@ const PUBLIC = path.join(ROOT, 'public');
 // (on both sides, same reasoning as db.js/repo.js themselves), not a page's runtime source.
 // Phase 2: backup-format.js — the JSON backup format, shared by server.js and local-api.js.
 // Cross-platform plan, step 1.2: request-rules.js — body limits, malformed JSON and unknown routes.
-const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js', 'backup-format.js', 'request-rules.js'];
+// Cross-platform plan, step 1.3: core/ holds the one copy of the route code both backends run. Every
+// .js file under it is copied to public/core/ at the same relative path, found here rather than listed.
+const CORE_FILES = fs.existsSync(path.join(ROOT, 'core'))
+  ? fs.readdirSync(path.join(ROOT, 'core'), { recursive: true }).filter((f) => f.endsWith('.js')).map((f) => 'core/' + f.split(path.sep).join('/')).sort()
+  : [];
+const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js', 'backup-format.js', 'request-rules.js', ...CORE_FILES];
 // Every package an import map points at by absolute /node_modules/... path — those paths only
 // resolve if the whole package directory is here too (see the header comment).
 const VENDOR_PACKAGES = [
@@ -45,10 +50,12 @@ const VENDOR_PACKAGES = [
 
 // local-server.js reads these two lists to decide which project-root files it may serve. Requiring
 // this file only hands over the lists; the copying below runs only via `node sync-public-modules.js`.
-module.exports = { FILES, VENDOR_PACKAGES };
+module.exports = { FILES, CORE_FILES, VENDOR_PACKAGES };
 if (require.main !== module) return; // top-level return is valid in a CommonJS module
 
+fs.rmSync(path.join(PUBLIC, 'core'), { recursive: true, force: true }); // no stale copy of a file since removed from core/
 for (const f of FILES) {
+  fs.mkdirSync(path.dirname(path.join(PUBLIC, f)), { recursive: true });
   fs.copyFileSync(path.join(ROOT, f), path.join(PUBLIC, f));
   console.log(`[sync-public-modules] copied ${f}`);
 }

@@ -30,6 +30,8 @@ import { db, isStorageFullError, rollbackQuietly } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as backupFormat from './backup-format.js';
 import * as requestRules from './request-rules.js';
+import * as peopleRoutes from './core/routes/people.js';
+import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
@@ -105,45 +107,22 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   const OWNER_STMT = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
   const getOwner = () => OWNER_STMT.get();
-  const USERS_ROSTER_STMT = db.prepare('SELECT id, display_name AS displayName FROM users ORDER BY id ASC');
   const USER_EXISTS_STMT = db.prepare('SELECT 1 FROM users WHERE id = ?');
   const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
   function requireApiAuth(req, res, next) { req.user = getOwner(); next(); }
 
   const str = (v) => String(v ?? '').trim();
 
-  localApp.get('/api/me', (req, res) => { res.json({ user: getOwner() }); });
-  localApp.get('/api/users', (req, res) => { res.json({ users: USERS_ROSTER_STMT.all() }); });
-  // Phase 10b — the fixed ledger taxonomy itself (ledger_mains/ledger_subs), user-editable via CSV on
-  // the Data Backup page. Ported verbatim from server.js's identical routes.
-  localApp.get('/api/ledgers', (req, res) => { res.json({ ledgers: LEDGERS }); });
-  localApp.get('/api/ledgers/csv', (req, res) => {
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="plannr-ledger-list.csv"');
-    res.send(repo.ledgers.toCsv(LEDGERS));
-  });
-  localApp.post('/api/ledgers/csv', (req, res) => {
-    const csvText = typeof req.body.csv === 'string' ? req.body.csv : '';
-    if (!csvText.trim()) return res.status(400).json({ error: 'No CSV content received.' });
-    const v = repo.ledgers.validateImport(csvText);
-    if (!v.ok) return res.status(400).json({ error: v.error, rowErrors: v.rowErrors });
-    try {
-      repo.ledgers.replaceAll(v.mains, v.subs);
-    } catch (e) {
-      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the ledger list was not saved.') });
-      return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
-    }
-    refreshLedgers();
-    res.json({ ok: true, ledgers: LEDGERS });
-  });
-
-  localApp.get('/api/ledger-customs', (req, res) => { res.json({ customs: repo.ledgerCustoms.list() }); });
-  localApp.delete('/api/ledger-customs', (req, res) => {
-    const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
-    if (!name) return res.status(400).json({ error: 'Which name? Pass it as ?name=…' });
-    repo.ledgerCustoms.remove(name);
-    res.json({ ok: true, customs: repo.ledgerCustoms.list() });
-  });
+  // Cross-platform plan, step 1.3: the route groups already moved to core/routes/ (the one copy the
+  // dev server runs too). coreContext is what they need from the phone's side.
+  const coreContext = {
+    db, repo, getOwner, isStorageFullError, istDateStamp, storageFull,
+    auth: requireApiAuth, // never called here: localApp runs only the last handler
+    ledgers: () => LEDGERS, // read per request: refreshLedgers() replaces the list
+    refreshLedgers,
+  };
+  peopleRoutes.register(localApp, coreContext);
+  ledgerListRoutes.register(localApp, coreContext);
 
   // ---------------------------------------------------------------------------
   // Shared ledger CRUD factory — ported from server.js's makeLedgerCrud() verbatim (routes register
