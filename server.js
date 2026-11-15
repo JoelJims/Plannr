@@ -118,6 +118,7 @@ const repo = require('./repo');
 const requestRules = require('./request-rules');
 // Pure input checks and formatting, shared with the phone (cross-platform plan, step 1.3).
 const { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
+const { createLedgerIndex } = require('./core/ledger-index.js');
 
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
@@ -158,13 +159,14 @@ function currentUser(req) { return getOwner(); }
 // Cross-platform plan, step 1.3: route groups move one at a time into core/routes/, the one copy
 // both this server and the phone (public/local-api.js) run. coreContext is what those routes need
 // from this side; the phone builds its own. Routes still written here come after.
+// The ledger list (categories), kept in memory and refreshed after an import or a restore.
+const ledgerIndex = createLedgerIndex(repo);
 const coreContext = {
   db, repo, getOwner, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
   auth: requireApiAuth,
   logError: (...args) => { if (!IS_PROD) console.error(...args); },
   storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
-  ledgers: () => LEDGERS, // read per request: refreshLedgers() replaces the list
-  refreshLedgers,
+  ledgerIndex,
 };
 require('./core/routes/people.js').register(app, coreContext);
 require('./core/routes/ledger-list.js').register(app, coreContext);
@@ -342,18 +344,8 @@ const CONTRACT_SCOPES = new Set(['included', 'extra']);
 const CUSTOM_CODE = 'CUSTOM';
 const CUSTOM_NAME_MAX = 80;
 
-// Phase 10b — the ledger taxonomy is DATA now (ledger_mains/ledger_subs, seeded from ledgers.js on
-// first run — see db.js), not a static import: it can change at runtime via the Ledger List CSV
-// import, so LEDGERS/LEDGER_BY_CODE are rebuilt on demand rather than frozen once at require time.
-// refreshLedgers() is called once below and again after every successful CSV import.
-let LEDGERS, LEDGER_BY_CODE;
-function refreshLedgers() {
-  LEDGERS = repo.ledgers.list();
-  LEDGER_BY_CODE = new Map(LEDGERS.map((l) => [l.code, l]));
-}
-refreshLedgers();
 const subBelongs = (ledgerCode, subCode) => {
-  const l = LEDGER_BY_CODE.get(ledgerCode);
+  const l = ledgerIndex.byCode().get(ledgerCode);
   return !!l && l.subLedgers.some((s) => s.code === subCode);
 };
 // Human-readable "code name" for a row — resolves all four cases (fixed/custom
@@ -361,12 +353,12 @@ const subBelongs = (ledgerCode, subCode) => {
 function ledgerLabel(ledgerCode, subCode, ledgerCustom, subCustom) {
   if (subCode === CUSTOM_CODE) return subCustom || '';        // custom sub -> typed name
   if (subCode) {                                              // fixed sub -> "code name"
-    const l = LEDGER_BY_CODE.get(ledgerCode);
+    const l = ledgerIndex.byCode().get(ledgerCode);
     const s = l && l.subLedgers.find((x) => x.code === subCode);
     if (s) return `${s.code} ${s.name}`;
   }
   if (ledgerCode === CUSTOM_CODE) return ledgerCustom || '';  // custom ledger, no sub -> typed name
-  const l = LEDGER_BY_CODE.get(ledgerCode);                   // fixed ledger, no sub -> "code name"
+  const l = ledgerIndex.byCode().get(ledgerCode);                   // fixed ledger, no sub -> "code name"
   return l ? `${l.code} ${l.name}` : (ledgerCode || '');
 }
 
@@ -382,7 +374,7 @@ function resolveLedger(body) {
     ledgerCustomName = str(body.ledgerCustomName);
     if (!ledgerCustomName) return { error: 'Enter a name for the custom ledger.' };
     ledgerCustomName = ledgerCustomName.slice(0, CUSTOM_NAME_MAX);
-  } else if (!LEDGER_BY_CODE.has(ledgerCode)) {
+  } else if (!ledgerIndex.byCode().has(ledgerCode)) {
     return { error: 'Select a valid ledger.' };
   }
 
@@ -1381,7 +1373,7 @@ function computeOverview(range) {
     const key = isCustom ? CUSTOM_CODE : ledgerCode;
     let L = ledMap.get(key);
     if (!L) {
-      const meta = isCustom ? null : LEDGER_BY_CODE.get(ledgerCode);
+      const meta = isCustom ? null : ledgerIndex.byCode().get(ledgerCode);
       L = { code: key, name: isCustom ? CUSTOM_GROUP_NAME : (meta ? `${meta.code} ${meta.name}` : ledgerCode), isCustom, ...zero(), subs: new Map(), noSub: zero() };
       ledMap.set(key, L);
     }
@@ -1390,7 +1382,7 @@ function computeOverview(range) {
       let subKey, subName;
       if (subCode === CUSTOM_CODE) { subName = subCustom || 'Custom sub-ledger'; subKey = 'CUSTOM:' + subName; }
       else {
-        const meta = isCustom ? null : LEDGER_BY_CODE.get(ledgerCode);
+        const meta = isCustom ? null : ledgerIndex.byCode().get(ledgerCode);
         const s = meta && meta.subLedgers.find((x) => x.code === subCode);
         subName = s ? `${s.code} ${s.name}` : subCode; subKey = subCode;
       }
@@ -1622,7 +1614,7 @@ function pdfLedgerColor(idx) {
 }
 function pdfSlices(o) {
   return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => {
-    const idx = Math.max(0, LEDGERS.findIndex((x) => x.code === L.code));
+    const idx = Math.max(0, ledgerIndex.list().findIndex((x) => x.code === L.code));
     const color = L.code === CUSTOM_CODE ? PDF_CUSTOM_COLOR : pdfLedgerColor(idx);
     return { label: L.name, value: L.totalPaise, color };
   });
@@ -1844,8 +1836,8 @@ const backupFormat = require('./backup-format');
 const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(db);
 assertImportOwnershipComplete();
 const buildBackup = (opts) => backupFormat.buildBackup(db, opts);
-// Read LEDGER_BY_CODE at call time: refreshLedgers() replaces it after a category import or restore.
-const validateBackup = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: LEDGER_BY_CODE, customCode: CUSTOM_CODE, parseIsoDate });
+// Read ledgerIndex.byCode() at call time: ledgerIndex.refresh() replaces it after a category import or restore.
+const validateBackup = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate });
 
 // EXPORT: one JSON object (schema version + timestamp + every ledger table as
 // arrays of full rows, incl. soft-deleted + the budget/settings). The frontend
@@ -2009,7 +2001,7 @@ app.post('/api/backup/import', requireApiAuth, (req, res) => {
     if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the import did not go through. Free up space, then try again.', snapshot });
     return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
   }
-  refreshLedgers(); // a v2 backup may have brought its own categories
+  ledgerIndex.refresh(); // a v2 backup may have brought its own categories
 
   res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
 });

@@ -3,19 +3,19 @@
 // core/routes/people.js for what `app` and `ctx` are.
 
 export function register(app, ctx) {
-  const { repo, auth, isStorageFullError, storageFull, istDateStamp, ledgers, refreshLedgers } = ctx;
+  const { repo, auth, isStorageFullError, storageFull, istDateStamp, ledgerIndex } = ctx;
 
   // Phase 10b — the ledger taxonomy itself (ledger_mains/ledger_subs), user-editable via CSV on the
   // Data Backup page. GET returns the current list for dropdowns; the CSV pair is export/import.
-  // ledgers() is read per request: refreshLedgers() replaces the list after an import or a restore.
+  // ledgerIndex.list() is read per request: refresh() replaces it after an import or a restore.
   app.get('/api/ledgers', auth, (req, res) => {
-    res.json({ ledgers: ledgers() });
+    res.json({ ledgers: ledgerIndex.list() });
   });
   // The phone ignores these headers (its pages name the file themselves); the dev server sends them.
   app.get('/api/ledgers/csv', auth, (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="plannr-ledger-list-${istDateStamp()}.csv"`);
-    res.send(repo.ledgers.toCsv(ledgers()));
+    res.send(repo.ledgers.toCsv(ledgerIndex.list()));
   });
   // Validate fully -> replace in ONE transaction -> refresh the in-memory list. The pre-import
   // encrypted backup is sequenced by the page, which must call POST /api/backup/export-encrypted and
@@ -32,8 +32,8 @@ export function register(app, ctx) {
       if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the ledger list was not saved.') });
       return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
     }
-    refreshLedgers();
-    res.json({ ok: true, ledgers: ledgers() });
+    ledgerIndex.refresh();
+    res.json({ ok: true, ledgers: ledgerIndex.list() });
   });
 
   // The saved custom LEDGER names, for the debit form's pick-list. Names are saved on first use
