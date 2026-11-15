@@ -22,16 +22,39 @@ function toScheduleOn(hhmm) {
   return { hour, minute }; // hour+minute with no day/month = repeats daily (Capacitor's cron-like `on`)
 }
 
+// Exact alarms only when Android already allows them. Every schedule() call sets isExactNotification
+// explicitly because its default (true) makes @capacitor/local-notifications 8.3+ open Android's
+// "Alarms & reminders" settings screen whenever exact alarms are not allowed, which is the default
+// on Android 14+. Found on the emulator (Phase 2, Step 9): the screen opened on every app start.
+// Plannr opens it only when the user taps "Allow on-time reminders" on Home (openExactAlarmSetting
+// below). Without the permission a reminder is an inexact alarm: Android may deliver it late (on the
+// emulator a reminder due in 2 minutes had not arrived 2 minutes after its time).
+async function exactAlarmsAllowed() {
+  try { return (await LocalNotifications.checkExactNotificationSetting()).exact_alarm === 'granted'; }
+  catch { return false; }
+}
+
+// Only ever called from a button the user taps (Home → "Allow on-time reminders"); the caller then
+// reschedules with onTimesChanged() so the reminders pick up the new permission.
+export async function openExactAlarmSetting() {
+  if (!Capacitor.isNativePlatform()) return false;
+  try { await LocalNotifications.changeExactNotificationSetting(); } catch { /* the screen may not exist on this phone */ }
+  return exactAlarmsAllowed();
+}
+
 async function scheduleAll(times) {
+  const exact = await exactAlarmsAllowed();
   await LocalNotifications.schedule({
     notifications: times.map((t, i) => ({
       id: SLOT_IDS[i],
       title: 'Plannr',
       body: "Time for today's report.",
       schedule: { on: toScheduleOn(t), allowWhileIdle: true },
+      isExactNotification: exact,
       extra: { openTarget: 'overview' },
     })),
   });
+  return exact;
 }
 
 // Tapping a notification opens whatever page it's about — Overview for the daily-report reminders,
@@ -68,8 +91,8 @@ export async function onTimesChanged(times) {
   let perm = await LocalNotifications.checkPermissions();
   if (perm.display !== 'granted') perm = await LocalNotifications.requestPermissions();
   if (perm.display !== 'granted') return { scheduled: false, reason: 'permission-denied' };
-  await scheduleAll(times);
-  return { scheduled: true };
+  const exact = await scheduleAll(times);
+  return { scheduled: true, exact }; // exact: false -> Home offers "Allow on-time reminders"
 }
 
 // Phase 15 — called on app start with the current overdue state (home.html computes it from
@@ -87,6 +110,7 @@ export async function checkBackupReminder(daysSince) {
     ? 'You have never backed up. Export one to keep your ledger safe.'
     : `Your last backup was ${daysSince} day${daysSince === 1 ? '' : 's'} ago. Export one to keep your ledger safe.`;
   await LocalNotifications.schedule({
-    notifications: [{ id: BACKUP_REMINDER_ID, title: 'Plannr', body: 'Plannr — ' + body, extra: { openTarget: 'data-backup' } }],
+    // Shown now (no schedule), so no alarm is involved; false stops the plugin's settings-screen prompt.
+    notifications: [{ id: BACKUP_REMINDER_ID, title: 'Plannr', body: 'Plannr — ' + body, isExactNotification: false, extra: { openTarget: 'data-backup' } }],
   });
 }

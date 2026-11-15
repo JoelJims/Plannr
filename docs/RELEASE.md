@@ -77,9 +77,10 @@ If the install fails, **do not uninstall to get past it**:
 4. Add a test entry, close the app fully, open it again: the entry is still there. Delete it.
 
 If Plannr shows **"Plannr could not open your data"**: do not uninstall and do not clear the
-app's storage. The update's database upgrade runs inside a transaction and is rolled back on
-failure, so the data is still as it was, and a pre-upgrade safety snapshot is in the app's
-private `safety-snapshots/` folder. Write down the message and fix the problem in a newer
+app's storage. Each step of the update's database upgrade runs in its own transaction, so a
+failed step is rolled back and the data is left as the last finished step wrote it (for an upgrade
+from schema v2 onwards, at that step's version). A pre-upgrade safety snapshot of the data as it
+was before the update is in the app's private `safety-snapshots/` folder. Write down the message and fix the problem in a newer
 version (higher `versionCode`). As a last resort, restore the backup from step 1.
 
 ## If the data is gone

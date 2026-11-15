@@ -15,10 +15,19 @@ fixed size per origin:
 | Fresh install | about 0.3 MB database |
 | What happens at the limit | the write fails, SQLite rolls it back, the app says "Storage is full" (Step 3) |
 
-Not yet measured on a real phone. The Data Backup page warns at 70% and 90%. Nothing is lost at the
-limit, but nothing more can be saved either. How soon that happens depends on how many entries the
-user adds per year, which is not known yet (check the meter after the desktop data moves to the
-phone).
+On the Android emulator (Android 16, WebView 133; Phase 2 Step 9) the limit measured 5,242,866
+characters, the same. Not yet measured on the user's phone. The Data Backup page warns at 70% and
+90%. Nothing is lost at the limit, but nothing more can be saved either. How soon that happens
+depends on how many entries the user adds per year, which is not known yet (check the meter after
+the desktop data moves to the phone).
+
+A second, smaller weakness, also measured on the emulator: the WebView writes `localStorage` to
+disk about one second after a change. An entry saved and then killed by Android **within about a
+second** was lost (force-stop after 0.2 s and 0.5 s: lost; after 1, 3, 6 and 12 s: kept; going to
+Home or Back and being killed 1 s later: kept). The database stayed consistent every time: the
+lost save was simply not there, never half-written. In normal use a save is followed by more than a
+second of the app staying open, so this is unlikely, but neither option below has it: native SQLite
+and OPFS both write to disk before the save returns.
 
 ## What must stay the same
 
@@ -80,7 +89,7 @@ while the meter stays low. It only postpones the decision.
 | `db.js`/`repo.js` change | all calls become async | no | no |
 | Tests run the phone's engine | no | yes | yes |
 | Size limit | free disk | browser quota (large; measure on phone) | ~2.76 MB database |
-| Durability | best | good (check eviction on phone) | good |
+| Durability | best | good (check eviction on phone) | good, except a save in the last ~1 s before Android kills the app (measured) |
 | Effort (without migration) | 8–12 days | 1 + 4–6 days | 0 |
 
 **Recommendation:** B, after a one-day device check (OPFS sync access handles in the phone's

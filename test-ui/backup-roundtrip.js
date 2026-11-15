@@ -74,6 +74,16 @@ function sameDb(name, actual, expected) {
     const list = ledgers.json.ledgers || ledgers.json;
     check('restored categories are live without a restart (90 Garden & Landscaping is listed)', Array.isArray(list) && list.some((l) => l.code === '90'));
 
+    // ---- Recycle Bin shows the restored deleted rows (it used to throw for any deleted row and say
+    // "Network error loading the Recycle Bin." — found on the emulator, Phase 2 Step 9) ----
+    const binTables = ['cash_out', 'cash_in', 'loans', 'contract', 'contractor_payments'];
+    const deletedRows = binTables.flatMap((t) => (F.DATA.rows[t] || []).filter((r) => r.deleted_at));
+    await openFresh();
+    await page.waitForSelector('#trashBody .rb-item, #trashBody .rb-empty');
+    const bin = await page.evaluate(() => ({ items: document.querySelectorAll('#trashBody .rb-item').length, text: document.getElementById('trashBody').innerText }));
+    check('the fixture has deleted rows to show', deletedRows.length >= 2, String(deletedRows.length));
+    check('the Recycle Bin lists every deleted row, with its IST date', bin.items === deletedRows.length && /deleted \d\d\/\d\d\/\d\d IST/.test(bin.text), `${bin.items} of ${deletedRows.length}: ${bin.text.slice(0, 160)}`);
+
     // ---- Encrypted backup ----
     const beforeEnc = await dump();
     const pass = 'roundtrip-passphrase-123';

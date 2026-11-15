@@ -510,14 +510,6 @@
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
       };
 
-      // Phase 10C — deleted_at is stored UTC (SQLite datetime('now')). Convert to the IST calendar
-      // date for display; otherwise a row deleted between 00:00 and 05:30 IST reads a day early.
-      const istDate = (utc) => {
-        if (!utc) return '';
-        const d = new Date(String(utc).replace(' ', 'T') + 'Z'); // parse the stored value as UTC
-        return isNaN(d) ? String(utc).slice(0, 10) : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
-      };
-
       // ---- 1. Download JSON backup ------------------------------------------
       const downloadJsonBtn = document.getElementById('downloadJsonBtn');
       downloadJsonBtn.addEventListener('click', async () => {
@@ -903,6 +895,16 @@
       const msg = makeMsg(document.getElementById('trashMsg'));
       const body = document.getElementById('trashBody');
       const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      // Phase 10C — deleted_at is stored UTC (SQLite datetime('now')). Convert to the IST calendar
+      // date for display; otherwise a row deleted between 00:00 and 05:30 IST reads a day early.
+      // It must live in THIS script block: it used to be defined inside the previous <script>'s
+      // function, so render() threw a ReferenceError for any deleted row and the catch below showed
+      // "Network error loading the Recycle Bin." (found on the emulator, Phase 2 Step 9).
+      const istDate = (utc) => {
+        if (!utc) return '';
+        const d = new Date(String(utc).replace(' ', 'T') + 'Z'); // parse the stored value as UTC
+        return isNaN(d) ? String(utc).slice(0, 10) : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+      };
       const LABELS = { cash_out: 'Cash outflow', cash_in: 'Cash inflow', loans: 'Loans', contract: 'Contracts', contractor_payments: 'Contractor payments' };
       const ORDER = ['cash_out', 'cash_in', 'loans', 'contract', 'contractor_payments'];
 
@@ -941,7 +943,11 @@
           const r = await fetch('/api/trash');
           if (!r.ok) { body.innerHTML = '<p class="rb-empty">Could not load the Recycle Bin.</p>'; return; }
           render((await r.json()).trash || {});
-        } catch { body.innerHTML = '<p class="rb-empty">Network error loading the Recycle Bin.</p>'; }
+        } catch (e) {
+          // Not necessarily the network: on the phone there is none, so a rendering bug also lands here.
+          console.error('[recycle bin]', e);
+          body.innerHTML = '<p class="rb-empty">Could not show the Recycle Bin. Restart Plannr and try again.</p>';
+        }
       }
 
       body.addEventListener('click', async (ev) => {

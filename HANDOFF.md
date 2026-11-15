@@ -240,7 +240,8 @@ going over an allowance is a normal thing to happen, not an error.
   four file-producing paths in Data Backup.
 - **`npm run test:backup-crypto`** — round-trips the encrypted backup through the real code.
 - **`npm run test:backup-roundtrip`** — the phone's backups rebuild the app exactly: fill with
-  the fixture, back up (JSON and encrypted), wipe, restore, compare every table row by row.
+  the fixture, back up (JSON and encrypted), wipe, restore, compare every table row by row;
+  the Recycle Bin then lists the fixture's deleted rows.
 - **`npm run test:storage-limit`** — the phone's storage limit, measured in Chromium (the
   phone's database lives in WebView localStorage: about 10 MB, roughly 12,000 entries), the
   storage meter on Data Backup (warnings at 70% and 90%), and "Storage is full" (never
@@ -418,16 +419,17 @@ There is deliberately **no reset button inside the app**.
 
 - **`server.js` is one very large file.** It has grown well past a comfortable size and has
   not been split up. It works and it is tested, but it is the main thing that needs tidying.
-- **The save-and-share path on Android has not been tested on a real device.** It was
-  written to match the PDF sharing path, which has been tested on a device, and it passes
-  every test that can run in a browser — but a browser always reports itself as non-native,
-  so the Android-specific branch is never exercised. Try it on real hardware before putting
-  real data in.
-- **Phase 2's phone-only parts are not yet checked on a device**: the WebView storage folder
-  and real limit, writing and pruning safety snapshots in the app's folder, Auto Backup and
-  restore, and whether the INTERNET permission can go. `docs/PHONE-TEST-CHECKLIST.md`.
-- **The phone database is limited to about 10 MB of `localStorage`.** Moving it is proposed,
-  not done: `docs/storage-proposal.md`.
+- **Phase 2's phone-only checks passed on an Android 16 emulator, not yet on the user's
+  phone**: the save-and-share path for backups and the PDF, the WebView storage folder and
+  real limit, safety snapshots in the app's folder, updating over the old version, Auto Backup
+  and restore, airplane mode, and a build without the INTERNET permission. Results and what to
+  repeat on the phone: `docs/PHONE-TEST-CHECKLIST.md`.
+- **The phone database is limited to about 10 MB of `localStorage`,** and a save made less than
+  about a second before Android kills the app can be lost (measured on the emulator; the
+  database stays consistent). Moving it is proposed, not done: `docs/storage-proposal.md`.
+- **Reminders arrive late unless "Alarms & reminders" is allowed** for Plannr (off by default on
+  Android 14+). Home offers a button for it after a reminder time is added; it is not shown again
+  at app start.
 
 ---
 

@@ -29,7 +29,16 @@ development and test tool.
 - `docs/PHONE-TEST-CHECKLIST.md`: the checks only a real phone can do — where the WebView keeps
   the data, the real storage limit, backups with categories, airplane mode, updating over the old
   version, Auto Backup (`bmgr backupnow`, uninstall, reinstall) and a test build without the
-  INTERNET permission. Not yet run: no phone or emulator was available.
+  INTERNET permission. All passed on an Android 16 emulator; still to repeat on the phone.
+
+### Fixed (found on the emulator)
+- Opening Home no longer pushes Android's "Alarms & reminders" settings screen over the app on
+  every start (Android 14+, once notifications are allowed). Reminders use exact alarms only when
+  Android already allows them; otherwise Home offers an "Allow on-time reminders" button, and the
+  settings screen opens only when it is tapped. `test/notifications.test.js`.
+- The Recycle Bin lists deleted items again. With even one item in it, it said "Network error
+  loading the Recycle Bin." and showed nothing, so deleted entries could not be restored (a helper
+  was defined in the page's other script block). `test-ui/backup-roundtrip.js` now checks it.
 
 ### Proposals (not implemented)
 - `docs/storage-proposal.md`: moving the phone database off `localStorage` (native SQLite plugin

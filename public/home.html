@@ -182,6 +182,7 @@
             <button type="button" id="notifAddBtn" class="notif-btn-sm">Add</button>
           </div>
           <p class="notif-msg" id="notifMsg" hidden></p>
+          <button type="button" id="notifExactBtn" class="notif-btn-sm" hidden>Allow on-time reminders</button>
         </div>
 
         <div class="notif-settings" id="backupReminderSettings">
@@ -349,6 +350,22 @@
       const result = await notif.onTimesChanged(notifTimes); // the "user first sets a time" moment — may prompt for permission
       const { text, kind } = describeDegrade(result);
       showNotifMsg(text, kind);
+      offerExact(result);
+    });
+
+    // Without Android's "Alarms & reminders" permission (off by default on Android 14+) a reminder is
+    // an inexact alarm and can arrive late. Offer the setting; it opens only when this is tapped.
+    const notifExactBtn = document.getElementById('notifExactBtn');
+    function offerExact(result) {
+      const late = !!(result && result.scheduled && result.exact === false);
+      notifExactBtn.hidden = !late;
+      if (late) showNotifMsg('Saved. Android may deliver it late unless “Alarms & reminders” is allowed for Plannr.', 'info');
+    }
+    notifExactBtn.addEventListener('click', async () => {
+      await notif.openExactAlarmSetting();
+      const result = await notif.onTimesChanged(notifTimes); // reschedule with whatever was chosen
+      offerExact(result);
+      if (result.exact) showNotifMsg('On-time reminders are on.', 'info');
     });
 
     notifList.addEventListener('click', async (e) => {
@@ -359,6 +376,7 @@
       notifTimes = next;
       renderNotifList();
       await notif.onTimesChanged(notifTimes); // cancel-and-reschedule from the new (shorter) list; never prompts on removal
+      if (!notifTimes.length) notifExactBtn.hidden = true;
       showNotifMsg('Removed.', 'info');
     });
 

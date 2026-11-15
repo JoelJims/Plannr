@@ -18,6 +18,24 @@ cd android && ./gradlew assembleDebug     # -> android/app/build/outputs/apk/deb
 Write the result of each check (pass/fail, numbers, phone model, Android and WebView version) in
 the table at the end.
 
+## Running these on an emulator (no phone needed)
+
+The results table at the end was first filled in on an emulator. To do the same:
+
+1. Check the PC can run one: `"%LOCALAPPDATA%\Android\Sdk\emulator\emulator-check.exe" accel` must
+   say WHPX (or AEHD) "is installed and usable".
+2. Create a virtual device with the image `system-images;android-36;google_apis;x86_64` (about
+   1.9 GB). In Android Studio: **Device Manager → Create virtual device**, any phone, the API 36
+   "Google APIs" x86_64 image. A Google APIs image (not "Google Play") allows `adb root` and
+   `run-as`, and needs no Google account.
+3. Start it: `emulator -avd <name> -no-snapshot` (add `-no-window` to run it in the background).
+4. Install the debug APK with `adb install -r …/Plannr-debug.apk`. The app's WebView can be
+   inspected from desktop Chrome at `chrome://inspect` (debug builds only).
+
+An emulator proves the app's own behaviour (storage, backups, updates, offline, permissions). It
+does not prove a particular phone maker's WebView or a real Google Drive backup; repeat checks
+2, 5 and 6 on the real phone before trusting it with the only copy of the data.
+
 ## 0. Phone details
 
 ```sh
@@ -95,7 +113,8 @@ Turn on airplane mode (Wi-Fi and mobile data off), force-stop Plannr, open it.
 - [ ] Add, edit and delete an entry; restart the app; the changes are kept.
 - [ ] PDF overview export works and the share sheet opens.
 - [ ] JSON and encrypted backup export work.
-- [ ] A payment-due reminder notification still fires (set one a few minutes ahead).
+- [ ] A reminder notification still fires (Home → reminder times: add one a few minutes ahead,
+      put the app in the background, wait).
 
 ## 5. Update over the old version keeps the data
 
@@ -125,7 +144,15 @@ adb shell bmgr backupnow com.plannr.app
 ```
 
 - [ ] `backupnow` ends with `Package com.plannr.app with result: Success` (not `Quota exceeded`).
-- [ ] Note the size, if shown: `adb shell dumpsys backup | grep -i -A3 plannr`.
+      `Backup is not allowed` means the app is in Android's "stopped" state (just installed or
+      force-stopped): open Plannr once, go to Home, and run `backupnow` again.
+- [ ] Note the size, if shown (`with progress: <bytes>/…` in the `backupnow` output).
+
+Without a Google account (an emulator), Android's local transport does the same job:
+`adb shell bmgr enable true`, then
+`adb shell bmgr transport com.android.localtransport/.LocalTransport`, run the steps here, and
+switch back afterwards with
+`adb shell bmgr transport com.google.android.gms/.backup.BackupTransportService`.
 
 Then, **with the data exported off the phone first**:
 
@@ -161,6 +188,35 @@ Then **undo the change** (`git checkout android/app/src/main/AndroidManifest.xml
 result. Removing the permission for real is a separate decision.
 
 ## Results
+
+### Emulator, 2026-11-15 (debug builds; driven over adb with Playwright's Android support)
+
+| # | Check | Result | Numbers / notes |
+|---|---|---|---|
+| 0 | Phone, Android, WebView version | — | Emulator `sdk_gphone64_x86_64`, Android 16 (API 36), WebView 133.0.6943.137, Google APIs image, no Google account. |
+| 1 | Data location and sizes | Pass | `app_webview/Default/Local Storage/leveldb/` (in the Auto Backup rules). With the test data: Local Storage 224 KB, `app_webview` 704 KB, `files/` 72 KB. |
+| 2 | Meter; real `localStorage` limit | Pass | Meter shown: "Used 0.2 MB of about 10 MB (2%)" on a fresh install. Real limit **5,242,866** characters (the app assumes 5,242,880). The app opened normally after the probe, meter unchanged. |
+| 3 | JSON + encrypted export/restore with categories | Pass | Both buttons wrote the file (verified size: JSON 51,304 bytes, encrypted 311,345 bytes) and opened the share sheet. JSON is v2 with categories and people. Each restore gave back every table, counter and the schema version exactly. A wrong password: "decryption failed — wrong passphrase, or the backup file is corrupt/tampered.", nothing changed. Each restore wrote a `.gz` safety snapshot; only the newest 3 were kept. |
+| 4 | Airplane mode | Pass | All 10 pages open, no error box. Add/edit/delete kept after a restart. PDF, JSON and encrypted export open the share sheet. A reminder fired on time (to the second) with "Alarms & reminders" allowed; without it, Android delays it (more than 2 minutes late in the test), hence the new "Allow on-time reminders" button. |
+| 5 | Update over old version | Pass | `main` (Phase 1) → this branch with `adb install -r`: Android kept `firstInstallTime` (an update), every entry and total the same. Both are schema v2, so no upgrade ran. Forcing an older schema wrote `plannr-pre-migration-v1-to-v2-….db.gz` (17 KB) before upgrading; a newer schema (v3) stopped with "Plannr could not open your data … newer version … Nothing was changed", and it was true. |
+| 6 | Auto Backup (`bmgr backupnow`, uninstall, reinstall) | Pass | Local transport. Backup 280,064 bytes for a 0.55 MB database. After `adb uninstall` + `adb install` Android restored it during the install: every table, counter, the schema version and all 3 safety snapshots came back. |
+| 7 | Without INTERNET | Pass | Every page, add/edit/delete, PDF and backup export, JSON restore and scheduling a reminder work; nothing in logcat. Asking for notification permission still works. |
+
+**Found and fixed on the emulator** (both also affect the `main` branch):
+
+- Opening Home pushed Android's **"Alarms & reminders" settings screen** over the app on every
+  start, once notifications were allowed (Android 14+; `@capacitor/local-notifications` 8.3 opens it
+  by default). Fixed in `public/notifications.js`; the screen now opens only from the new button.
+- The **Recycle Bin** never listed anything: with even one deleted item it showed "Network error
+  loading the Recycle Bin.", so deleted entries could not be restored. A function it used was
+  defined in the page's other script block. Fixed in `public/data-backup.html`.
+
+**Known limit (measured):** a save made less than about a second before Android kills the app can be
+lost; the database stays consistent (`docs/storage-proposal.md`).
+
+### The user's phone
+
+Not yet run. Repeat at least checks 0, 2, 3, 5 and 6 there before moving the real data.
 
 | # | Check | Result | Numbers / notes |
 |---|---|---|---|
