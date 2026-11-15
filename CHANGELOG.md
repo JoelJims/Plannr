@@ -35,7 +35,13 @@ development and test tool.
 - Opening Home no longer pushes Android's "Alarms & reminders" settings screen over the app on
   every start (Android 14+, once notifications are allowed). Reminders use exact alarms only when
   Android already allows them; otherwise Home offers an "Allow on-time reminders" button, and the
-  settings screen opens only when it is tapped. `test/notifications.test.js`.
+  settings screen opens only when it is tapped. Times saved earlier get the same note and button
+  when Home opens. `test/notifications.test.js`.
+- Saving a backup, a CSV or the PDF no longer says "✗ … timed out after 20s" while the share sheet
+  is still open. The share sheet now waits for the user however long they take, so an encrypted
+  backup saved after 20 s is now recorded as exported. Closing the sheet without choosing shows a
+  plain "Not saved" note instead of a red error, and the Ledger List import says nothing was
+  imported. `test/share-sheet.test.js`.
 - The Recycle Bin lists deleted items again. With even one item in it, it said "Network error
   loading the Recycle Bin." and showed nothing, so deleted entries could not be restored (a helper
   was defined in the page's other script block). `test-ui/backup-roundtrip.js` now checks it.

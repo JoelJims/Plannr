@@ -210,6 +210,12 @@ result. Removing the permission for real is a separate decision.
 - The **Recycle Bin** never listed anything: with even one deleted item it showed "Network error
   loading the Recycle Bin.", so deleted entries could not be restored. A function it used was
   defined in the page's other script block. Fixed in `public/data-backup.html`.
+- Leaving the **share sheet** open for more than 20 seconds showed "✗ Share.share threw: Opening
+  the share sheet timed out after 20s." while it was still open, and an encrypted backup saved
+  after that was not recorded as exported. Closing the sheet showed a red "Share canceled" error.
+  Fixed in `public/data-backup.html` and `public/overview.html`: no timer on the share sheet, and
+  closing it shows "Not saved: the share sheet was closed…". Checked on the emulator (sheet open
+  25 s, then closed, for the JSON backup, the encrypted backup and the PDF).
 
 **Known limit (measured):** a save made less than about a second before Android kills the app can be
 lost; the database stays consistent (`docs/storage-proposal.md`).

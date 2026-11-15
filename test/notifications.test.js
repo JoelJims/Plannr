@@ -41,17 +41,25 @@ const never = (plugin, ...names) => { for (const n of names) assert.ok(!plugin.c
 test('app start, exact alarms not allowed: reminders are inexact and nothing prompts', async () => {
   const plugin = fakePlugin({ exact: 'denied' });
   const m = await load(plugin);
-  await m.onAppStart(['09:00', '18:30']);
+  assert.deepStrictEqual(await m.onAppStart(['09:00', '18:30']), { scheduled: true, exact: false }); // Home shows its button
   const n = scheduled(plugin);
   assert.strictEqual(n.length, 2);
   for (const x of n) assert.strictEqual(x.isExactNotification, false);
   never(plugin, 'changeExactNotificationSetting', 'requestPermissions');
 });
 
+test('app start with no times, or notifications off: nothing scheduled, nothing asked', async () => {
+  const none = fakePlugin();
+  assert.deepStrictEqual(await (await load(none)).onAppStart([]), { scheduled: false, reason: 'no-times' });
+  const off = fakePlugin({ display: 'denied' });
+  assert.deepStrictEqual(await (await load(off)).onAppStart(['09:00']), { scheduled: false, reason: 'permission-denied' });
+  for (const p of [none, off]) { assert.deepStrictEqual(scheduled(p), []); never(p, 'requestPermissions', 'changeExactNotificationSetting'); }
+});
+
 test('app start, exact alarms already allowed: reminders use them', async () => {
   const plugin = fakePlugin({ exact: 'granted' });
   const m = await load(plugin);
-  await m.onAppStart(['07:15']);
+  assert.deepStrictEqual(await m.onAppStart(['07:15']), { scheduled: true, exact: true });
   assert.deepStrictEqual(scheduled(plugin).map((x) => x.isExactNotification), [true]);
   never(plugin, 'changeExactNotificationSetting', 'requestPermissions');
 });
@@ -116,4 +124,6 @@ test('Home offers the setting with a button and opens it only on a tap', () => {
   const calls = home.match(/notif\.openExactAlarmSetting\(/g) || [];
   assert.strictEqual(calls.length, 1);
   assert.match(home, /notifExactBtn\.addEventListener\('click', async \(\) => \{\s*await notif\.openExactAlarmSetting\(\);/);
+  // At start, times saved earlier also get the note and the button (but nothing opens by itself).
+  assert.match(home, /return notif\.onAppStart\(notifTimes\);[^\n]*\n\s*\}\)\.then\(\(result\) => offerExact\(result, /);
 });

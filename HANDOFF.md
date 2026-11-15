@@ -428,8 +428,8 @@ There is deliberately **no reset button inside the app**.
   about a second before Android kills the app can be lost (measured on the emulator; the
   database stays consistent). Moving it is proposed, not done: `docs/storage-proposal.md`.
 - **Reminders arrive late unless "Alarms & reminders" is allowed** for Plannr (off by default on
-  Android 14+). Home offers a button for it after a reminder time is added; it is not shown again
-  at app start.
+  Android 14+). Home offers a button for it when a reminder time is added, and again each time
+  Home opens while it is not allowed. Plannr never opens that settings screen by itself.
 
 ---
 

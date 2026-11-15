@@ -403,8 +403,9 @@
       // Phase 11 audit — confirmed via overview.html's PDF share path (Phase 6a, verified on-device):
       // a plain <a download> click is a dead end on Android's WebView (no visible effect), so a blob
       // download alone is not a real delivery path there. Capacitor's Filesystem+Share is the only one
-      // that works — reused here verbatim (same plugin calls, same timeouts) for every file this page
-      // produces, so a failure is always reported rather than silently doing nothing on-device.
+      // that works — reused here (same plugin calls) for every file this page produces, so a failure is
+      // always reported rather than silently doing nothing on-device. withTimeout guards the file
+      // write and check only; the share sheet waits for the user, however long they take.
       function withTimeout(promise, ms, label) {
         let timer;
         const timeout = new Promise((_, reject) => {
@@ -497,8 +498,23 @@
         if (!info || typeof info.size !== 'number') bail('Filesystem.stat returned no usable size (got ' + JSON.stringify(info) + ')');
         ok(`file verified on disk: ${info.size} bytes`);
 
-        try { await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }), 20000, 'Opening the share sheet'); }
-        catch (err) { bail('Share.share threw', err); }
+        // No timeout on Share.share(): it resolves only when the user has picked where the file goes,
+        // and choosing can take longer than any limit (a 20 s timeout used to report "timed out" while
+        // the sheet was still open — seen on the emulator, Phase 2 Step 9). Closing the sheet without
+        // choosing is the user's call, not an error: say so plainly, and still don't count it as saved.
+        const stillWaiting = setTimeout(() => ok('waiting for you to choose where to save it (if no share sheet is on screen, go back and tap the button again)'), 20000);
+        try { await Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }); }
+        catch (err) {
+          if (/cancel/i.test(errText(err))) {
+            steps.push('– Not saved: the share sheet was closed without choosing where to keep the file. Tap the button again to save it.');
+            report('info');
+            const e = new Error('share cancelled');
+            e.alreadyShown = true;
+            e.cancelled = true;
+            throw e;
+          }
+          bail('Share.share threw', err);
+        } finally { clearTimeout(stillWaiting); }
         ok('share sheet invoked');
         if (fname.endsWith('.db.enc')) await markBackupExported();
 
@@ -844,7 +860,8 @@
           try {
             await saveFile(backupBlob, backupFname, 'Save safety backup', ledgerCsvMsg);
           } catch (err) {
-            if (!err.alreadyShown) ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
+            if (err.cancelled) ledgerCsvMsg.show('Import stopped: the safety backup was not saved, so nothing was imported. Tap Import again and choose where to keep the backup.', 'info');
+            else if (!err.alreadyShown) ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
             return;
           }
 

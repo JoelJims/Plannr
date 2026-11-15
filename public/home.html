@@ -356,10 +356,10 @@
     // Without Android's "Alarms & reminders" permission (off by default on Android 14+) a reminder is
     // an inexact alarm and can arrive late. Offer the setting; it opens only when this is tapped.
     const notifExactBtn = document.getElementById('notifExactBtn');
-    function offerExact(result) {
+    function offerExact(result, text = 'Saved. Android may deliver it late unless “Alarms & reminders” is allowed for Plannr.') {
       const late = !!(result && result.scheduled && result.exact === false);
       notifExactBtn.hidden = !late;
-      if (late) showNotifMsg('Saved. Android may deliver it late unless “Alarms & reminders” is allowed for Plannr.', 'info');
+      if (late) showNotifMsg(text, 'info');
     }
     notifExactBtn.addEventListener('click', async () => {
       await notif.openExactAlarmSetting();
@@ -384,7 +384,7 @@
       notifTimes = Array.isArray(data.times) ? data.times : [];
       renderNotifList();
       return notif.onAppStart(notifTimes); // reapply on launch; never prompts for permission
-    });
+    }).then((result) => offerExact(result, 'Reminders may arrive late unless “Alarms & reminders” is allowed for Plannr.'));
 
     // ---------------------------------------------------------------------------
     // Phase 15 — backup-overdue reminder. The banner can't be dismissed or muted the way a

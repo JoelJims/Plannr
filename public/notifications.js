@@ -71,13 +71,16 @@ if (Capacitor.isNativePlatform()) {
 // Called on app start with whatever times are already saved. Never prompts for permission — only
 // re-applies it if already granted from an earlier "set a time" action. Silent no-op otherwise (and
 // entirely outside a native WebView), so this is always safe to call unconditionally on every load.
+// Returns the same shape as onTimesChanged() (undefined outside the app), so Home can show its
+// "Allow on-time reminders" button for times saved before exact alarms were handled this way.
 export async function onAppStart(times) {
   if (!Capacitor.isNativePlatform()) return;
   await LocalNotifications.cancel({ notifications: SLOT_IDS.map((id) => ({ id })) });
-  if (!times.length) return;
+  if (!times.length) return { scheduled: false, reason: 'no-times' };
   const perm = await LocalNotifications.checkPermissions();
-  if (perm.display !== 'granted') return; // app launch is not the moment to prompt
-  await scheduleAll(times);
+  if (perm.display !== 'granted') return { scheduled: false, reason: 'permission-denied' }; // app launch is not the moment to prompt
+  const exact = await scheduleAll(times);
+  return { scheduled: true, exact };
 }
 
 // Called from the settings UI whenever the times list changes (an add or a remove). This IS the
