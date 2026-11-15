@@ -18,6 +18,36 @@ cd android && ./gradlew assembleDebug     # -> android/app/build/outputs/apk/deb
 Write the result of each check (pass/fail, numbers, phone model, Android and WebView version) in
 the table at the end.
 
+## The build for this round (real phone, 2026-11-15)
+
+| | |
+|---|---|
+| Branch / commit | `plannr-phase2`, built from `9d7fd97` (cross-platform plan steps 1.1 and 1.2) |
+| File | `android/app/build/outputs/apk/debug/Plannr-debug.apk` |
+| Size | 5,988,128 bytes |
+| SHA-256 | `5e304ebd31c481b2555455b42b379c45309161c2dc8326813eec65cca588a1af` |
+| Version | versionCode 1, versionName 1.0; debug-signed |
+| INTERNET permission | still present (removing it is the separate branch `plannr-no-internet`) |
+
+**This round uses test data only.** Do not restore your real backup on the phone yet; that comes
+after these checks pass and you approve it.
+
+Install it:
+
+1. On the phone: Settings → About phone → tap **Build number** 7 times; then Settings → System →
+   Developer options → turn on **USB debugging**. Connect the phone by USB and allow the PC when
+   asked.
+2. On the PC, `adb devices` lists the phone as `device` (not `unauthorized`). `adb` is in the
+   Android SDK's `platform-tools` folder.
+3. `adb install -r android/app/build/outputs/apk/debug/Plannr-debug.apk`
+
+If Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a Plannr signed with another key (a
+release build) is already on the phone. Uninstalling it deletes its data: if it holds anything you
+need, export both backups off the phone first, or stop and ask.
+
+Check 7 needs a build without the INTERNET permission, so it cannot be done with this APK. Leave
+its row empty this round.
+
 ## Running these on an emulator (no phone needed)
 
 The results table at the end was first filled in on an emulator. To do the same:
@@ -187,6 +217,18 @@ adds the permission anyway. To test without it, in a throwaway local change:
 Then **undo the change** (`git checkout android/app/src/main/AndroidManifest.xml`) and report the
 result. Removing the permission for real is a separate decision.
 
+## 8. What changed in this build (plan steps 1.1 and 1.2)
+
+Most of it is invisible in the app (the same request rules as the dev server, covered by the
+automated tests). Two things to look at:
+
+- [ ] **PDF total row.** Add three or four entries, then Overview → export the full PDF. In the
+      Transactions table, the **Total (n)** row ends at the same right edge as the rows above it.
+      Before this build it had one extra empty cell sticking out on the right.
+- [ ] **Restores still fit.** Restores now have a 20 MB limit (the app's whole storage is about
+      10 MB, so a real backup is far below it). In check 3, note the encrypted file's size; the
+      encrypted restore must still work.
+
 ## Results
 
 ### Emulator, 2026-11-15 (debug builds; driven over adb with Playwright's Android support)
@@ -220,9 +262,12 @@ result. Removing the permission for real is a separate decision.
 **Known limit (measured):** a save made less than about a second before Android kills the app can be
 lost; the database stays consistent (`docs/storage-proposal.md`).
 
-### The user's phone
+### The owner's phone: debug build from `9d7fd97` (SHA-256 `5e304ebd…a1af`)
 
-Not yet run. Repeat at least checks 0, 2, 3, 5 and 6 there before moving the real data.
+Not yet run. At least checks 0, 2, 3, 5 and 6 must pass here before the real data moves. Test
+data only.
+
+Date tested:
 
 | # | Check | Result | Numbers / notes |
 |---|---|---|---|
@@ -233,4 +278,5 @@ Not yet run. Repeat at least checks 0, 2, 3, 5 and 6 there before moving the rea
 | 4 | Airplane mode | | |
 | 5 | Update over old version | | |
 | 6 | Auto Backup (`bmgr backupnow`, uninstall, reinstall) | | |
-| 7 | Without INTERNET | | |
+| 7 | Without INTERNET | not in this build | needs the `plannr-no-internet` build |
+| 8 | This build's changes (PDF total row, restores still fit) | | |
