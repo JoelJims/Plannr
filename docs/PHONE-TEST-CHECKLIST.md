@@ -24,10 +24,15 @@ the table at the end.
 |---|---|
 | Branch / commit | `plannr-phase2`, built from `9d7fd97` (cross-platform plan steps 1.1 and 1.2) |
 | File | `android/app/build/outputs/apk/debug/Plannr-debug.apk` |
-| Size | 5,988,128 bytes |
-| SHA-256 | `5e304ebd31c481b2555455b42b379c45309161c2dc8326813eec65cca588a1af` |
+| Size | 5,974,512 bytes |
+| SHA-256 | `7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef` |
 | Version | versionCode 1, versionName 1.0; debug-signed |
 | INTERNET permission | present, and it stays (offline first: the core never uses it; see `CONTRIBUTING.md`) |
+
+The file at that path was rebuilt from the same commit on 2026-11-15 at 20:26. An emulator build of a
+later commit had overwritten the first one (5,988,128 bytes, SHA-256 `5e304ebd…a1af`). The rebuild
+has the same files; only the zip bytes differ. If you already copied the first file, it is the same
+code and is fine to use.
 
 **This round uses test data only.** Do not restore your real backup on the phone yet; that comes
 after these checks pass and you approve it.
@@ -255,7 +260,33 @@ automated tests). Two things to look at:
 **Known limit (measured):** a save made less than about a second before Android kills the app can be
 lost; the database stays consistent (`docs/storage-proposal.md`).
 
-### The owner's phone: debug build from `9d7fd97` (SHA-256 `5e304ebd…a1af`)
+### Emulator, 2026-11-15 evening: debug build from `2d5fda8` (steps 1.3a–c)
+
+Same emulator (`sdk_gphone64_x86_64`, Android 16, WebView 133.0.6943.137, no Google account). Fresh
+install, test data only, driven over adb with Playwright's Android support. Nothing was sent from
+any share sheet; each one was closed with BACK.
+
+| # | Check | Result | Numbers / notes |
+|---|---|---|---|
+| 0 | Phone, Android, WebView version | — | As above. |
+| 1 | Data location and sizes | Pass | `app_webview/Default/Local Storage/leveldb/`. After the checks: `app_webview` 4,912 KB (4 MB of it is Chromium's `BrowserMetrics-spare.pma`), Local Storage 332 KB, `files/` 60 KB. |
+| 2 | Meter; real `localStorage` limit | Pass | "Used 0.2 MB of about 10 MB (2%)." on a fresh install. Real limit 5,242,866 characters. The meter was the same (2%) after the probe. |
+| 3 | JSON + encrypted export/restore with categories | Pass | JSON 51,304 bytes (v2, categories and people), encrypted 311,345 bytes; both opened the share sheet. Both restores gave back everything. Wrong password: clear message, nothing changed. `.gz` snapshots written, at most 3 kept. |
+| 4 | Airplane mode | Pass | All 10 pages open offline, no error box. Add/edit/delete kept after a restart. PDF, JSON and encrypted export each open the share sheet offline. With notifications allowed and "Alarms & reminders" allowed, a reminder set for 20:38 was posted at 20:38:08 (logcat: id 102), offline, app in the background. (The script's own check read the backup-overdue notification, id 201, by mistake; the logcat line is the evidence.) Without notification permission nothing is scheduled; on a fresh install it has to be allowed first, as on a phone. |
+| 5 | Update over old version | Pass | `main`'s debug APK, then this build with `adb install -r`: `firstInstallTime` kept, every entry and loan the same. Both schema v2, so no upgrade and no pre-migration snapshot (correct). Forced older schema: two `plannr-pre-migration-v1-to-v2-….db.gz` snapshots written first, data and `integrity_check` intact. Newer schema (v3): "Plannr could not open your data … Nothing was changed", and it was true. |
+| 6 | Auto Backup (`bmgr backupnow`, uninstall, reinstall) | Pass | Local transport, `Success`, 110,080 bytes. After `adb uninstall` and `adb install` every table, counter, the schema version and both snapshots came back. Transport switched back to Google's afterwards. |
+| 7 | Without INTERNET | skipped | the permission stays (decision, 2026-11-15) |
+| 8 | PDF total row; share sheet held open | Pass | Measured in the phone's WebView on the exact HTML handed to the PDF plugin: both tables with a total row span the header's columns (5 = 5, 7 = 7) and end at the same right edge (788 px). The share sheet stayed open 25 s with no timeout message; BACK then showed "PDF not shared: the share sheet was closed…". Encrypted restore at 311,345 bytes works (far under 20 MB). |
+
+**Still needs the real phone:**
+- 0: the model, Android and WebView versions.
+- 2: the phone maker's WebView limit.
+- 3: sharing to real apps (Files, Drive, WhatsApp) and opening the files there.
+- 4: a reminder under the maker's battery management.
+- 5 and 6: the update and a real Google Drive backup.
+- 8: looking at the PDF in a PDF viewer.
+
+### The owner's phone: debug build from `9d7fd97` (SHA-256 `7dc29db3…a2ef`)
 
 Not yet run. At least checks 0, 2, 3, 5 and 6 must pass here before the real data moves. Test
 data only.
