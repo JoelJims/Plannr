@@ -74,3 +74,18 @@ test('restoring a backup: 1 MB is accepted, over 20 MB gets the backup message (
     assert.strictEqual(over.json.error, 'That backup file is too large to restore (the limit is 20 MB).', route);
   }
 });
+
+// ---- unknown routes ----
+test('an unknown /api route gets a JSON 404 that names the request', async () => {
+  const r = await H.get('/api/no-such-route');
+  assert.strictEqual(r.status, 404);
+  assert.deepStrictEqual(r.json, { error: 'Not found: GET /api/no-such-route' });
+});
+
+test('a known /api path with a method it does not have gets the same JSON 404', async () => {
+  for (const [method, path] of [['PATCH', '/api/cash-in'], ['DELETE', '/api/overview'], ['PUT', '/api/backup/export']]) {
+    const r = await H.req(method, path, { body: {} });
+    assert.strictEqual(r.status, 404, `${method} ${path}`);
+    assert.deepStrictEqual(r.json, { error: `Not found: ${method} ${path}` });
+  }
+});

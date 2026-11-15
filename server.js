@@ -2322,6 +2322,14 @@ app.get('/overview', requireAuth, (req, res) => { warmPdfBrowser(); sendPage(res
 // filename /data-backup.html guarded above (no logged-out backdoor).
 app.get('/data-backup', requireAuth, (req, res) => sendPage(res, 'data-backup.html'));
 
+// An unknown /api route, or a known path with a method it does not have: a JSON 404, the same
+// answer the phone gives (request-rules.js). Must come after every /api route. Other paths keep
+// Express's own 404 page.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  res.status(404).json(requestRules.notFound(req.method, req.path));
+});
+
 // ---------------------------------------------------------------------------
 // Global error handler (must be last; 4-arg signature). node:sqlite is
 // synchronous and Express forwards synchronous throws from handlers here, so

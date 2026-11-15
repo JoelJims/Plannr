@@ -1823,6 +1823,6 @@ export function installFetchShim(repo) {
       }
       return toResponse(res);
     }
-    return toResponse(new Res().status(404).json({ error: `Not found (local mode): ${method} ${pathname}` }));
+    return toResponse(new Res().status(404).json(requestRules.notFound(method, pathname)));
   };
 }
