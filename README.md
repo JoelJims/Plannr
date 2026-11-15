@@ -7,8 +7,11 @@ person installs it on their own phone and uses it to record what has been paid o
 and what is still owed on a construction contract. There is no server, no account and no sign-in, and
 the app makes no network requests — everything lives in a database file on the device. It is built
 with [Capacitor](https://capacitorjs.com/), so the interface is ordinary HTML and JavaScript running
-in a WebView; that same interface also runs on a desktop through `node server.js`, which is how it is
-developed and tested.
+in a WebView.
+
+**The phone app is the product.** `server.js` is a desktop tool for development and testing only: it
+serves the same screens against a separate database file on your computer, the phone app never uses
+it, and it says so when it starts (`DEV MODE – not used by the phone app`).
 
 Built by Joel Jims — [github.com/JoelJims](https://github.com/JoelJims).
 
@@ -41,20 +44,20 @@ Built by Joel Jims — [github.com/JoelJims](https://github.com/JoelJims).
 
 ## How to run it
 
-Desktop:
+Android (the app):
 
 ```sh
 npm install
-npm start
-```
-
-Android:
-
-```sh
 npm run android:sync
 ```
 
 Then open the `android/` folder in Android Studio and run it on a device or emulator.
+
+Desktop dev server (development and tests only; not used by the phone app):
+
+```sh
+npm start
+```
 
 Tests:
 
@@ -68,8 +71,8 @@ The screens are plain HTML and JavaScript in `public/` — no framework, no buil
 underneath stores its data in SQLite, and `db.js` owns the schema: on startup the database updates
 itself safely, even if it runs twice. `repo.js` is the single layer every read and write goes
 through, and `ledgers.js` holds the starting list of spending categories. What differs between the
-two ways of running is only what answers the screens' requests. On the desktop that is `server.js`,
-an ordinary Express server reading a database file on your computer. On Android it is
+two ways of running is only what answers the screens' requests. On the desktop dev server that is
+`server.js`, an ordinary Express server reading a database file on your computer. On Android it is
 `public/local-api.js` — a small piece of code that answers the app's requests locally instead of over
 a network — backed by `public/db-engine.js`, a database that runs inside the app itself. `android/`
 holds the native project Capacitor generates. The detail behind all of this is in

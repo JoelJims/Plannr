@@ -38,8 +38,13 @@ requests changes:
 | Mode | What answers requests | Where the data lives | When you'd use it |
 |---|---|---|---|
 | **The Android app** | `public/local-api.js` — code that answers requests locally instead of over a network | a database that runs inside the app | the actual product |
-| **`node server.js`** | a real web server | an ordinary database file, `data/plannr.db` | desktop development; what most tests use |
+| **`node server.js`** | a real web server (dev and tests only; prints `DEV MODE – not used by the phone app`) | an ordinary database file, `data/plannr.db` | desktop development; what most tests use |
 | **`node local-server.js`** | the same local code the Android app uses | the same in-app database, in a plain browser tab | testing the exact setup the app uses, without building an APK |
+
+Which one a page uses is decided by `public/runtime-mode.js`: inside the Android app it is
+always the in-app database, with no probe request at all; in a desktop browser it is
+`server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Server: 1` header
+(`npm run test:runtime-mode` drives all four combinations in a browser).
 
 Because `local-api.js` and `server.js` answer the same set of requests, every page behaves
 the same whichever is underneath. They are deliberately separate files rather than one

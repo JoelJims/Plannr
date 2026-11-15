@@ -91,6 +91,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  // Phase 2 (Step 6): the explicit "this is the desktop dev server" marker. public/runtime-mode.js
+  // uses it (in a plain browser only; never inside the phone app) to leave /api to this server.
+  res.setHeader('X-Plannr-Dev-Server', '1');
   next();
 });
 
@@ -2450,16 +2453,17 @@ if (require.main === module) {
     shutdown();
   });
   process.on('SIGTERM', shutdown);
-  // Phase 11B — console-independent graceful stop for the windowless auto-started server: a sentinel
-  // file (created by stop-plannr.cmd) routes into the SAME shutdown() as the signals above. Removes a
-  // stale sentinel on boot so a leftover can't stop this start.
+  // Phase 11B — console-independent graceful stop: creating a `.plannr-stop` file in the project root
+  // routes into the SAME shutdown() as the signals above (stop-plannr.cmd, which did this, was retired
+  // in Phase 2 Step 6). Removes a stale sentinel on boot so a leftover can't stop this start.
   watchStopSentinel(STOP_SENTINEL, shutdown);
 
   const lanIp = Object.values(os.networkInterfaces()).flat()
     .find((i) => i && (i.family === 'IPv4' || i.family === 4) && !i.internal)?.address;
 
   app.listen(PORT, access.host, () => {
-    console.log(`Plannr running at http://localhost:${PORT}`);
+    console.log('DEV MODE – not used by the phone app');
+    console.log(`Plannr desktop dev server running at http://localhost:${PORT} (the Android app keeps its own data and never talks to this server).`);
     if (access.lan && lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}/?token=<your PLANNR_TOKEN>  (open once per device)`);
   });
 }

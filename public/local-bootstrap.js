@@ -6,20 +6,12 @@
 // waits for the module's synchronous portion to run), so relying on script ordering alone is not
 // enough to guarantee this finishes before a page's own fetch() calls run.
 //
-// First, probe whether a real API server is actually there (server.js, still the reference
-// implementation the Node tests run against). If it is, this is NOT local-only mode — leave
-// window.fetch alone entirely and do nothing further; installing the shim here would hijack every
-// fetch() call on a server.js-backed page too (exactly what broke test-ui/run.js the first time this
-// was written). Only when there is no real backend do we open the local kvvfs database and install
-// the shim.
-//
-// The probe can't just fetch a nonexistent /api/* path and check for a 404 — Chrome logs "Failed to
-// load resource: 404" to the console for ANY failed fetch, regardless of how the JS handles it, which
-// would itself be a console error on every page load in local mode (the opposite of what this app
-// wants). Instead it HEADs the current page's own URL (guaranteed to exist, 200 in both modes) and
-// checks for an ETag response header — express.static sets one by default (server.js relies on this
-// default; see its own comment on the static middleware), and local-server.js's plain http server
-// does not set one at all. No request ever 404s, so there is nothing for Chrome to log either way.
+// Then decide which backend answers /api (runtime-mode.js, Phase 2 Step 6): inside the Capacitor app
+// it is always the local database, with no probe at all; in a plain browser it is the desktop dev
+// server (server.js) only if the page carries server.js's X-Plannr-Dev-Server marker. In server mode
+// window.fetch is left alone (installing the shim there would hijack every fetch() on a
+// server.js-backed page — what broke test-ui/run.js the first time this was written). Otherwise the
+// local kvvfs database is opened and the shim installed.
 
 // Phase 6b — registers the local-notification tap listener (always opens Overview). Unconditional
 // and outside the local-only branch below: it must be active on EVERY page under EVERY environment
@@ -27,9 +19,12 @@
 // it is a deliberate no-op under server.js/local-server.js (no native Capacitor bridge there).
 await import('./notifications.js');
 
-const probe = await fetch(location.pathname, { method: 'HEAD' }).catch(() => null);
-if (probe && probe.headers.has('etag')) {
-  console.log('[local-bootstrap] a real API server is present (ETag from express.static) — leaving fetch alone (not local-only mode).');
+const { Capacitor } = await import('@capacitor/core');
+const { detectMode } = await import('./runtime-mode.js');
+const mode = await detectMode({ isNative: Capacitor.isNativePlatform(), path: location.pathname });
+window.__plannrMode = mode; // read by test-ui/runtime-mode.js
+if (mode === 'server') {
+  console.log('[local-bootstrap] desktop dev server (server.js) detected — leaving fetch alone (not local-only mode).');
 } else {
   const { ready, init, migrationPlan } = await import('./db.js');
   await ready();

@@ -14,10 +14,16 @@ to `public/local-api.js` — code that answers the app's requests locally instea
 a network — backed by a database that runs inside the app itself. That is what a user
 installs.
 
-`server.js` is a desktop version. It serves the *same* screens from `public/` against an
-ordinary database file on your computer (`data/plannr.db`). It exists so the app can be
-developed and tested on a desktop, and it is what most of the automated tests run
-against. **Nothing in `server.js` reaches the phone.**
+`server.js` is a desktop **dev and test tool only**. It serves the *same* screens from
+`public/` against an ordinary database file on your computer (`data/plannr.db`). It exists
+so the app can be developed and tested on a desktop, and it is what most of the automated
+tests run against. **Nothing in `server.js` reaches the phone**, and it prints
+`DEV MODE – not used by the phone app` when it starts. Its packages (`express`,
+`playwright`, `@capacitor/cli`) are `devDependencies`.
+
+How a page knows which one it is talking to (`public/runtime-mode.js`): inside the Android
+app it always uses its own database and never even looks for a server; in a desktop browser
+it uses `server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Server` header.
 
 Why that matters in practice:
 
