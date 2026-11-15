@@ -46,12 +46,20 @@ development and test tool.
   loading the Recycle Bin." and showed nothing, so deleted entries could not be restored (a helper
   was defined in the page's other script block). `test-ui/backup-roundtrip.js` now checks it.
 
-### Tests run against the phone code too (cross-platform plan, step 1.1)
-- `npm test` now runs the 28 HTTP test files a second time, against `public/local-api.js` (the
-  phone's API code) instead of `server.js`. 149 of 169 pass. The 20 that differ are listed with a
-  reason in `test/phone-code-differences.json`: 16 test dev-server-only features, 1 is a
-  per-platform answer, 2 need the phone's database engine, and 1 is a real difference (request
-  size limit). Nothing in the app changed.
+### Phone and dev server answer alike (cross-platform plan, steps 1.1 and 1.2)
+- `npm test` runs the HTTP test files a second time, against `public/local-api.js` (the phone's
+  API code) instead of `server.js`. The tests that differ on the phone are listed with a reason in
+  `test/phone-code-differences.json`. Only differences by design are left there: 16 tests of
+  dev-server-only features and 1 per-platform answer (`/api/storage`).
+- Shared request rules (`request-rules.js`, used by both):
+  - Size limits per kind of request: 32 KB normal, 256 KB Save All, 20 MB backup restore. Each
+    has its own message, so a long text no longer gets the "save fewer rows" batch message.
+  - A body that is not valid JSON gets "Invalid request." on the phone too, instead of a
+    misleading "Enter a valid amount".
+  - An unknown `/api` request gets a JSON 404 on both.
+- The phone's PDF: the Transactions total row was one column too wide. Fixed.
+- The PDF and encrypted-backup tests now check the phone's own code in the second pass (through
+  test stand-ins for the PDF plugin and the sqlite-wasm database copy).
 
 ### Proposals (not implemented)
 - `docs/storage-proposal.md`: moving the phone database off `localStorage` (native SQLite plugin

@@ -4,6 +4,8 @@ Status: **approved by the owner on 2026-11-15**, with the decisions recorded in 
 step at a time, starting with step 1.1 (§8); each step's report comes back to the owner before
 the next. Written 2026-11-15 on branch `plannr-phase2`.
 
+Progress: steps 1.1 and 1.2 done on 2026-11-15 (see the notes under the §8 table).
+
 Plannr stays single-user and offline everywhere. Each person on Android, Windows, macOS or Linux
 has their own separate data. There is no sync, no server and no network. Data moves between
 devices only as a backup file the person saves and opens themselves.
@@ -503,6 +505,23 @@ Phase 2 scripts.
 | 5.1 | `electron-builder.yml`; local Windows build | build smoke check | not affected |
 | 5.2 | `release.yml` + `test.yml` (needs a push: ask first) | CI runs the suite | not affected |
 | 5.3 | LICENSE → MIT (Joel Jims), `PRIVACY.md` (decided wording), `INSTALL.md`, README | doc link check | not affected |
+
+**Done so far (2026-11-15):**
+
+- **1.1:** `npm test` runs the HTTP test files a second time against `public/local-api.js`.
+- **1.2:** the owner chose each behaviour. The shared rules live in `request-rules.js`, used by both:
+  - size limits with one message per kind of request;
+  - 400 "Invalid request." for malformed JSON;
+  - a JSON 404 for unknown `/api` requests.
+
+  Also in 1.2:
+  - The phone's PDF total row now spans 4 columns, not 5.
+  - The PDF and encrypted-export tests now reach the phone's own code.
+  - Storage, encrypted restore and PDF creation stay per-platform services, as decided.
+  - PDF margins were left as they are.
+
+  `test/phone-code-differences.json` therefore does not shrink to zero. It keeps the 17
+  differences that are by design: 16 tests of dev-server-only features, plus `/api/storage`.
 
 **Rough effort:**
 

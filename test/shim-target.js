@@ -17,6 +17,8 @@
 // Platform services the phone code reaches through Capacitor plugins get test stand-ins, imported
 // by public/local-api.js only:
 // - the PDF plugin (shim-capacitor-fake.mjs) records the PDF page, so tests can check its HTML.
+// Likewise the one module that needs sqlite-wasm itself, local-snapshot.js (the whole-database copy
+// behind an encrypted backup), is replaced everywhere by shim-snapshot-fake.mjs.
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
@@ -29,6 +31,8 @@ const SHARED = ['db.js', 'repo.js', 'ledgers.js', 'backup-format.js', 'request-r
 const LOCAL_API = path.join(PUB, 'local-api.js');
 const CAPACITOR_IMPORTS = ['@capacitor/core', '@capgo/capacitor-pdf-generator'];
 const FAKE_CAPACITOR = pathToFileURL(path.join(__dirname, 'shim-capacitor-fake.mjs')).href;
+const LOCAL_SNAPSHOT = path.join(PUB, 'local-snapshot.js');
+const FAKE_SNAPSHOT = pathToFileURL(path.join(__dirname, 'shim-snapshot-fake.mjs')).href;
 const isLocalApi = (url) => !!url && url.startsWith('file:') && fileURLToPath(url).toLowerCase() === LOCAL_API.toLowerCase();
 
 function useRootCopiesOfSharedModules() {
@@ -46,6 +50,7 @@ function useRootCopiesOfSharedModules() {
       const r = nextResolve(specifier, context);
       if (r.url && r.url.startsWith('file:')) {
         const p = fileURLToPath(r.url);
+        if (p.toLowerCase() === LOCAL_SNAPSHOT.toLowerCase()) return { ...r, url: FAKE_SNAPSHOT };
         if (path.dirname(p) === PUB && SHARED.includes(path.basename(p))) {
           return { ...r, url: pathToFileURL(path.join(ROOT, path.basename(p))).href };
         }
