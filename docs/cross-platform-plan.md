@@ -1,7 +1,8 @@
 # Plan: one shared core, real SQLite files, and a desktop app
 
-Status: **plan only. Nothing here is implemented.** Waiting for the owner's OK (decisions in §9).
-Written 2026-11-15 on branch `plannr-phase2`.
+Status: **approved by the owner on 2026-11-15**, with the decisions recorded in §9. Work goes one
+step at a time, starting with step 1.1 (§8); each step's report comes back to the owner before
+the next. Written 2026-11-15 on branch `plannr-phase2`.
 
 Plannr stays single-user and offline everywhere. Each person on Android, Windows, macOS or Linux
 has their own separate data. There is no sync, no server and no network. Data moves between
@@ -17,7 +18,9 @@ devices only as a backup file the person saves and opens themselves.
 - These never change: `appId`, `server.androidScheme` and `server.hostname` in
   `capacitor.config.json`, and the two backup formats (JSON v2 and the encrypted `.db.enc`).
   Older backup files must still open.
-- Every new dependency is named and justified (§9, decision 2).
+- Every new dependency is named, justified and pinned to an exact version (§9, decision 2).
+- No real data is moved, on any device, until the owner reports back from the real-phone
+  checklist.
 
 ---
 
@@ -199,9 +202,11 @@ Option B keeps the database in the WebView's private file system, under the sqli
 own file names, so it is not an ordinary file. Option A's main cost, an async database layer, is
 paid once in §4.1.
 
-**Plugin:** `@capacitor-community/sqlite` 8.1.1.
+**Plugin:** `@capacitor-community/sqlite`, pinned to exactly 8.1.1.
 
 - Supports Capacitor 8 since 8.0.0; needs minSdk 24 and compileSdk 36.
+- Actively maintained (Capawesome): 9 releases in the 12 months to 2026-11-15, the latest
+  (8.1.1) on 2026-08-06.
 - It is a new dependency. The alternatives for Capacitor 8 don't fit:
   - `@capawesome-team/capacitor-sqlite` needs a paid licence.
   - `@capgo/capacitor-fast-sql` runs a local HTTP server on the phone.
@@ -297,7 +302,8 @@ and the owner's OK.
     24.15+.
   - It is the same engine as the dev server and the node tests, with no native module to rebuild
     for each OS.
-  - A smoke test comes first. If it fails, the fallback is `better-sqlite3` 13, a native module.
+  - A smoke test comes first. If it fails, the possible fallback is `better-sqlite3` 13, a native
+    module, but that needs the owner's OK first (§9).
 - **Single-instance lock:** `app.requestSingleInstanceLock()`, so two windows never open the same
   file.
 - **The existing desktop data is untouched.** `data/plannr.db` is used by `server.js` and is never
@@ -358,7 +364,7 @@ Electron.
 |---|---|
 | Filesystem + share sheet | "Save as" dialog through `saveFile`; cancelling shows the same "Not saved" note |
 | PDF plugin (`@capgo/capacitor-pdf-generator`) | `webContents.printToPDF` in a hidden window, `pageSize: 'A4'`, 14/12 mm margins, `printBackground: true` (the core's `pdf.render`) |
-| Reminders scheduled by Android | `Notification` from the main process, on timers while the app runs. Optional setting: start at login and stay in the tray. **macOS shows no notifications from an unsigned app.** Windows needs the installed version (Start Menu shortcut and `setAppUserModelId`); the portable `.exe` may show none |
+| Reminders scheduled by Android | `Notification` from the main process, on timers **only while Plannr is open** (owner's decision; no start-at-login or tray for now). **macOS shows no notifications from an unsigned app.** Windows needs the installed version (Start Menu shortcut and `setAppUserModelId`); the portable `.exe` may show none |
 | Android Auto Backup | None. The backup-overdue reminder and the person's own backup files |
 
 The pages already detect where they run (the `runtime-mode` suite). A `desktop` case is added, and
@@ -390,7 +396,12 @@ The pages already detect where they run (the `runtime-mode` suite). A `desktop` 
   - macOS: `.dmg` for x64 and arm64.
   - Linux: AppImage and `.deb` (x64).
 - **`package.json`:**
-  - `electron` and `electron-builder` are added as dev dependencies.
+  - `electron` (exactly 45.3.2) and `electron-builder` (exactly 26.18.0) are added as dev
+    dependencies with `--save-exact`. If a newer patch is out when the step starts, the commit
+    records the exact version chosen and why.
+  - Both are actively maintained: Electron published 313 versions in the 12 months to
+    2026-11-15 (latest 45.3.2 on 2026-11-13; majors 43–45 supported), and electron-builder 54
+    (latest stable 26.18.0 on 2026-10-20; 27.0.0-alpha.14 on 2026-10-29).
   - `npm start` stays the dev server; electron-builder's `extraMetadata.main` points the packaged
     app at `desktop/main.js`.
 
@@ -436,37 +447,21 @@ is about 5 Linux minutes ($0.03).
 | OV code-signing certificate (Windows) | about $220–440 a year, plus a cloud key service (e.g. from $20 a month) | Keys must be on hardware or in a cloud HSM. EV no longer gives instant SmartScreen trust, so it is not worth the extra |
 | SignPath Foundation (Windows) | free | For open-source projects under an OSI-approved licence, with conditions (MFA, builds made in CI, each release approved by hand) |
 
-**Suggestion:** ship unsigned first, with clear install steps (§7). Decide on signing once real
-users exist.
+**Decided: signing later.** The first releases are unsigned, with clear install steps (§7).
+Signing is decided again once real users exist.
 
 ---
 
 ## 7. Part B5: for other users
 
-- **LICENSE.** Today it is the **Unlicense** (public domain), in `LICENSE` and `package.json`.
-  Which licence to use is the owner's choice (§9, decision 3). Common options:
+- **LICENSE: MIT** (decided). `LICENSE` becomes the MIT text with "Copyright (c) 2026 Joel
+  Jims", and `package.json` says `"license": "MIT"` (today both say the Unlicense). Done in step
+  5.3.
+- **`PRIVACY.md`** (decided wording):
+  > Plannr never sends your data anywhere. Android's own Auto Backup may save a copy to your
+  > Google account; you can turn this off in Android settings.
 
-  | Licence | In one line |
-  |---|---|
-  | Unlicense (current) | Public domain: anyone may do anything, with no credit required |
-  | MIT | Anything allowed, but the copyright notice must stay |
-  | Apache-2.0 | Like MIT, plus an explicit patent grant |
-  | GPL-3.0 | Anyone who shares a changed version must share its source under the GPL too |
-
-- **`PRIVACY.md`**, short and true. A draft:
-  > Plannr has no servers and no accounts. Your data stays on your device: it is never sent
-  > anywhere by Plannr. There are no analytics, ads, crash reports or update checks. Your data
-  > leaves the device only when you save a backup file yourself, and you decide where that file
-  > goes.
-  >
-  > **Android:** the app has no internet permission. If Android's own backup is on for your
-  > phone, Android copies Plannr's data into your Google account's backup, like any other app's.
-  > You can turn that off in Android's settings.
-  >
-  > **Desktop:** your data is a file in your user folder (paths in §4.4). Nothing else is stored.
-
-  The Auto Backup sentence matters. Without it, "never leaves your device" would not be fully
-  true on Android (§9, decision 4).
+  The README links to it. Install docs say where the data lives on each OS (§4.4).
 - **Install steps for each OS**, in `INSTALL.md` and linked from README:
   - **Android:** download the APK and allow installs from that source once.
   - **Windows:** run the `.exe`, then click past SmartScreen.
@@ -507,7 +502,7 @@ Phase 2 scripts.
 | **Phase 5: packaging and documents** | | | |
 | 5.1 | `electron-builder.yml`; local Windows build | build smoke check | not affected |
 | 5.2 | `release.yml` + `test.yml` (needs a push: ask first) | CI runs the suite | not affected |
-| 5.3 | LICENSE (owner's choice), `PRIVACY.md`, `INSTALL.md`, README | doc link check | not affected |
+| 5.3 | LICENSE → MIT (Joel Jims), `PRIVACY.md` (decided wording), `INSTALL.md`, README | doc link check | not affected |
 
 **Rough effort:**
 
@@ -527,29 +522,32 @@ Phase 2 scripts.
   - If they block, the async core still accepts another engine, for example Option B (OPFS).
 - **Mistakes during the async conversion:** one file per commit, the full suite after each, and
   the request queue.
-- **`node:sqlite` in Electron:** smoke test first, with `better-sqlite3` as the fallback.
+- **`node:sqlite` in Electron:** smoke test first. If it fails, stop and ask (`better-sqlite3`
+  is the likely fallback, not yet approved).
 - **Unsigned apps put people off:** clear install steps; decide on signing later.
 
 ---
 
-## 9. Decisions needed from the owner
+## 9. Decisions (made by the owner on 2026-11-15)
 
-1. **Approve this plan and its order.** Nothing starts before that.
-2. **New dependencies:**
-   - `@capacitor-community/sqlite` (Android: a real SQLite file).
-   - `electron` and `electron-builder` (dev: the desktop app and its installers).
-   - `better-sqlite3`, only if `node:sqlite` fails in Electron.
-3. **Licence:** keep the Unlicense, or MIT, Apache-2.0 or GPL-3.0.
-4. **Android Auto Backup:** keep it (data comes back after a lost phone; the privacy text says so),
-   or turn it off (then "never leaves your device" is true without any qualification).
-5. **Signing:** later (suggested), or now (costs in §6).
-6. **Desktop reminders:** only while Plannr is open, or start at login and stay in the tray.
+1. **The plan and its order are approved.** Only step 1.1 starts now. Its report (the differences
+   between the phone and server code that the shared tests expose) goes to the owner before
+   anything is fixed.
+2. **New dependencies approved, each pinned to an exact version:**
+   - `@capacitor-community/sqlite` 8.1.1 (Android: a real SQLite file).
+   - `electron` 45.3.2 and `electron-builder` 26.18.0 (dev: the desktop app and its installers).
+   - All three are actively maintained (release counts and dates in §4.2 and §6).
+   - `better-sqlite3` is **not** approved. If `node:sqlite` fails in Electron, ask first.
+3. **Licence: MIT**, copyright Joel Jims (step 5.3).
+4. **Android Auto Backup stays on.** The privacy text says so, in the owner's wording (§7).
+5. **Signing: later.**
+6. **Desktop reminders: only while Plannr is open**, for now.
 
 ---
 
 ## Sources (checked 2026-11-15)
 
-- Code facts: this repository at `4c9824e`. Line numbers are from `server.js`,
+- Code facts: this repository at `3532343`. Line numbers are from `server.js`,
   `public/local-api.js` and `db.js` on that commit.
 - Electron releases (45.3.3, Node 24.22, Chromium 156): https://releases.electronjs.org/
 - `node:sqlite` status: https://nodejs.org/docs/latest-v24.x/api/sqlite.html;
