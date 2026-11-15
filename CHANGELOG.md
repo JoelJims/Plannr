@@ -27,6 +27,10 @@ development and test tool.
   `android:sync` and builds the signed release APK (`--dry-run` to preview).
 - `docs/RELEASE.md`: back up the phone, build, install over the old app, check the data.
 
+### Proposals (not implemented)
+- `docs/storage-proposal.md`: moving the phone database off `localStorage` (native SQLite plugin
+  or sqlite-wasm on OPFS), with a one-time migration plan, a safety snapshot and a way back.
+
 ### Desktop server is dev-only
 - `server.js` prints `DEV MODE – not used by the phone app` on start, and marks its responses with
   `X-Plannr-Dev-Server`. Pages decide where `/api` goes with `public/runtime-mode.js`: inside the

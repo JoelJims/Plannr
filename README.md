@@ -86,6 +86,7 @@ More documents:
 | [HANDOFF.md](HANDOFF.md) | How everything works, in detail |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Changing the database safely (migrations, backups, tests) |
 | [docs/RELEASE.md](docs/RELEASE.md) | Releasing an update to the phone without losing data |
+| [docs/storage-proposal.md](docs/storage-proposal.md) | Proposal: moving the phone database off `localStorage` (not done) |
 | [CHANGELOG.md](CHANGELOG.md) | What changed |
 
 ## Privacy and backups
