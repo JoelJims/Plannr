@@ -263,6 +263,16 @@ going over an allowance is a normal thing to happen, not an error.
 - **`npm run test:contract-phase-a`** — Contract Details in a real browser: the worked-out
   total appearing and disabling the typed field, the expected completion date, entering
   allowances by hand, and recording spending against one. Fails on any console error.
+- **`npm run test:runtime-mode`** — which backend answers `/api` in each of the four cases
+  (in the app or a browser, `server.js` or plain files): inside the app always the in-app
+  database, with no probe request.
+- **Safe updates** (part of `npm test`): `test/release-guards.test.js` fails if the app id or
+  the page origin (`https://localhost`) would change — either would open an empty database
+  after an update — or if the release key could be committed. `npm run release:android` runs
+  all of the above before it builds a release (`docs/RELEASE.md`).
+- **On a phone:** what no browser test can prove (where the WebView keeps the data, the real
+  storage limit, Auto Backup, airplane mode, updating over the old version) is a manual
+  checklist: `docs/PHONE-TEST-CHECKLIST.md`.
 
 ---
 
@@ -413,6 +423,11 @@ There is deliberately **no reset button inside the app**.
   every test that can run in a browser — but a browser always reports itself as non-native,
   so the Android-specific branch is never exercised. Try it on real hardware before putting
   real data in.
+- **Phase 2's phone-only parts are not yet checked on a device**: the WebView storage folder
+  and real limit, writing and pruning safety snapshots in the app's folder, Auto Backup and
+  restore, and whether the INTERNET permission can go. `docs/PHONE-TEST-CHECKLIST.md`.
+- **The phone database is limited to about 10 MB of `localStorage`.** Moving it is proposed,
+  not done: `docs/storage-proposal.md`.
 
 ---
 

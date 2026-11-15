@@ -26,6 +26,10 @@ development and test tool.
 - `npm run release:android` runs every test, raises `versionCode`/`versionName`, runs
   `android:sync` and builds the signed release APK (`--dry-run` to preview).
 - `docs/RELEASE.md`: back up the phone, build, install over the old app, check the data.
+- `docs/PHONE-TEST-CHECKLIST.md`: the checks only a real phone can do — where the WebView keeps
+  the data, the real storage limit, backups with categories, airplane mode, updating over the old
+  version, Auto Backup (`bmgr backupnow`, uninstall, reinstall) and a test build without the
+  INTERNET permission. Not yet run: no phone or emulator was available.
 
 ### Proposals (not implemented)
 - `docs/storage-proposal.md`: moving the phone database off `localStorage` (native SQLite plugin
