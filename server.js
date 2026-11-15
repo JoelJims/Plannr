@@ -114,6 +114,8 @@ const getOwner = () => OWNER_STMT.get();
 // The data-access layer. Required AFTER init() so it can prepare its statements against the
 // migrated schema. Every read/write touching one of the ledger tables goes through repo.*.
 const repo = require('./repo');
+// Request checks shared with the phone (size limits, malformed JSON, unknown /api routes).
+const requestRules = require('./request-rules');
 
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
@@ -137,22 +139,14 @@ const USERS_ROSTER_STMT = db.prepare('SELECT id, display_name AS displayName FRO
 const USER_EXISTS_STMT = db.prepare('SELECT 1 FROM users WHERE id = ?');
 const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
 
-// Two JSON body parsers: a tight 32kb cap for every normal route (no legitimate
-// auth/ledger request is larger), and a larger cap reserved for the data-backup
-// import, whose body is a full ledger export. The tight parser stays the global
-// default; the import route opts into the larger one explicitly (below), so the
-// 32kb hardening is unchanged everywhere else. Malformed JSON still -> 400.
-const jsonSmall = express.json({ limit: '32kb' });
-const jsonBackup = express.json({ limit: '20mb' });
-// Phase 6B: Save All batches many changed cash_out rows into ONE request, so the 32kb cap is too
-// small (≈90 rows). A dedicated 256kb parser (~700 rows) fits a whole realistic ledger in one
-// round trip; the route ALSO caps the row count explicitly (BATCH_MAX_ROWS) with a clear message.
-const jsonBatch = express.json({ limit: '256kb' });
-app.use((req, res, next) => {
-  if (req.method === 'POST' && req.path === '/api/backup/import') return next(); // parsed by jsonBackup on the route
-  if (req.method === 'POST' && /^\/api\/[a-z-]+\/batch$/.test(req.path)) return next(); // parsed by jsonBatch on the route
-  jsonSmall(req, res, next);
-});
+// JSON body parsing, one size limit per kind of route. The limits, which route gets which, and the
+// "too large" / "Invalid request." answers live in request-rules.js, shared with the phone
+// (public/local-api.js applies the same rules). 32 KB for every normal route; 256 KB for Save All
+// batches (the batch route ALSO caps the row count, BATCH_MAX_ROWS); 20 MB for restoring a backup.
+// Errors are answered by the global error handler at the end of this file.
+const JSON_PARSERS = Object.fromEntries(Object.entries(requestRules.BODY_LIMITS)
+  .map(([kind, limit]) => [kind, express.json({ limit })]));
+app.use((req, res, next) => JSON_PARSERS[requestRules.bodyKind(req.method, req.path)](req, res, next));
 
 // Single-user offline app: every request resolves to the fixed local owner, no session lookup.
 function currentUser(req) { return getOwner(); }
@@ -317,7 +311,7 @@ function makeLedgerCrud(opts) {
   // preserved: the attribution audit line logs per changed by_user_id, and a stored-NULL
   // by_user_id round-trips via validate(oldVal).
   if (opts.batch) {
-    app.post(`${basePath}/batch`, jsonBatch, ...byIdChain, (req, res) => {
+    app.post(`${basePath}/batch`, ...byIdChain, (req, res) => {
       const rows = req.body && Array.isArray(req.body.rows) ? req.body.rows : null;
       if (!rows) return res.status(400).json({ error: 'Expected a { rows: [...] } array.' });
       if (rows.length > BATCH_MAX_ROWS) return res.status(413).json({ error: `Too many rows in one save (${rows.length}); the maximum is ${BATCH_MAX_ROWS}. Save in smaller batches.` });
@@ -2220,7 +2214,7 @@ app.get('/api/backup/export', requireApiAuth, (req, res) => {
 // IMPORT (REPLACE, made safe): validate fully -> auto-snapshot current data ->
 // replace all ledger data in ONE transaction, preserving ids + foreign keys.
 // Never deletes before the replacement is proven valid; rolls back on any error.
-app.post('/api/backup/import', jsonBackup, requireApiAuth, (req, res) => {
+app.post('/api/backup/import', requireApiAuth, (req, res) => {
   // 1. VALIDATE — abort before changing anything.
   const v = validateBackup(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
@@ -2346,13 +2340,13 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   if (status >= 500 && isStorageFullError(err)) {
     return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
   }
-  // Body-parser "payload too large" (413 / entity.too.large): a Save All batch whose rows carry
-  // very long remarks can exceed the 256kb parser limit BEFORE the row-count check runs, which
-  // otherwise surfaces as a bare "Invalid request." Give it a clear message consistent with the
-  // batch row-cap 413 ("Save in smaller batches").
-  if (status === 413 || (err && err.type === 'entity.too.large')) {
-    return res.status(413).json({ error: 'That request was too large to process in one go — save fewer rows at a time (the batch limit is 500 rows).' });
+  // The JSON body parsers' own errors get the answers shared with the phone (request-rules.js):
+  // a body over its route's limit gets that route's "too large" message, and a body that is not a
+  // JSON object or array gets a plain "Invalid request.".
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json(requestRules.tooLarge(requestRules.bodyKind(req.method, req.path)));
   }
+  if (err && err.type === 'entity.parse.failed') return res.status(400).json(requestRules.invalidRequest());
   const body = { error: status >= 500 ? 'Something went wrong.' : 'Invalid request.' };
   if (!IS_PROD && err && err.message) body.detail = err.message; // dev aid only
   res.status(status).json(body);

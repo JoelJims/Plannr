@@ -10,7 +10,7 @@
 // - document: the browser fallback for a safety snapshot is a file download (a link it clicks).
 //
 // The shared modules that sync-public-modules.js copies from the repo root into public/ (db.js,
-// repo.js, ledgers.js, backup-format.js) are byte-identical copies. The phone code is given the root
+// repo.js, ledgers.js, backup-format.js, request-rules.js) are byte-identical copies. The phone code is given the root
 // files themselves, so both targets share one database connection and one module instance, and
 // public/db.js never creates a public/data folder. A stale copy fails loudly instead.
 'use strict';
@@ -21,7 +21,7 @@ const { pathToFileURL, fileURLToPath } = require('node:url');
 
 const ROOT = path.join(__dirname, '..');
 const PUB = path.join(ROOT, 'public');
-const SHARED = ['db.js', 'repo.js', 'ledgers.js', 'backup-format.js'];
+const SHARED = ['db.js', 'repo.js', 'ledgers.js', 'backup-format.js', 'request-rules.js'];
 
 function useRootCopiesOfSharedModules() {
   for (const f of SHARED) {

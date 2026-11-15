@@ -29,7 +29,8 @@ const PUBLIC = path.join(ROOT, 'public');
 // Phase 10b: ledgers.js moved here from public/ — it's now seed data db.js reads at init() time
 // (on both sides, same reasoning as db.js/repo.js themselves), not a page's runtime source.
 // Phase 2: backup-format.js — the JSON backup format, shared by server.js and local-api.js.
-const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js', 'backup-format.js'];
+// Cross-platform plan, step 1.2: request-rules.js — body limits, malformed JSON and unknown routes.
+const FILES = ['db.js', 'repo.js', 'db-engine.js', 'node-builtins-browser-stub.js', 'ledgers.js', 'backup-format.js', 'request-rules.js'];
 // Every package an import map points at by absolute /node_modules/... path — those paths only
 // resolve if the whole package directory is here too (see the header comment).
 const VENDOR_PACKAGES = [

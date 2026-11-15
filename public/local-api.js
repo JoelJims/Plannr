@@ -29,6 +29,7 @@
 import { db, isStorageFullError, rollbackQuietly } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as backupFormat from './backup-format.js';
+import * as requestRules from './request-rules.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
 // Phase 12: Capacitor/PdfGenerator are used ONLY inside the /api/overview/pdf handler below, but a
@@ -84,8 +85,8 @@ export function installFetchShim(repo) {
     return { regex: new RegExp('^' + parts.join('/') + '$'), paramNames };
   }
   // Mimics app.get/post/put/delete(path, ...middleware, handler) — only the LAST function matters;
-  // requireApiAuth/jsonBatch/jsonBackup/editGate are all no-ops or already-handled concerns here
-  // (there is no session to check in this single-user app; body parsing is a plain JSON.parse below).
+  // requireApiAuth/editGate are no-ops here (there is no session to check in this single-user app),
+  // and the body is read in window.fetch below by request-rules.js, the same rules as server.js.
   function on(method) {
     return (routePath, ...fns) => routes.push({ method, ...compilePath(routePath), handler: fns[fns.length - 1] });
   }
@@ -1798,8 +1799,11 @@ export function installFetchShim(repo) {
     const u = new URL(rawUrl, window.location.origin);
     const pathname = u.pathname;
     const query = Object.fromEntries(u.searchParams);
-    let body = {};
-    if (init && init.body) { try { body = JSON.parse(init.body); } catch { body = {}; } }
+    // Same body rules as server.js (request-rules.js): a size limit per kind of route, and a body
+    // that is not a JSON object or array is refused instead of being read as {}.
+    const parsed = requestRules.parseJsonBody(init && init.body != null ? String(init.body) : '', requestRules.bodyKind(method, pathname));
+    if (parsed.error) return toResponse(new Res().status(parsed.status).json(parsed.error));
+    const body = parsed.body;
 
     for (const r of routes) {
       if (r.method !== method) continue;
