@@ -30,6 +30,7 @@ import { db, isStorageFullError, rollbackQuietly } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as backupFormat from './backup-format.js';
 import * as requestRules from './request-rules.js';
+import { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
 import * as peopleRoutes from './core/routes/people.js';
 import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import * as ledgerCrud from './core/ledger-crud.js';
@@ -112,8 +113,6 @@ export function installFetchShim(repo) {
   const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
   function requireApiAuth(req, res, next) { req.user = getOwner(); next(); }
 
-  const str = (v) => String(v ?? '').trim();
-
   // Cross-platform plan, step 1.3: the route groups already moved to core/routes/ (the one copy the
   // dev server runs too). coreContext is what they need from the phone's side.
   const coreContext = {
@@ -138,14 +137,6 @@ export function installFetchShim(repo) {
   const CASH_IN_BY_TYPES = new Set(['user', 'relative', 'custom']);
   const REASON_MAX = 300;
   const LABEL_MAX = 60;
-
-  function parsePaise(v) {
-    const s = String(v == null ? '' : v).trim().replace(/,/g, '');
-    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
-    const [ip, dp = ''] = s.split('.');
-    const paise = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
-    return Number.isSafeInteger(paise) && paise > 0 ? paise : null;
-  }
 
   function resolveBy(body, existingByUserId) {
     const byType = str(body.byType);
@@ -480,41 +471,6 @@ export function installFetchShim(repo) {
   });
 
   const CONTRACTOR_MAX = 100;
-
-  function parseIsoDate(v) {
-    const s = str(v);
-    if (s === '') return { date: null };
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return { error: 'Enter a valid date (YYYY-MM-DD).' };
-    const [y, m, d] = s.split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {
-      return { error: 'Enter a valid date (YYYY-MM-DD).' };
-    }
-    return { date: s };
-  }
-
-  function parseAmountFilter(v) {
-    const s = str(v);
-    if (s === '') return { paise: null };
-    const p = parsePaise(s);
-    if (p === null) return { error: 'invalid' };
-    return { paise: p };
-  }
-
-  function parseLedgerFilters(req) {
-    const q = str(req.query.q).slice(0, 100).trim();
-    const s = parseIsoDate(req.query.start); if (s.error) return { error: 'Enter a valid start date (YYYY-MM-DD).' };
-    const e = parseIsoDate(req.query.end); if (e.error) return { error: 'Enter a valid end date (YYYY-MM-DD).' };
-    if (s.date && e.date && s.date > e.date) return { error: 'Start date must be on or before the end date.' };
-    const min = parseAmountFilter(req.query.min); if (min.error) return { error: 'Enter a valid minimum amount (greater than 0).' };
-    const max = parseAmountFilter(req.query.max); if (max.error) return { error: 'Enter a valid maximum amount (greater than 0).' };
-    if (min.paise != null && max.paise != null && min.paise > max.paise) return { error: 'The minimum amount must be less than or equal to the maximum.' };
-    const ledger = str(req.query.ledger).slice(0, 40) || null;
-    const subledger = ledger ? (str(req.query.subledger).slice(0, 40) || null) : null;
-    const filters = { start: s.date, end: e.date, min: min.paise, max: max.paise, ledger, subledger, q: q || null };
-    const active = !!(filters.start || filters.end || filters.min != null || filters.max != null || filters.ledger || filters.q);
-    return { filters, active };
-  }
 
   function parsePriceOptional(v) {
     const s = str(v);
@@ -952,13 +908,6 @@ export function installFetchShim(repo) {
     contract: repo.trash({ table: 'contract', select: 'SELECT * FROM contract', alias: '' }),
     contractor_payments: repo.trash({ table: 'contractor_payments', select: CONTRACTOR_PAYMENTS_SELECT, alias: 'cp' }),
   };
-
-  function fmtRs(paise) {
-    const neg = paise < 0; paise = Math.abs(paise);
-    const rupees = Math.floor(paise / 100);
-    const p = String(paise % 100).padStart(2, '0');
-    return (neg ? '-' : '') + '₹' + rupees.toLocaleString('en-IN') + '.' + p;
-  }
 
   localApp.get('/api/trash', (req, res) => {
     const trash = {};

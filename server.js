@@ -116,6 +116,8 @@ const getOwner = () => OWNER_STMT.get();
 const repo = require('./repo');
 // Request checks shared with the phone (size limits, malformed JSON, unknown /api routes).
 const requestRules = require('./request-rules');
+// Pure input checks and formatting, shared with the phone (cross-platform plan, step 1.3).
+const { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
 
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
@@ -148,14 +150,6 @@ app.use((req, res, next) => JSON_PARSERS[requestRules.bodyKind(req.method, req.p
 
 // Single-user offline app: every request resolves to the fixed local owner, no session lookup.
 function currentUser(req) { return getOwner(); }
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
-// Normalize a text field: coerce to string and trim. NOT for passwords — a
-// leading or trailing space is a legitimate password character.
-const str = (v) => String(v ?? '').trim();
 
 // ---------------------------------------------------------------------------
 // API routes
@@ -196,17 +190,6 @@ const { makeLedgerCrud, LEDGER_CRUDS } = require('./core/ledger-crud.js').create
 const CASH_IN_BY_TYPES = new Set(['user', 'relative', 'custom']);
 const REASON_MAX = 300;
 const LABEL_MAX = 60;
-
-// Parse a rupees amount (string/number, up to 2 decimals, commas allowed) into
-// an exact INTEGER number of paise using string math — no float rounding drift.
-// Returns a positive safe integer, or null if invalid / not greater than 0.
-function parsePaise(v) {
-  const s = String(v == null ? '' : v).trim().replace(/,/g, '');
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
-  const [ip, dp = ''] = s.split('.');
-  const paise = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
-  return Number.isSafeInteger(paise) && paise > 0 ? paise : null;
-}
 
 // Validate/resolve the "By" attribution from a request body. `existingByUserId` is the row's
 // stored by_user_id on EDIT (the PUT path passes it); undefined on CREATE.
@@ -625,48 +608,6 @@ makeLedgerCrud({
 // (contract_payment_dates child). Money is INTEGER paise throughout.
 // ---------------------------------------------------------------------------
 const CONTRACTOR_MAX = 100;
-
-// Optional ISO 'YYYY-MM-DD' date. Empty -> null. Rejects malformed or impossible
-// dates (e.g. 2026-13-40). -> { date: string|null } or { error }.
-function parseIsoDate(v) {
-  const s = str(v);
-  if (s === '') return { date: null };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return { error: 'Enter a valid date (YYYY-MM-DD).' };
-  const [y, m, d] = s.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {
-    return { error: 'Enter a valid date (YYYY-MM-DD).' };
-  }
-  return { date: s };
-}
-
-// Part A — an OPTIONAL amount filter bound (rupees). Empty -> no bound (null). Otherwise a valid
-// positive paise amount (reuses parsePaise). -> { paise: number|null } or { error }.
-function parseAmountFilter(v) {
-  const s = str(v);
-  if (s === '') return { paise: null };
-  const p = parsePaise(s);
-  if (p === null) return { error: 'invalid' };
-  return { paise: p };
-}
-
-// Part A — parse the outflow search/filter query into a repo.crud.search filters object. Every field is
-// optional; an all-empty query means "no filters" (active:false → the full list). Dates reuse
-// parseIsoDate; amounts reuse parsePaise via parseAmountFilter; text/ledger are bounded-length strings.
-function parseLedgerFilters(req) {
-  const q = str(req.query.q).slice(0, 100).trim();
-  const s = parseIsoDate(req.query.start); if (s.error) return { error: 'Enter a valid start date (YYYY-MM-DD).' };
-  const e = parseIsoDate(req.query.end); if (e.error) return { error: 'Enter a valid end date (YYYY-MM-DD).' };
-  if (s.date && e.date && s.date > e.date) return { error: 'Start date must be on or before the end date.' };
-  const min = parseAmountFilter(req.query.min); if (min.error) return { error: 'Enter a valid minimum amount (greater than 0).' };
-  const max = parseAmountFilter(req.query.max); if (max.error) return { error: 'Enter a valid maximum amount (greater than 0).' };
-  if (min.paise != null && max.paise != null && min.paise > max.paise) return { error: 'The minimum amount must be less than or equal to the maximum.' };
-  const ledger = str(req.query.ledger).slice(0, 40) || null;
-  const subledger = ledger ? (str(req.query.subledger).slice(0, 40) || null) : null;
-  const filters = { start: s.date, end: e.date, min: min.paise, max: max.paise, ledger, subledger, q: q || null };
-  const active = !!(filters.start || filters.end || filters.min != null || filters.max != null || filters.ledger || filters.q);
-  return { filters, active };
-}
 
 // Optional manually-typed total price. Empty -> null; otherwise a valid positive
 // paise amount (reuses parsePaise). -> { paise: number|null } or { error }.
@@ -1638,14 +1579,6 @@ function warmPdfBrowser() {
   touchPdfActivity();
 }
 
-// paise -> "₹12,34,567.89" (Indian grouping; exact integer math). Server-side twin of
-// the browser formatPaise, used only for the print HTML.
-function fmtRs(paise) {
-  const neg = paise < 0; paise = Math.abs(paise);
-  const rupees = Math.floor(paise / 100);
-  const p = String(paise % 100).padStart(2, '0');
-  return (neg ? '-' : '') + '₹' + rupees.toLocaleString('en-IN') + '.' + p;
-}
 const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Amber-family palette for the printed pie; Custom = deep amber (PDF_CUSTOM_COLOR).
