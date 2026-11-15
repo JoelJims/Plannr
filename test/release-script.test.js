@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { bumpVersions, nextVersionName, testCommands } = require('../release-android');
+const { bumpVersions, nextVersionName, testCommands, signingProblem } = require('../release-android');
 
 const ROOT = path.join(__dirname, '..');
 const GRADLE = path.join(ROOT, 'android', 'app', 'build.gradle');
@@ -15,6 +15,11 @@ test('bumpVersions raises versionCode by one and bumps versionName, touching not
   const r = bumpVersions(sample);
   assert.deepStrictEqual([r.from, r.to], [{ code: 7, name: '1.4' }, { code: 8, name: '1.5' }]);
   assert.strictEqual(r.text, sample.replace('versionCode 7', 'versionCode 8').replace('"1.4"', '"1.5"'));
+});
+
+test('bumpVersions keeps Windows line endings', () => {
+  const crlf = sample.replace(/\n/g, '\r\n');
+  assert.strictEqual(bumpVersions(crlf).text, bumpVersions(sample).text.replace(/\n/g, '\r\n'));
 });
 
 test('bumpVersions takes an explicit versionName', () => {
@@ -47,6 +52,12 @@ test('the release runs npm test and every UI suite (except test:slow)', () => {
   assert.ok(ui.length >= 10);
   for (const k of ui) assert.ok(cmds.includes(`npm run -s ${k}`), k);
   assert.ok(!cmds.some((c) => c.includes('test:slow')));
+});
+
+test('no release without the signing key, unless --allow-unsigned', () => {
+  assert.strictEqual(signingProblem({ signed: true, allowUnsigned: false }), null);
+  assert.match(signingProblem({ signed: false, allowUnsigned: false }), /UNSIGNED/);
+  assert.strictEqual(signingProblem({ signed: false, allowUnsigned: true }), null);
 });
 
 test('--dry-run shows the plan and changes nothing', () => {

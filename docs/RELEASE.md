@@ -20,8 +20,8 @@ Always update a phone with the same kind of build it already has.
 ## 1. Back up the phone first
 
 1. Open Plannr on the phone → **Data Backup**.
-2. **Export encrypted backup** (the whole database). Choose a password you will remember.
-3. Also **Export JSON backup** (format v2: everything, readable without a password).
+2. **Download encrypted backup** (the whole database). Choose a password you will remember.
+3. Also **Download JSON backup** (format v2: everything, readable without a password).
 4. Save both files **off the phone** (share them to your computer, Drive or e-mail) and check
    each file is there and not 0 bytes.
 5. Note a few numbers to compare after the update: the number of ledgers, one ledger's total,
@@ -30,7 +30,8 @@ Always update a phone with the same kind of build it already has.
 ## 2. Build
 
 You need `plannr-release.keystore` and `keystore.properties` in the project root (see
-`SETUP.md` §2). Without them the release APK is **unsigned** and the phone will refuse it.
+`SETUP.md` §2). Without them the release APK would be **unsigned** and the phone would refuse it,
+so `npm run release:android` stops before changing anything.
 
 ```sh
 npm run release:android -- --dry-run   # shows the version bump and the steps; changes nothing
@@ -83,5 +84,6 @@ version (higher `versionCode`). As a last resort, restore the backup from step 1
 
 ## If the data is gone
 
-Restore the encrypted backup from step 1 on the **Data Backup** page (it takes a safety snapshot
-of whatever is there first). The JSON backup restores too, on the same page.
+On the **Data Backup** page, **Restore from encrypted backup** with the file from step 1 (it takes a
+safety snapshot of whatever is there first). The JSON backup restores with **Import / Restore** on
+the same page.

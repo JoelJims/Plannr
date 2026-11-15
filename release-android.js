@@ -14,6 +14,8 @@
 // Usage:  npm run release:android                        versionName 1.0 -> 1.1, versionCode +1
 //         npm run release:android -- --version-name 2.0  choose the versionName
 //         npm run release:android -- --dry-run           show what would happen; change nothing
+// Without keystore.properties it stops before doing anything: an unsigned APK cannot be installed
+// over the app on the phone (add --allow-unsigned to build one anyway, e.g. to test the build).
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -39,8 +41,9 @@ function nextVersionName(name) {
 // Returns { text, from: {code, name}, to: {code, name} } with exactly one versionCode and one
 // versionName line rewritten. Throws if either is missing or appears more than once.
 function bumpVersions(gradleText, { versionName } = {}) {
-  const codeRe = /^(\s*versionCode\s+)(\d+)\s*$/m;
-  const nameRe = /^(\s*versionName\s+)"([^"]+)"\s*$/m;
+  // [ \t] rather than \s, so a match never spans lines and a CRLF line keeps its \r.
+  const codeRe = /^([ \t]*versionCode[ \t]+)(\d+)([ \t]*\r?)$/m;
+  const nameRe = /^([ \t]*versionName[ \t]+)"([^"]+)"([ \t]*\r?)$/m;
   for (const [re, label] of [[codeRe, 'versionCode'], [nameRe, 'versionName']]) {
     const all = gradleText.match(new RegExp(re.source, 'gm')) || [];
     if (all.length !== 1) throw new Error(`expected exactly one ${label} line in build.gradle, found ${all.length}`);
@@ -49,8 +52,14 @@ function bumpVersions(gradleText, { versionName } = {}) {
   const name = nameRe.exec(gradleText)[2];
   const to = { code: code + 1, name: versionName || nextVersionName(name) };
   if (to.name === name) throw new Error(`versionName is already "${name}"`);
-  const text = gradleText.replace(codeRe, `$1${to.code}`).replace(nameRe, `$1"${to.name}"`);
+  const text = gradleText.replace(codeRe, `$1${to.code}$3`).replace(nameRe, `$1"${to.name}"$3`);
   return { text, from: { code, name }, to };
+}
+
+// Why a release must not go ahead, or null. An unsigned release APK cannot update the installed app.
+function signingProblem({ signed, allowUnsigned }) {
+  if (signed || allowUnsigned) return null;
+  return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
 }
 
 function run(cmd, args, opts = {}) {
@@ -72,8 +81,10 @@ function main(argv) {
   const tests = testCommands(pkg);
 
   console.log(`Plannr Android release: versionCode ${bump.from.code} -> ${bump.to.code}, versionName ${bump.from.name} -> ${bump.to.name}`);
-  console.log(signed ? 'Signing: release key (keystore.properties found).' : 'WARNING: keystore.properties not found — the APK will be UNSIGNED and cannot be installed over the existing app.');
+  console.log(signed ? 'Signing: release key (keystore.properties found).' : 'Signing: keystore.properties NOT found.');
+  const problem = signingProblem({ signed, allowUnsigned: argv.includes('--allow-unsigned') });
   if (dryRun) {
+    if (problem) console.log(`Would stop: ${problem}`);
     console.log('\nDry run — would run, in order:');
     for (const [c, a] of tests) console.log(`  ${c} ${a.join(' ')}`);
     console.log('  (write the new versions to android/app/build.gradle)');
@@ -82,6 +93,7 @@ function main(argv) {
     console.log('Nothing was changed.');
     return 0;
   }
+  if (problem) { console.error(`\n${problem}\nNothing was changed.`); return 1; }
 
   console.log('\n== 1/4 Tests ==');
   for (const [c, a] of tests) {
@@ -105,7 +117,7 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { bumpVersions, nextVersionName, testCommands };
+module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem };
 if (require.main === module) {
   try { process.exit(main(process.argv.slice(2))); } catch (e) { console.error(`release:android: ${e.message}`); process.exit(1); }
 }
