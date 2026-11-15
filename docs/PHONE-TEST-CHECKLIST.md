@@ -27,7 +27,7 @@ the table at the end.
 | Size | 5,988,128 bytes |
 | SHA-256 | `5e304ebd31c481b2555455b42b379c45309161c2dc8326813eec65cca588a1af` |
 | Version | versionCode 1, versionName 1.0; debug-signed |
-| INTERNET permission | still present (removing it is the separate branch `plannr-no-internet`) |
+| INTERNET permission | present, and it stays (offline first: the core never uses it; see `CONTRIBUTING.md`) |
 
 **This round uses test data only.** Do not restore your real backup on the phone yet; that comes
 after these checks pass and you approve it.
@@ -45,8 +45,8 @@ If Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a Plannr signed with an
 release build) is already on the phone. Uninstalling it deletes its data: if it holds anything you
 need, export both backups off the phone first, or stop and ask.
 
-Check 7 needs a build without the INTERNET permission, so it cannot be done with this APK. Leave
-its row empty this round.
+Check 7 is skipped: Plannr keeps the INTERNET permission (owner's decision, 2026-11-15). Check 4
+(airplane mode) is the offline check on the phone.
 
 ## Running these on an emulator (no phone needed)
 
@@ -198,24 +198,17 @@ adb install android/app/build/outputs/apk/debug/Plannr-debug.apk
 
 If the data does not come back, restore the exported backup on the Data Backup page.
 
-## 7. Does anything need the INTERNET permission? (test only — do not commit)
+## 7. Without the INTERNET permission: skipped (decision, 2026-11-15)
 
-Plannr makes no network requests: no page loads anything from outside the app (checked:
-`public/` has no external URLs), and the app is served from inside the APK. Capacitor's template
-adds the permission anyway. To test without it, in a throwaway local change:
+Plannr keeps the INTERNET permission and stays **offline first**:
+- the core (logging, editing, backups, PDF creation) never uses the network and works with no
+  connection;
+- any future online feature is optional and only used when you use it (`CONTRIBUTING.md`,
+  "Offline first").
 
-1. Delete the line `<uses-permission android:name="android.permission.INTERNET" />` from
-   `android/app/src/main/AndroidManifest.xml`.
-2. Build a debug APK and install it over the current debug build.
-3. `adb shell dumpsys package com.plannr.app | grep -i "android.permission.INTERNET"` prints
-   nothing.
-
-- [ ] The app opens and every page loads.
-- [ ] Add/edit/delete, backups (export and restore), PDF export and share, notifications all work.
-- [ ] Nothing in `adb logcat | grep -i -E "ERR_|net::|SecurityException"` while doing this.
-
-Then **undo the change** (`git checkout android/app/src/main/AndroidManifest.xml`) and report the
-result. Removing the permission for real is a separate decision.
+The branch `plannr-no-internet` (which removes the permission) is kept as a reference, not merged.
+The emulator result below is from that branch. Offline behaviour is checked by check 4 on the
+phone, and by `test/offline.test.js` and `npm run test:offline` on every change.
 
 ## 8. What changed in this build (plan steps 1.1 and 1.2)
 
@@ -278,5 +271,5 @@ Date tested:
 | 4 | Airplane mode | | |
 | 5 | Update over old version | | |
 | 6 | Auto Backup (`bmgr backupnow`, uninstall, reinstall) | | |
-| 7 | Without INTERNET | not in this build | needs the `plannr-no-internet` build |
+| 7 | Without INTERNET | skipped | the permission stays (decision, 2026-11-15) |
 | 8 | This build's changes (PDF total row, restores still fit) | | |

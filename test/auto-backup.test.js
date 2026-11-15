@@ -50,5 +50,5 @@ test('the snapshot folder in the rules is the one the app writes to', () => {
 });
 
 test('README states the privacy position exactly', () => {
-  assert.ok(read('README.md').includes("Plannr makes no network requests. Android's own Auto Backup may copy the app's data to your Google account; you can turn this off in Android settings."));
+  assert.ok(read('README.md').includes("Plannr works fully offline and your data stays on your device. Optional features use the internet only when you use them. Android's own Auto Backup may save a copy to your Google account."));
 });

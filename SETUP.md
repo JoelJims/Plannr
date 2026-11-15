@@ -238,6 +238,7 @@ npm run test:slow            # the slower suite, run one at a time
 npm run test:ui              # visual tests against server.js
 npm run test:static-hosting  # visual tests against a real local-server.js process
 npm run test:backup-crypto   # round-trips the encrypted backup through the real code
+npm run test:offline         # every page in a real browser with no connection
 ```
 
 Playwright downloads its own browsers. If a visual suite complains one is missing, run

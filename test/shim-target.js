@@ -72,7 +72,13 @@ function fakePage() {
   };
   const element = () => ({ click() {}, remove() {}, setAttribute() {}, style: {} });
   globalThis.window = {
-    fetch: async (input) => { throw new Error(`not an /api request (no page server on the phone): ${typeof input === 'string' ? input : input.url}`); },
+    // The page's own fetch: only reached by a request the /api router does not take. On the phone
+    // that would go to the network, so it is recorded (test/offline.test.js checks the list).
+    fetch: async (input) => {
+      const url = typeof input === 'string' ? input : input.url;
+      outsideRequests.push(url);
+      throw new Error(`not an /api request (no page server on the phone): ${url}`);
+    },
     location: { origin: 'https://localhost' },
     localStorage,
     scrypt: require('scrypt-js'),
@@ -80,6 +86,7 @@ function fakePage() {
   globalThis.document = { createElement: element, body: { appendChild() {}, prepend() {} } };
 }
 
+const outsideRequests = [];
 let shimFetch = null;
 async function start() {
   if (shimFetch) return;
@@ -119,4 +126,4 @@ async function pdfHtml({ part, theme, range }) {
   return fake.pdfRequests[fake.pdfRequests.length - 1].data;
 }
 
-module.exports = { start, request, fetchRaw, pdfHtml };
+module.exports = { start, request, fetchRaw, pdfHtml, outsideRequests };

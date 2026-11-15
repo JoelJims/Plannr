@@ -244,6 +244,10 @@ going over an allowance is a normal thing to happen, not an error.
   and import round trip including every rejection case, and the save/confirm flow on all
   four file-producing paths in Data Backup.
 - **`npm run test:backup-crypto`** — round-trips the encrypted backup through the real code.
+- **`npm run test:offline`** — offline first: every page in a real browser with no connection
+  (outside requests blocked and recorded, `navigator.onLine` false). Logs, edits and deletes an
+  entry, downloads both backups and presses the PDF button; fails on any outside request.
+  `test/offline.test.js` (in `npm test`, both passes) covers the same at the code level.
 - **`npm run test:backup-roundtrip`** — the phone's backups rebuild the app exactly: fill with
   the fixture, back up (JSON and encrypted), wipe, restore, compare every table row by row;
   the Recycle Bin then lists the fixture's deleted rows.

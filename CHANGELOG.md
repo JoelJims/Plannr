@@ -61,6 +61,24 @@ development and test tool.
 - The PDF and encrypted-backup tests now check the phone's own code in the second pass (through
   test stand-ins for the PDF plugin and the sqlite-wasm database copy).
 
+### Offline first (owner's decision, 2026-11-15)
+- The Android app keeps the INTERNET permission. The branch that removed it (`plannr-no-internet`)
+  is kept as a reference, not merged; phone checklist check 7 is skipped.
+- The core never needs the network, and two tests hold it to that:
+  - `test/offline.test.js` runs on both the dev server and the phone code. It checks that no app
+    file loads anything from outside and that the PDF page needs nothing from outside. Then it logs,
+    edits and deletes entries, backs up and restores, and makes the PDF page while every outside
+    connection is refused.
+  - `npm run test:offline` opens every page in a real browser with no connection. It logs, edits
+    and deletes an entry through the real form, downloads both backups and presses the PDF button,
+    and fails on any request outside the app.
+- The rule for any future online feature (optional, clearly labelled, used only when the user uses
+  it, a clear message offline, never needed for logging data) is in `CONTRIBUTING.md` and the
+  cross-platform plan.
+- Privacy text (README): "Plannr works fully offline and your data stays on your device. Optional
+  features use the internet only when you use them. Android's own Auto Backup may save a copy to
+  your Google account."
+
 ### Proposals (not implemented)
 - `docs/storage-proposal.md`: moving the phone database off `localStorage` (native SQLite plugin
   or sqlite-wasm on OPFS), with a one-time migration plan, a safety snapshot and a way back.

@@ -48,6 +48,31 @@ forward. There is no server to fix it later.
 4. Run everything: `npm test` and every `npm run test:*` UI suite. Then try it on a phone: install
    the new build over the old one and check the data is still there (`docs/RELEASE.md`).
 
+## Offline first
+
+Plannr works fully offline. The Android app keeps the INTERNET permission (owner's decision,
+2026-11-15), but nothing in the core of the app may need it: logging, editing, backups and PDF
+creation work with no connection and make no network request.
+
+Any future online feature must be:
+
+1. **Optional.** Plannr works fully without it.
+2. **Clearly labelled** as using the internet, where the user turns it on or uses it.
+3. **Used only when the user uses it.** Nothing goes online in the background or on its own.
+4. **Clear when offline.** With no connection it shows a plain message saying so, and nothing else
+   breaks.
+5. **Never needed for logging data.** Adding, editing and deleting entries, backups and PDFs never
+   depend on it.
+
+Two tests hold the core to this:
+
+- `test/offline.test.js` runs in `npm test` against both the dev server and the phone code. It
+  checks that no app file loads anything from outside, that the PDF page needs nothing from
+  outside, and that the core actions work while every outside connection is refused.
+- `npm run test:offline` opens every page in a real browser with no connection.
+
+A new online feature needs its own test showing its offline message.
+
 ## Other rules
 
 - Never open, change or delete a real database (`data/plannr.db`) in tests. Tests use temporary

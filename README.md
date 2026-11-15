@@ -91,7 +91,7 @@ More documents:
 
 ## Privacy and backups
 
-Plannr makes no network requests. Android's own Auto Backup may copy the app's data to your Google account; you can turn this off in Android settings.
+Plannr works fully offline and your data stays on your device. Optional features use the internet only when you use them. Android's own Auto Backup may save a copy to your Google account.
 
 What Auto Backup copies is limited to the ledger and the app's last three safety snapshots
 (`android/app/src/main/res/xml/backup_rules.xml`). The backup files you export yourself from the Data

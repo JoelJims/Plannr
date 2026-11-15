@@ -6,9 +6,21 @@ the next. Written 2026-11-15 on branch `plannr-phase2`.
 
 Progress: steps 1.1 and 1.2 done on 2026-11-15 (see the notes under the §8 table).
 
-Plannr stays single-user and offline everywhere. Each person on Android, Windows, macOS or Linux
-has their own separate data. There is no sync, no server and no network. Data moves between
-devices only as a backup file the person saves and opens themselves.
+Plannr stays single-user and offline-first everywhere. Each person on Android, Windows, macOS or
+Linux has their own separate data. There is no sync and no server. Data moves between devices only
+as a backup file the person saves and opens themselves.
+
+**Offline first (owner's decision, 2026-11-15).** Plannr works fully offline. The Android app keeps
+the INTERNET permission, but the core never needs it: logging, editing, backups and PDF creation
+work with no connection and make no network request (`test/offline.test.js`, `npm run
+test:offline`). Any future online feature, on any platform, must be:
+- optional;
+- clearly labelled;
+- used only when the user uses it;
+- clear with a message when offline;
+- never needed for logging data.
+
+The full rule is in `CONTRIBUTING.md` ("Offline first"). The desktop app follows the same rule.
 
 **Rules for the whole plan**
 
@@ -459,9 +471,10 @@ Signing is decided again once real users exist.
 - **LICENSE: MIT** (decided). `LICENSE` becomes the MIT text with "Copyright (c) 2026 Joel
   Jims", and `package.json` says `"license": "MIT"` (today both say the Unlicense). Done in step
   5.3.
-- **`PRIVACY.md`** (decided wording):
-  > Plannr never sends your data anywhere. Android's own Auto Backup may save a copy to your
-  > Google account; you can turn this off in Android settings.
+- **`PRIVACY.md`** (decided wording, updated 2026-11-15):
+  > Plannr works fully offline and your data stays on your device. Optional features use the
+  > internet only when you use them. Android's own Auto Backup may save a copy to your Google
+  > account.
 
   The README links to it. Install docs say where the data lives on each OS (§4.4).
 - **Install steps for each OS**, in `INSTALL.md` and linked from README:
@@ -561,6 +574,12 @@ Phase 2 scripts.
 4. **Android Auto Backup stays on.** The privacy text says so, in the owner's wording (§7).
 5. **Signing: later.**
 6. **Desktop reminders: only while Plannr is open**, for now.
+7. **Offline first; the INTERNET permission stays** (later on 2026-11-15).
+   - `plannr-no-internet` is not merged. It is kept as a reference.
+   - Checklist check 7 is skipped.
+   - The core must work with no connection and is tested for it.
+   - The rule for any future online feature is at the top of this plan and in `CONTRIBUTING.md`.
+   - The privacy text is updated (§7).
 
 ---
 
