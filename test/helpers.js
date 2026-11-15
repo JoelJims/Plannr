@@ -75,6 +75,13 @@ async function raw(method, urlPath, body) {
   const r = await fetch(base + urlPath, init);
   return { status: r.status, json: () => r.json(), bytes: async () => Buffer.from(await r.arrayBuffer()) };
 }
+// The HTML page the Overview PDF is made from, built by the target's own code: server.js's builder
+// (app._overviewPdfHtml), or on the phone target the page its PDF route hands to the PDF plugin.
+// Only the parts the PDF route offers on both.
+async function pdfHtml({ part = 'full', theme = 'light', range = { start: null, end: null } } = {}) {
+  if (!['full', 'pie', 'table', 'ledger'].includes(part)) throw new Error(`the PDF route has no part "${part}"`);
+  return shim ? shim.pdfHtml({ part, theme, range }) : app._overviewPdfHtml({ part, theme, range });
+}
 const get = (p, o) => req('GET', p, o);
 const post = (p, body, o) => req('POST', p, Object.assign({ body }, o));
 const put = (p, body, o) => req('PUT', p, Object.assign({ body }, o));
@@ -144,6 +151,6 @@ process.on('exit', () => { for (const s of ['', '-wal', '-shm']) { try { fs.unli
 
 module.exports = {
   app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
-  startApp, stopApp, req, raw, get, post, put, del, clearLedger,
+  startApp, stopApp, req, raw, pdfHtml, get, post, put, del, clearLedger,
   seedUser, seedSession, seedLoggedIn, seedContract, seedPayment, seedCashOut, seedCashIn,
 };

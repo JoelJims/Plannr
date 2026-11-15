@@ -10,9 +10,13 @@
 // - document: the browser fallback for a safety snapshot is a file download (a link it clicks).
 //
 // The shared modules that sync-public-modules.js copies from the repo root into public/ (db.js,
-// repo.js, ledgers.js, backup-format.js, request-rules.js) are byte-identical copies. The phone code is given the root
-// files themselves, so both targets share one database connection and one module instance, and
-// public/db.js never creates a public/data folder. A stale copy fails loudly instead.
+// repo.js, ledgers.js, backup-format.js, request-rules.js) are byte-identical copies. The phone
+// code is given the root files themselves, so both targets share one database connection and one
+// module instance, and public/db.js never creates a public/data folder. A stale copy fails loudly.
+//
+// Platform services the phone code reaches through Capacitor plugins get test stand-ins, imported
+// by public/local-api.js only:
+// - the PDF plugin (shim-capacitor-fake.mjs) records the PDF page, so tests can check its HTML.
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
@@ -22,6 +26,10 @@ const { pathToFileURL, fileURLToPath } = require('node:url');
 const ROOT = path.join(__dirname, '..');
 const PUB = path.join(ROOT, 'public');
 const SHARED = ['db.js', 'repo.js', 'ledgers.js', 'backup-format.js', 'request-rules.js'];
+const LOCAL_API = path.join(PUB, 'local-api.js');
+const CAPACITOR_IMPORTS = ['@capacitor/core', '@capgo/capacitor-pdf-generator'];
+const FAKE_CAPACITOR = pathToFileURL(path.join(__dirname, 'shim-capacitor-fake.mjs')).href;
+const isLocalApi = (url) => !!url && url.startsWith('file:') && fileURLToPath(url).toLowerCase() === LOCAL_API.toLowerCase();
 
 function useRootCopiesOfSharedModules() {
   for (const f of SHARED) {
@@ -31,6 +39,10 @@ function useRootCopiesOfSharedModules() {
   }
   Module.registerHooks({
     resolve(specifier, context, nextResolve) {
+      // The PDF route's Capacitor imports get the recording stand-ins (shim-capacitor-fake.mjs).
+      if (CAPACITOR_IMPORTS.includes(specifier) && isLocalApi(context.parentURL)) {
+        return { url: FAKE_CAPACITOR, format: 'module', shortCircuit: true };
+      }
       const r = nextResolve(specifier, context);
       if (r.url && r.url.startsWith('file:')) {
         const p = fileURLToPath(r.url);
@@ -89,4 +101,17 @@ async function request(method, urlPath, { body } = {}) {
 // The shim's own Response-like object (json(), text(), blob()), for binary answers.
 const fetchRaw = (urlPath, init) => shimFetch(urlPath, init);
 
-module.exports = { start, request, fetchRaw };
+// The HTML page the phone's PDF route hands to the PDF plugin, through the real route.
+async function pdfHtml({ part, theme, range }) {
+  const fake = await import(FAKE_CAPACITOR);
+  const q = new URLSearchParams({ part, theme });
+  if (range.start) q.set('start', range.start);
+  if (range.end) q.set('end', range.end);
+  const before = fake.pdfRequests.length;
+  const r = await request('GET', `/api/overview/pdf?${q}`);
+  if (r.status !== 200) throw new Error(`the phone's PDF route answered ${r.status}: ${JSON.stringify(r.json || r.text)}`);
+  if (fake.pdfRequests.length !== before + 1) throw new Error("the phone's PDF route did not call the PDF plugin");
+  return fake.pdfRequests[fake.pdfRequests.length - 1].data;
+}
+
+module.exports = { start, request, fetchRaw, pdfHtml };

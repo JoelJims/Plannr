@@ -17,12 +17,14 @@ test('Part C1 — owed stays NEGATIVE in computeOverview; the PDF prints "Overpa
   const ov = await H.get('/api/overview', { cookie });
   assert.ok(ov.json.money.owedToContractorsPaise < 0, 'underlying owed is signed (negative), never clamped');
   assert.strictEqual(ov.json.money.owedToContractorsPaise, -1000000);
-  const html = H.app._overviewPdfHtml({ part: 'summary', theme: 'light', range: { start: null, end: null } });
+  const html = await H.pdfHtml({ part: 'full' });
   assert.match(html, /Overpaid by ₹10,000/, 'PDF owed section shows "Overpaid by ₹X"');
   assert.doesNotMatch(html, /-₹10,000/, 'no negative "-₹" owed figure in the PDF');
 });
 
 // ---- Part C2 — summary composition (scheduled/catch-up) vs full (manual) ----
+// The 'summary' part is not offered by the PDF route on either platform (it was for the retired
+// scheduled report), so this checks server.js's builder directly, on both test passes.
 test('Part C2 — summary PDF omits the transactions table but keeps the ledger rollup; full keeps it', () => {
   H.seedContract({ pricePaise: 2500000 });
   for (let i = 0; i < 5; i++) H.seedCashOut({ amountPaise: 100000, ledgerCode: '4.0', subledgerCode: '4.2' });
