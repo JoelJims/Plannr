@@ -71,6 +71,31 @@ An emulator proves the app's own behaviour (storage, backups, updates, offline, 
 does not prove a particular phone maker's WebView or a real Google Drive backup; repeat checks
 2, 5 and 6 on the real phone before trusting it with the only copy of the data.
 
+### The automated part: `scripts/phone-test.ps1`
+
+Checks 0, 1, 2 (the meter), 3 (the JSON backup's share sheet), 4 (airplane mode, the PDF's share
+sheet) and 8 (a share sheet left open 25 seconds) run on their own over adb:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\phone-test.ps1
+```
+
+It taps through the screens (`adb shell input`), reads what is on screen (`uiautomator dump`),
+saves a screenshot per step and a `results.md` to `docs/phone-test-evidence/<date-time>/`
+(gitignored, since the screenshots can show ledger data), and prints a pass/fail table. The rest
+are listed as MANUAL.
+
+What it will not do:
+- run if the device is unauthorised, or locked with a PIN, password or pattern. It reads the lock
+  state only and never enters or tries a credential;
+- run if Plannr is already installed (it may hold real data), unless you pass `-AllowExisting`.
+  With that flag it installs and uninstalls nothing;
+- send anything. When a share sheet opens, it presses BACK and nothing else;
+- leave airplane mode changed: it puts it back as it was, even after an error.
+
+Options: `-Apk <file>` (default: the debug build in `android/app/build/outputs/apk/debug/`),
+`-Serial <id>` when more than one device is connected, `-SkipAirplane`.
+
 ## 0. Phone details
 
 ```sh
@@ -285,6 +310,13 @@ any share sheet; each one was closed with BACK.
 - 4: a reminder under the maker's battery management.
 - 5 and 6: the update and a real Google Drive backup.
 - 8: looking at the PDF in a PDF viewer.
+
+`scripts/phone-test.ps1` on the same emulator and build, 2026-11-15 20:54: with Plannr installed it
+stopped before changing anything (exit 2). After uninstalling Plannr from the emulator, a fresh run
+passed all 7 automated checks (1, 2, 3, the two airplane-mode checks, and 8) with exit 0. The
+screenshots show the share sheet opened in airplane mode and closed with BACK, then "PDF not
+shared…". Airplane mode was back off afterwards. A second run with `-AllowExisting -SkipAirplane`
+installed nothing and passed too.
 
 ### The owner's phone: debug build from `9d7fd97` (SHA-256 `7dc29db3…a2ef`)
 
