@@ -546,10 +546,11 @@ Phase 2 scripts.
   - 1.3b `core/ledger-crud.js` (the shared list/add/edit/delete/batch routes);
   - 1.3c `core/parsers.js` (the pure input checks);
   - 1.3d `core/ledger-index.js` (the in-memory category list);
-  - 1.3e `core/routes/cash-and-loans.js` (cash in, loans, cash out).
+  - 1.3e `core/routes/cash-and-loans.js` (cash in, loans, cash out);
+  - 1.3f `core/routes/contracts.js` (the contract, its services and allowances).
 
-  Still to move: contracts and contractor payments, the Recycle Bin, the budget, reminder times,
-  and the overview and its PDF. The backup and restore routes wait for 1.4, because they decide how
+  Still to move: contractor payments, the Recycle Bin, the budget, reminder times, and the
+  overview and its PDF. The backup and restore routes wait for 1.4, because they decide how
   data is stored and restored.
 
 **Rough effort:**
