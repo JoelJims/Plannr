@@ -6,14 +6,11 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { MIN_PASSPHRASE_LEN, decrypt, encrypt } = require('../backup-crypto');
 
-let base;
-before(async () => { ({ base } = await H.startApp()); });
+before(async () => { await H.startApp(); });
 after(async () => { await H.stopApp(); });
 
-// Raw fetch rather than H.post: the success body is binary, which H.req would decode as text.
-const exportEnc = (passphrase) => fetch(base + '/api/backup/export-encrypted', {
-  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase }),
-});
+// H.raw rather than H.post: the success body is binary, which H.req would decode as text.
+const exportEnc = (passphrase) => H.raw('POST', '/api/backup/export-encrypted', { passphrase });
 
 test('the minimum is 10 characters', () => {
   assert.strictEqual(MIN_PASSPHRASE_LEN, 10);
@@ -34,7 +31,7 @@ test('export-encrypted accepts a passphrase of exactly the minimum, and it decry
   const pass = 'b'.repeat(MIN_PASSPHRASE_LEN);
   const res = await exportEnc(pass);
   assert.strictEqual(res.status, 200);
-  const enc = Buffer.from(await res.arrayBuffer());
+  const enc = await res.bytes();
   assert.ok(decrypt(enc, pass).length > 0);
 });
 

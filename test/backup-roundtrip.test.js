@@ -15,9 +15,8 @@ const { init } = require('../db');
 const { decrypt } = require('../backup-crypto');
 const F = require('./fixtures/full-dataset');
 
-let base;
 const snapshotsWritten = [];
-before(async () => { ({ base } = await H.startApp()); });
+before(async () => { await H.startApp(); });
 after(async () => {
   for (const rel of snapshotsWritten) fs.rmSync(path.resolve(__dirname, '..', rel), { force: true });
   await H.stopApp();
@@ -141,11 +140,9 @@ test('encrypted backup: contains every table exactly (whole-database copy, count
   seedFixture();
   const before = F.dumpAll(H.db);
   const pass = 'roundtrip-passphrase-123';
-  const res = await fetch(base + '/api/backup/export-encrypted', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pass }),
-  });
+  const res = await H.raw('POST', '/api/backup/export-encrypted', { passphrase: pass });
   assert.strictEqual(res.status, 200);
-  const plain = decrypt(Buffer.from(await res.arrayBuffer()), pass);
+  const plain = decrypt(await res.bytes(), pass);
   const tmp = path.join(os.tmpdir(), `plannr-enc-roundtrip-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
   fs.writeFileSync(tmp, plain);
   const copy = new DatabaseSync(tmp, { readOnly: true });

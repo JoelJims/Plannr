@@ -22,6 +22,12 @@ assert.notStrictEqual(path.resolve(TEST_DB).toLowerCase(), LIVE_DB.toLowerCase()
 const app = require('../server'); // requires ./db (binds prepared statements to TEST_DB) with side effects gated off
 const { db } = require('../db');
 
+// Which API code the requests below reach (cross-platform plan, step 1.1):
+// 'express' (default): server.js over real HTTP. 'shim': the phone's public/local-api.js, in-process,
+// through the same fetch shim the app uses (test/shim-target.js). run-tests.js runs both.
+const TARGET = process.env.PLANNR_TEST_TARGET === 'shim' ? 'shim' : 'express';
+const shim = TARGET === 'shim' ? require('./shim-target') : null;
+
 // No login exists; password_hash is a placeholder, reused for every seeded user via direct INSERT.
 const SEED_PW = 'TestPass123!aa';
 const SEED_HASH = 'seed-no-auth';
@@ -29,6 +35,7 @@ const SEED_HASH = 'seed-no-auth';
 // --- app lifecycle (ephemeral port; drive over real HTTP) ----------------------------------------
 let server = null, base = null;
 function startApp() {
+  if (shim) return shim.start().then(() => ({ base: '', server: null }));
   if (base) return Promise.resolve({ base, server });
   return new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', () => {
@@ -46,6 +53,7 @@ async function stopApp() {
 
 // --- HTTP (Node fetch has no cookie jar — thread set-cookie manually) -----------------------------
 async function req(method, urlPath, { cookie, body, headers } = {}) {
+  if (shim) return shim.request(method, urlPath, { body });
   const h = Object.assign({}, headers || {});
   if (cookie) h.Cookie = cookie;
   let payload;
@@ -56,6 +64,16 @@ async function req(method, urlPath, { cookie, body, headers } = {}) {
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('application/json')) { json = await r.json().catch(() => null); } else { text = await r.text().catch(() => null); }
   return { status: r.status, json, text, headers: r.headers, setCookie, cookie: setCookie.map((c) => c.split(';')[0]).join('; ') };
+}
+// A request whose answer may be binary (an encrypted backup). Works on both targets.
+async function raw(method, urlPath, body) {
+  const init = { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) };
+  if (shim) {
+    const r = await shim.fetchRaw(urlPath, init);
+    return { status: r.status, json: () => r.json(), bytes: async () => Buffer.from(await (await r.blob()).arrayBuffer()) };
+  }
+  const r = await fetch(base + urlPath, init);
+  return { status: r.status, json: () => r.json(), bytes: async () => Buffer.from(await r.arrayBuffer()) };
 }
 const get = (p, o) => req('GET', p, o);
 const post = (p, body, o) => req('POST', p, Object.assign({ body }, o));
@@ -125,7 +143,7 @@ function clearLedger() {
 process.on('exit', () => { for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } } });
 
 module.exports = {
-  app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH,
-  startApp, stopApp, req, get, post, put, del, clearLedger,
+  app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
+  startApp, stopApp, req, raw, get, post, put, del, clearLedger,
   seedUser, seedSession, seedLoggedIn, seedContract, seedPayment, seedCashOut, seedCashIn,
 };

@@ -231,6 +231,11 @@ going over an allowance is a normal thing to happen, not an error.
   Two things protect the real database: each test file points `PLANNR_DB` at its own
   temporary database before anything loads, and the runner checks `data/plannr.db`'s
   timestamp before and after the whole run and fails if it changed.
+  It runs in two passes. The first runs every test file against `server.js`. The second runs
+  the 28 files that use `test/helpers.js` again, against the phone's own API code
+  (`public/local-api.js`, loaded in Node by `test/shim-target.js`). Tests that are known to
+  differ on the phone are listed, each with a reason, in `test/phone-code-differences.json`;
+  any other failure fails the run, and so does a listed test that starts passing.
 - **`npm run test:ui`** — visual checks against `server.js`: chart colours, table layout,
   large amounts not being cut off, and saving with no changes doing nothing.
 - **`npm run test:static-hosting`** — runs a real `local-server.js` process against an empty

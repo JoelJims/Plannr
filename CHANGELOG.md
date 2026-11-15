@@ -46,6 +46,13 @@ development and test tool.
   loading the Recycle Bin." and showed nothing, so deleted entries could not be restored (a helper
   was defined in the page's other script block). `test-ui/backup-roundtrip.js` now checks it.
 
+### Tests run against the phone code too (cross-platform plan, step 1.1)
+- `npm test` now runs the 28 HTTP test files a second time, against `public/local-api.js` (the
+  phone's API code) instead of `server.js`. 149 of 169 pass. The 20 that differ are listed with a
+  reason in `test/phone-code-differences.json`: 16 test dev-server-only features, 1 is a
+  per-platform answer, 2 need the phone's database engine, and 1 is a real difference (request
+  size limit). Nothing in the app changed.
+
 ### Proposals (not implemented)
 - `docs/storage-proposal.md`: moving the phone database off `localStorage` (native SQLite plugin
   or sqlite-wasm on OPFS), with a one-time migration plan, a safety snapshot and a way back.
