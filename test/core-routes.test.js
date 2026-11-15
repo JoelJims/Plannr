@@ -13,9 +13,14 @@ const ROUTE_FILES = CORE_FILES.filter((f) => f.startsWith('core/routes/'));
 const SERVER = read('server.js');
 const PHONE = read('public/local-api.js');
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// "GET /api/x" for every app.<method>('/api/x' ...) in a file.
-const routesIn = (src, obj) => [...src.matchAll(new RegExp(`\\b${obj}\\.(get|post|put|delete)\\(\\s*['\`](/api/[^'\`]+)['\`]`, 'g'))]
-  .map((m) => `${m[1].toUpperCase()} ${m[2]}`);
+// "GET /api/x" for every app.<method>('/api/x' ...) in a file, plus the four routes makeLedgerCrud
+// (core/ledger-crud.js) builds from each `basePath: '/api/x'`.
+const routesIn = (src, obj) => [
+  ...[...src.matchAll(new RegExp(`\\b${obj}\\.(get|post|put|delete)\\(\\s*['\`](/api/[^'\`]+)['\`]`, 'g'))]
+    .map((m) => `${m[1].toUpperCase()} ${m[2]}`),
+  ...[...src.matchAll(/\bbasePath:\s*'(\/api\/[^']+)'/g)]
+    .flatMap(([, p]) => [`GET ${p}`, `POST ${p}`, `PUT ${p}/:id`, `DELETE ${p}/:id`]),
+];
 
 test('there is at least one moved route group', () => {
   assert.ok(ROUTE_FILES.length > 0, 'core/routes/ is empty');
@@ -23,10 +28,11 @@ test('there is at least one moved route group', () => {
 
 for (const f of ROUTE_FILES) {
   test(`${f}: both copies register it`, () => {
-    assert.match(SERVER, new RegExp(`require\\('\\./${esc(f)}'\\)\\.register\\(app, coreContext\\)`), 'server.js');
+    // register(app, coreContext), or register(app, { ...coreContext, more }) when a group needs more.
+    assert.match(SERVER, new RegExp(`require\\('\\./${esc(f)}'\\)\\.register\\(app, [^\\n]*coreContext`), 'server.js');
     const imp = PHONE.match(new RegExp(`import \\* as (\\w+) from '\\./${esc(f)}';`));
     assert.ok(imp, 'public/local-api.js imports it');
-    assert.match(PHONE, new RegExp(`\\b${imp[1]}\\.register\\(localApp, coreContext\\)`), 'public/local-api.js registers it');
+    assert.match(PHONE, new RegExp(`\\b${imp[1]}\\.register\\(localApp, [^\\n]*coreContext`), 'public/local-api.js registers it');
   });
 
   test(`${f}: neither copy still defines its routes`, () => {
