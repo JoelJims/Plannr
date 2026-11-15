@@ -87,6 +87,7 @@ More documents:
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Changing the database safely (migrations, backups, tests) |
 | [docs/RELEASE.md](docs/RELEASE.md) | Releasing an update to the phone without losing data |
 | [docs/storage-proposal.md](docs/storage-proposal.md) | Proposal: moving the phone database off `localStorage` (not done) |
+| [docs/share-and-reminder-pdf-plan.md](docs/share-and-reminder-pdf-plan.md) | Plan: sending the PDF to WhatsApp or email, also from a reminder (not done) |
 | [CHANGELOG.md](CHANGELOG.md) | What changed |
 
 ## Privacy and backups
