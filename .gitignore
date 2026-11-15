@@ -59,3 +59,8 @@ PLANNR-AUDIT-LIVE.md
 
 *.keystore
 keystore.properties
+
+# The owner's personal notes and interview prep (kept next to the code, never committed).
+/Interview_Prep_Plannr.pdf
+/Plannr_Tech_Cheat_Sheet.pdf
+/review_notes_plannr.docx
