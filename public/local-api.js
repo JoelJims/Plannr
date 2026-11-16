@@ -31,6 +31,7 @@ import * as backupFormat from './backup-format.js';
 import * as requestRules from './request-rules.js';
 import { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
 import { createLedgerIndex } from './core/ledger-index.js';
+import { checkHost, hostError } from './core/host.js';
 import * as peopleRoutes from './core/routes/people.js';
 import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import * as cashAndLoansRoutes from './core/routes/cash-and-loans.js';
@@ -125,8 +126,16 @@ export function installFetchShim(repo) {
   // dev server runs too). coreContext is what they need from the phone's side.
   // The ledger list (categories), kept in memory and refreshed after an import or a restore.
   const ledgerIndex = createLedgerIndex(repo);
+  // The platform services the core may call (core/host.js, step 1.4 A4): the phone's. The PDF goes
+  // through the print-adapter plugin (renderPdfOnPhone, below); the safety copy before a JSON
+  // restore goes into the app's private folder (safety-snapshots.js).
+  const host = checkHost({
+    pdf: { render: (html, opts) => renderPdfOnPhone(html, opts) },
+    snapshot: { writeJson: (backup) => writeJsonSnapshot(backup) },
+  });
   const coreContext = {
     db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
+    host,
     auth: requireApiAuth, // never called here: localApp runs only the last handler
     logError: (...args) => console.error(...args),
     ledgerIndex,
@@ -195,37 +204,40 @@ export function installFetchShim(repo) {
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
-  localApp.get('/api/overview/pdf', async (req, res) => {
-    const q = readPdfQuery(req.query);
-    if (q.error) return res.status(400).json({ error: q.error });
-    const { part, theme, range } = q;
-
+  // The phone's pdf.render (core/host.js, step 1.4 A4): the Overview PDF page -> PDF bytes, through
+  // the print-adapter plugin. A refusal the user should see is a hostError with its status.
+  async function renderPdfOnPhone(html, { part }) {
     const { Capacitor } = await import('@capacitor/core');
     if (!Capacitor.isNativePlatform()) {
-      return res.status(503).json({ error: 'PDF export needs the Android app — this browser preview cannot generate one.' });
+      throw hostError(503, 'PDF export needs the Android app — this browser preview cannot generate one.');
     }
     if (!Capacitor.isPluginAvailable('PdfGenerator')) {
       // Distinguishes "isNativePlatform() is true but the plugin never registered" from every other
       // failure mode below — a real possibility the on-screen message must be able to name outright.
-      return res.status(500).json({ error: `PDF export: the PdfGenerator plugin is not available on this platform (${Capacitor.getPlatform()}). It may not have registered correctly.` });
+      throw hostError(500, `PDF export: the PdfGenerator plugin is not available on this platform (${Capacitor.getPlatform()}). It may not have registered correctly.`);
     }
     const { PdfGenerator } = await import('@capgo/capacitor-pdf-generator');
+    const result = await withTimeout(
+      PdfGenerator.fromData({ data: html, type: 'base64', documentSize: 'A4', fileName: `plannr-overview-${part}.pdf` }),
+      25000,
+      'PDF generation'
+    );
+    if (!result || result.type !== 'base64' || !result.base64) {
+      throw hostError(500, 'PDF generation returned an unexpected result: ' + JSON.stringify(result));
+    }
+    return base64ToBytes(result.base64);
+  }
 
-    const html = overviewPdfHtml({ part, theme, range });
-
+  localApp.get('/api/overview/pdf', async (req, res) => {
+    const q = readPdfQuery(req.query);
+    if (q.error) return res.status(400).json({ error: q.error });
+    const { part, theme, range } = q;
     try {
-      const result = await withTimeout(
-        PdfGenerator.fromData({ data: html, type: 'base64', documentSize: 'A4', fileName: `plannr-overview-${part}.pdf` }),
-        25000,
-        'PDF generation'
-      );
-      if (!result || result.type !== 'base64' || !result.base64) {
-        return res.status(500).json({ error: 'PDF generation returned an unexpected result: ' + JSON.stringify(result) });
-      }
-      res.send(base64ToBytes(result.base64));
+      const pdf = await host.pdf.render(overviewPdfHtml({ part, theme, range }), { part });
+      res.send(pdf);
     } catch (err) {
-      console.error('PDF generation failed:', err);
-      res.status(500).json({ error: 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
+      if (!err.status || err.cause) console.error('PDF generation failed:', err.cause || err); // a plain refusal is not logged
+      res.status(err.status || 500).json({ error: err.userMessage || 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
     }
   });
 
@@ -257,7 +269,7 @@ export function installFetchShim(repo) {
     if (v.error) return res.status(400).json({ error: v.error });
     let snapshot;
     try {
-      snapshot = await writeJsonSnapshot(buildBackup({ includeContacts: true }));
+      snapshot = await host.snapshot.writeJson(buildBackup({ includeContacts: true }));
     } catch (e) {
       console.error('Backup snapshot failed:', e);
       return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });

@@ -558,3 +558,17 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
       throwaway database in the temp folder. It checks the snapshot is encrypted and verified, the
       passphrase is never printed, the source is unchanged, a wrong passphrase is refused and
       nothing is written, and both golden files decrypt.
+- **A4 (2026-11-16):** `core/host.js` lists the platform services the core may call.
+  - `checkHost()` runs when each platform starts, so a missing service fails at startup.
+  - `hostError(status, message)` lets a platform refusal reach the page exactly as worded.
+  - **Two services so far:**
+    - `pdf.render(html, { part })`: Playwright, with its render slots, on the dev server; the
+      print-adapter plugin on the phone.
+    - `snapshot.writeJson(backup)`: a file beside the database on the dev server;
+      `safety-snapshots.js` on the phone.
+  - **Both platforms build their host and pass it to the core as `ctx.host`.** Their PDF route and
+    JSON import now call it.
+  - **The answers are unchanged:** 503 "busy" and 503 "unavailable" on the server; 503 "needs the
+    Android app", 500 plugin missing, and 500 unexpected result on the phone. Plain refusals are not
+    logged, as before.
+  - **Tests:** `test/core-host.test.js`.

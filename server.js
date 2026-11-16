@@ -119,6 +119,7 @@ const requestRules = require('./request-rules');
 // Pure input checks and formatting, shared with the phone (cross-platform plan, step 1.3).
 const { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
 const { createLedgerIndex } = require('./core/ledger-index.js');
+const { checkHost, hostError } = require('./core/host.js');
 
 // Prepared statements go here or later, AFTER init() has created and migrated every table, so each
 // binds to the final schema (preparing before init() would bind to a pre-migration or dropped
@@ -150,8 +151,15 @@ function currentUser(req) { return getOwner(); }
 // from this side; the phone builds its own. Routes still written here come after.
 // The ledger list (categories), kept in memory and refreshed after an import or a restore.
 const ledgerIndex = createLedgerIndex(repo);
+// The platform services the core may call (core/host.js, step 1.4 A4): this server's. Both are
+// defined further down: renderOverviewPdf (Playwright) and writeJsonSnapshotBesideDb.
+const host = checkHost({
+  pdf: { render: (html) => renderOverviewPdf(html) },
+  snapshot: { writeJson: async (backup) => writeJsonSnapshotBesideDb(backup) },
+});
 const coreContext = {
   db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
+  host,
   auth: requireApiAuth,
   logError: (...args) => { if (!IS_PROD) console.error(...args); },
   storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
@@ -254,11 +262,12 @@ function warmPdfBrowser() {
 // stays here, below.
 const { readPdfQuery, overviewPdfHtml } = require('./core/overview-pdf.js').createOverviewPdf({ computeOverview, LEDGER_CRUDS, cashOutRow, CUSTOM_CODE, ledgerIndex });
 
-// Render the Overview PDF to a Buffer. The SINGLE source of PDF generation — used by
-// the HTTP export below. Defaults: full report, light theme. Throws on Playwright
-// failure (callers handle it).
-async function generateOverviewPdf({ part = 'full', theme = 'light', range = { start: null, end: null } } = {}) {
-  const html = overviewPdfHtml({ part, theme, range });
+// This server's pdf.render (core/host.js, step 1.4 A4): the Overview PDF page -> a PDF Buffer, with
+// Playwright. Waits for a render slot first (the guard below). Every refusal or failure is a
+// hostError, so the route answers exactly as before: 503 "busy" or 503 "unavailable".
+async function renderOverviewPdf(html) {
+  const gotSlot = await acquirePdfSlot();
+  if (!gotSlot) throw hostError(503, 'The server is busy generating other PDFs right now. Please try again in a moment.');
   _pdfInFlight++;                                    // hold off the idle-close for the whole render
   try {
     const browser = await getPdfBrowser();
@@ -267,7 +276,13 @@ async function generateOverviewPdf({ part = 'full', theme = 'light', range = { s
       await page.setContent(html, { waitUntil: 'load' });
       return await page.pdf({ format: 'A4', printBackground: true, margin: { top: '14mm', bottom: '14mm', left: '12mm', right: '12mm' } });
     } finally { await page.close(); }
-  } finally { _pdfInFlight--; touchPdfActivity(); }  // (re)arm the idle timer after each render
+  } catch (err) {
+    _pdfBrowserPromise = null; // reset so a later request can relaunch
+    throw hostError(503, 'PDF generation is unavailable on the server (Playwright/Chromium not ready).', err);
+  } finally {
+    _pdfInFlight--; touchPdfActivity();             // (re)arm the idle timer after each render
+    releasePdfSlot();
+  }
 }
 
 // Basic concurrency guard for PDF generation: cap how many renders run at once so a burst
@@ -294,20 +309,15 @@ app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
   const q = readPdfQuery(req.query);
   if (q.error) return res.status(400).json({ error: q.error });
   const { part, theme, range } = q;
-  // Validate BEFORE taking a slot so bad requests don't consume capacity.
-  const gotSlot = await acquirePdfSlot();
-  if (!gotSlot) return res.status(503).json({ error: 'The server is busy generating other PDFs right now. Please try again in a moment.' });
+  // Validated BEFORE the render takes a slot, so bad requests don't consume capacity.
   try {
-    const pdf = await generateOverviewPdf({ part, theme, range });
+    const pdf = await host.pdf.render(overviewPdfHtml({ part, theme, range }), { part });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${istDateStamp()}.pdf"`); // Phase 10C — IST date, not UTC
     res.send(pdf);
   } catch (err) {
-    _pdfBrowserPromise = null; // reset so a later request can relaunch
-    if (!IS_PROD) console.error('PDF generation failed:', err);
-    res.status(503).json({ error: 'PDF generation is unavailable on the server (Playwright/Chromium not ready).' });
-  } finally {
-    releasePdfSlot();
+    if (!IS_PROD && (!err.status || err.cause)) console.error('PDF generation failed:', err.cause || err); // "busy" is not logged
+    res.status(err.status || 500).json({ error: err.userMessage || 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
   }
 });
 
@@ -478,7 +488,16 @@ app.get('/api/backup/export', requireApiAuth, (req, res) => {
 // IMPORT (REPLACE, made safe): validate fully -> auto-snapshot current data ->
 // replace all ledger data in ONE transaction, preserving ids + foreign keys.
 // Never deletes before the replacement is proven valid; rolls back on any error.
-app.post('/api/backup/import', requireApiAuth, (req, res) => {
+// This server's snapshot.writeJson (core/host.js, step 1.4 A4): the safety copy goes in a file beside
+// the DB, and the answer reports its path relative to the project.
+function writeJsonSnapshotBesideDb(backup) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const snapPath = path.join(path.dirname(DB_PATH), `auto-snapshot-before-import-${stamp}.json`);
+  fs.writeFileSync(snapPath, JSON.stringify(backup, null, 2));
+  return path.relative(__dirname, snapPath).split(path.sep).join('/');
+}
+
+app.post('/api/backup/import', requireApiAuth, async (req, res) => {
   // 1. VALIDATE — abort before changing anything.
   const v = validateBackup(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
@@ -486,10 +505,7 @@ app.post('/api/backup/import', requireApiAuth, (req, res) => {
   // 2. AUTO-SNAPSHOT the current data first, beside the DB file. Report its path.
   let snapshot;
   try {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const snapPath = path.join(path.dirname(DB_PATH), `auto-snapshot-before-import-${stamp}.json`);
-    fs.writeFileSync(snapPath, JSON.stringify(buildBackup({ includeContacts: true }), null, 2)); // local rollback file — keeps contacts
-    snapshot = path.relative(__dirname, snapPath).split(path.sep).join('/');
+    snapshot = await host.snapshot.writeJson(buildBackup({ includeContacts: true })); // local rollback file — keeps contacts
   } catch (e) {
     if (!IS_PROD) console.error('Backup snapshot failed:', e);
     return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
