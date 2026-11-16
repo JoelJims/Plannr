@@ -142,7 +142,7 @@ test('encrypted backup: contains every table exactly (whole-database copy, count
   const pass = 'roundtrip-passphrase-123';
   const res = await H.raw('POST', '/api/backup/export-encrypted', { passphrase: pass });
   assert.strictEqual(res.status, 200);
-  const plain = decrypt(await res.bytes(), pass);
+  const plain = await decrypt(await res.bytes(), pass);
   const tmp = path.join(os.tmpdir(), `plannr-enc-roundtrip-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
   fs.writeFileSync(tmp, plain);
   const copy = new DatabaseSync(tmp, { readOnly: true });

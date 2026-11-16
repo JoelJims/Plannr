@@ -36,14 +36,17 @@ if (!fs.existsSync(input)) fail(`input file not found: ${input}`);
 process.env.PLANNR_DB = path.resolve(output);
 const target = guardDbTarget();
 
-let plain;
-try {
-  plain = decrypt(fs.readFileSync(input), passphrase);
-} catch (e) {
-  fail(e.message); // "wrong passphrase, or the backup file is corrupt/tampered." — never echoes the passphrase
-}
-if (!looksLikeSqlite(plain)) fail('decrypted output does not look like a SQLite database — aborting.');
+// decrypt() is async since step 1.4 A3 (core/backup-crypto.js).
+(async () => {
+  let plain;
+  try {
+    plain = await decrypt(fs.readFileSync(input), passphrase);
+  } catch (e) {
+    fail(e.message); // "wrong passphrase, or the backup file is corrupt/tampered." — never echoes the passphrase
+  }
+  if (!looksLikeSqlite(plain)) fail('decrypted output does not look like a SQLite database — aborting.');
 
-fs.writeFileSync(target, plain);
-console.log(`[decrypt] wrote ${target} (${(plain.length / 1024).toFixed(1)} KB, decrypted, looks like SQLite).`);
-console.log('[decrypt] before opening it in place: remove any stale -wal/-shm sidecars of the target (see README → Restore).');
+  fs.writeFileSync(target, plain);
+  console.log(`[decrypt] wrote ${target} (${(plain.length / 1024).toFixed(1)} KB, decrypted, looks like SQLite).`);
+  console.log('[decrypt] before opening it in place: remove any stale -wal/-shm sidecars of the target (see README → Restore).');
+})().catch((e) => fail(e.message));

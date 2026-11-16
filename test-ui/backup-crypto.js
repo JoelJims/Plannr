@@ -98,7 +98,7 @@ function buildPreTenancyFixture() {
     const PASS = 'cross-compat-passphrase-456';
     const plainText = 'SQLite format 3\0' + 'x'.repeat(2000);
     const plainBuf = Buffer.from(plainText, 'binary');
-    const nodeEnc = nodeBackupCrypto.encrypt(plainBuf, PASS);
+    const nodeEnc = await nodeBackupCrypto.encrypt(plainBuf, PASS);
     const browserDecryptedNode = await page.evaluate(async ({ encArray, pass }) => {
       const mod = await import('/backup-crypto.js');
       const dec = await mod.decrypt(new Uint8Array(encArray), pass);
@@ -112,10 +112,10 @@ function buildPreTenancyFixture() {
       const enc = await mod.encrypt(new TextEncoder().encode(text), pass);
       return Array.from(enc);
     }, { text: plainText, pass: PASS });
-    const nodeDecryptedBrowser = nodeBackupCrypto.decrypt(Buffer.from(browserEncArray), PASS).toString('binary');
+    const nodeDecryptedBrowser = (await nodeBackupCrypto.decrypt(Buffer.from(browserEncArray), PASS)).toString('binary');
     check('cross-compat: a file encrypted by the browser decrypts in Node (vice versa)', nodeDecryptedBrowser === plainText);
     let nodeRejectsWrongPassOnBrowserFile = false;
-    try { nodeBackupCrypto.decrypt(Buffer.from(browserEncArray), 'wrong-one'); } catch { nodeRejectsWrongPassOnBrowserFile = true; }
+    try { await nodeBackupCrypto.decrypt(Buffer.from(browserEncArray), 'wrong-one'); } catch { nodeRejectsWrongPassOnBrowserFile = true; }
     check('cross-compat: Node rejects a wrong passphrase on a browser-encrypted file', nodeRejectsWrongPassOnBrowserFile);
 
     // ---- 2b. Known-answer files (step 1.4 A1): made once by the two pre-1.4 versions; must open here ----
@@ -180,7 +180,7 @@ function buildPreTenancyFixture() {
 
     // ---- 4. The crux: PRAGMA user_version travels through a real migration on restore ----
     const oldShapeBytes = buildPreTenancyFixture();
-    const oldShapeEnc = nodeBackupCrypto.encrypt(Buffer.from(oldShapeBytes), PASS);
+    const oldShapeEnc = await nodeBackupCrypto.encrypt(Buffer.from(oldShapeBytes), PASS);
     const migrationResult = await page.evaluate(async ({ encArray, passphrase }) => {
       // Chunked, not String.fromCharCode(...encArray) — this fixture is tens of KB, enough to risk a
       // call-stack overflow spreading that many arguments (the same reason data-backup.html's real

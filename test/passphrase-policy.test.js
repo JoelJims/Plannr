@@ -32,10 +32,10 @@ test('export-encrypted accepts a passphrase of exactly the minimum, and it decry
   const res = await exportEnc(pass);
   assert.strictEqual(res.status, 200);
   const enc = await res.bytes();
-  assert.ok(decrypt(enc, pass).length > 0);
+  assert.ok((await decrypt(enc, pass)).length > 0);
 });
 
-test('an old backup with a short passphrase still decrypts', () => {
-  const enc = encrypt(Buffer.from('SQLite format 3\0old backup'), 'short');
-  assert.strictEqual(decrypt(enc, 'short').toString('latin1'), 'SQLite format 3\0old backup');
+test('an old backup with a short passphrase still decrypts', async () => {
+  const enc = await encrypt(Buffer.from('SQLite format 3\0old backup'), 'short');
+  assert.strictEqual((await decrypt(enc, 'short')).toString('latin1'), 'SQLite format 3\0old backup');
 });

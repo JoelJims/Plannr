@@ -541,3 +541,20 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
   - **The desktop still has its own code** (`backup-crypto.js`, `node:crypto`) until A3.
   - **Tests:** the core file, with scrypt-js and with `node:crypto`, opens both A1 files. Both
     scrypt functions derive the same key. The desktop version opens the core's files.
+- **A3 (2026-11-16):** the desktop uses `core/backup-crypto.js` too, and its own encryption code
+  is gone (owner's approval, 2026-11-16).
+  - **What `backup-crypto.js` is now:** a thin entry point. It supplies `node:crypto`'s scrypt,
+    which gives the same key as scrypt-js, and gives Node callers Buffers. The file is kept so
+    `backup-db.js`, `decrypt-db.js` and `backup-db.cmd` keep working.
+  - **`encrypt()` and `decrypt()` now return Promises.** The export route in `server.js`,
+    `backup-db.js`, `decrypt-db.js` and the tests now wait for them.
+  - **Tests:**
+    - Both golden files open through both platforms' entry points, and a wrong passphrase is
+      rejected.
+    - Neither entry point has encryption code of its own.
+    - The golden files' passphrase is labelled a test value in `manifest.json`, and no other file
+      contains it.
+    - `test/backup-cli.test.js` runs `backup-db.js` and `decrypt-db.js` as real processes, only on a
+      throwaway database in the temp folder. It checks the snapshot is encrypted and verified, the
+      passphrase is never printed, the source is unchanged, a wrong passphrase is refused and
+      nothing is written, and both golden files decrypt.

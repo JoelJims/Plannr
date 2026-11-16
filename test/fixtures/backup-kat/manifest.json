@@ -1,6 +1,7 @@
 {
   "about": "Known-answer files for the encrypted backup format (PLBK version 1). Made once, on 2026-11-16, by the two encryption versions in use before step 1.4 (both last changed in a3d5571). Never remake them: every later version must still open these exact files (test/backup-kat.test.js, test-ui/backup-crypto.js). The files end in .plbk, not .db.enc, because .gitignore keeps real encrypted backups (*.db.enc) out of git.",
   "passphrase": "Plannr KAT ✓ ünïcödé 2026",
+  "passphraseNote": "A TEST value (KAT = known-answer test), used only to make and open these fixture files. It is not, and must never be, a real backup passphrase. test/backup-kat.test.js checks it appears in no other file.",
   "plaintext": {
     "file": "plain.bin",
     "bytes": 2048,

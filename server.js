@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const { db, init, DB_PATH, isStorageFullError, rollbackQuietly } = require('./db');
-const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // Phase 10b — the pre-Ledger-List-import safety backup
+const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // the encrypted export (also the Ledger List import's safety backup)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
 // upcoming-payment day counts. IST has no DST, so no seasonal complexity.
@@ -371,13 +371,13 @@ function vacuumSnapshotBytes() {
     for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + s); } catch { /* ignore */ } }
   }
 }
-app.post('/api/backup/export-encrypted', requireApiAuth, (req, res) => {
+app.post('/api/backup/export-encrypted', requireApiAuth, async (req, res) => {
   const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
   if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
   if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
   try {
     const plain = vacuumSnapshotBytes();
-    const enc = encrypt(plain, passphrase);
+    const enc = await encrypt(plain, passphrase); // a Buffer (backup-crypto.js -> core/backup-crypto.js)
     res.setHeader('Content-Type', 'application/octet-stream');
     res.send(enc);
   } catch (e) {

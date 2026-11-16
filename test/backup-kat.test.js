@@ -7,8 +7,9 @@
 // test-ui/backup-crypto.js opens the same two files in a real browser.
 //
 // Since part A2 the one encryption is core/backup-crypto.js; the platform supplies scrypt (scrypt-js
-// on the phone, node:crypto on the desktop). It is checked here with both, and its own files must
-// open with the desktop version, which still has its own code until part A3.
+// on the phone, node:crypto on the desktop). Since part A3 both platforms' entry points
+// (public/backup-crypto.js and backup-crypto.js) only supply scrypt and re-export the core; tests
+// below check that neither has encryption code of its own, and that both open both files.
 //
 // The layout check rebuilds a file from its own salt and IV with node:crypto alone, so it pins the
 // byte layout independently of every version:
@@ -21,7 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const nodeCrypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const desktopVersion = require('../backup-crypto');
+const desktopEntry = require('../backup-crypto');
 
 const ROOT = path.join(__dirname, '..');
 const DIR = path.join(__dirname, 'fixtures', 'backup-kat');
@@ -89,11 +90,12 @@ for (const f of files) {
     assertLayout(f.bytes);
   });
 
-  test(`the desktop version opens ${f.file}`, () => {
-    const out = desktopVersion.decrypt(f.bytes, PASS);
+  test(`the desktop's entry point (backup-crypto.js) opens ${f.file}`, async () => {
+    const out = await desktopEntry.decrypt(f.bytes, PASS);
+    assert.ok(Buffer.isBuffer(out), 'Node callers get a Buffer');
     assert.ok(out.equals(plain));
-    assert.ok(desktopVersion.looksLikeSqlite(out));
-    assert.throws(() => desktopVersion.decrypt(f.bytes, PASS + 'x'), /wrong passphrase/);
+    assert.ok(desktopEntry.looksLikeSqlite(out));
+    await assert.rejects(desktopEntry.decrypt(f.bytes, PASS + 'x'), /wrong passphrase/);
   });
 
   test(`the phone's entry point (public/backup-crypto.js) opens ${f.file}`, async () => {
@@ -117,13 +119,13 @@ for (const f of files) {
 }
 
 for (const [kdfName, scrypt] of KDFS) {
-  test(`core/backup-crypto.js with ${kdfName} writes the same layout, and the desktop version opens it`, async () => {
+  test(`core/backup-crypto.js with ${kdfName} writes the same layout, and the desktop's entry point opens it`, async () => {
     const core = await importFile('core/backup-crypto.js');
     const enc = await core.createBackupCrypto({ scrypt }).encrypt(new Uint8Array(plain), PASS);
     assert.ok(enc instanceof Uint8Array);
     assert.strictEqual(enc.length, core.HEADER_LEN + plain.length);
     assertLayout(enc);
-    assert.ok(desktopVersion.decrypt(Buffer.from(enc), PASS).equals(plain));
+    assert.ok((await desktopEntry.decrypt(Buffer.from(enc), PASS)).equals(plain));
   });
 }
 
@@ -139,11 +141,32 @@ test('core/backup-crypto.js refuses to start without a scrypt, and keeps its oth
   const changed = Buffer.from(files[0].bytes); changed[changed.length - 1] ^= 1;
   await assert.rejects(decrypt(changed, PASS), /wrong passphrase|corrupt/);
   assert.strictEqual(core.looksLikeSqlite(new TextEncoder().encode('not a database at all')), false);
-  assert.strictEqual(core.MIN_PASSPHRASE_LEN, desktopVersion.MIN_PASSPHRASE_LEN);
+  assert.strictEqual(core.MIN_PASSPHRASE_LEN, desktopEntry.MIN_PASSPHRASE_LEN);
 });
 
 test('public/backup-crypto.js has no encryption code of its own (it uses core/backup-crypto.js)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'public', 'backup-crypto.js'), 'utf8');
   assert.match(src, /from '\.\/core\/backup-crypto\.js'/);
   assert.doesNotMatch(src, /subtle|getRandomValues|AES-GCM|PLBK|0x50, 0x4c/);
+});
+
+test('backup-crypto.js (desktop) has no encryption code of its own (it uses core/backup-crypto.js)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'backup-crypto.js'), 'latin1');
+  assert.match(src, /require\('\.\/core\/backup-crypto\.js'\)/);
+  assert.doesNotMatch(src, /createCipheriv|createDecipheriv|aes-256-gcm|getAuthTag|scryptSync|PLBK|randomBytes/);
+});
+
+test("the golden files' passphrase is a test value that appears only in test files", () => {
+  assert.match(PASS, /KAT/, 'it names itself a known-answer-test value');
+  const hits = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (['node_modules', '.git', 'android', 'data'].includes(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|mjs|cjs|json|html|md|cmd|ps1|txt)$/.test(e.name) && fs.readFileSync(p, 'utf8').includes(PASS)) hits.push(path.relative(ROOT, p).split(path.sep).join('/'));
+    }
+  };
+  walk(ROOT);
+  assert.deepStrictEqual(hits, ['test/fixtures/backup-kat/manifest.json']);
 });

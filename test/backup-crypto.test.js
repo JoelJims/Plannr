@@ -38,12 +38,12 @@ before(() => {
 
 after(() => { for (const p of scratch) for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(p + s); } catch { /* ignore */ } } });
 
-test('round trip: encrypt then decrypt reproduces a DB that still reads 11 rows / SUM 78000000', () => {
-  const enc = backupCrypto.encrypt(plainBuf, PASS);
+test('round trip: encrypt then decrypt reproduces a DB that still reads 11 rows / SUM 78000000', async () => {
+  const enc = await backupCrypto.encrypt(plainBuf, PASS);
   assert.ok(!enc.equals(plainBuf), 'ciphertext must not equal plaintext');
   assert.ok(!backupCrypto.looksLikeSqlite(enc), 'the encrypted blob must NOT look like a plaintext SQLite file');
 
-  const dec = backupCrypto.decrypt(enc, PASS);
+  const dec = await backupCrypto.decrypt(enc, PASS);
   assert.ok(backupCrypto.looksLikeSqlite(dec), 'decrypted output must be a SQLite file');
 
   const out = scratchPath('.db');
@@ -55,18 +55,18 @@ test('round trip: encrypt then decrypt reproduces a DB that still reads 11 rows 
   assert.strictEqual(r.s, 78000000, 'restored DB must sum to 78000000 paise');
 });
 
-test('wrong passphrase fails loudly (never returns garbage)', () => {
-  const enc = backupCrypto.encrypt(plainBuf, PASS);
-  assert.throws(() => backupCrypto.decrypt(enc, 'the-wrong-passphrase'), /wrong passphrase|corrupt|tampered/);
+test('wrong passphrase fails loudly (never returns garbage)', async () => {
+  const enc = await backupCrypto.encrypt(plainBuf, PASS);
+  await assert.rejects(backupCrypto.decrypt(enc, 'the-wrong-passphrase'), /wrong passphrase|corrupt|tampered/);
 });
 
-test('a tampered ciphertext fails the auth tag', () => {
-  const enc = backupCrypto.encrypt(plainBuf, PASS);
+test('a tampered ciphertext fails the auth tag', async () => {
+  const enc = await backupCrypto.encrypt(plainBuf, PASS);
   const tampered = Buffer.from(enc);
   tampered[tampered.length - 1] ^= 0xff; // flip a byte of the ciphertext
-  assert.throws(() => backupCrypto.decrypt(tampered, PASS), /wrong passphrase|corrupt|tampered/);
+  await assert.rejects(backupCrypto.decrypt(tampered, PASS), /wrong passphrase|corrupt|tampered/);
 });
 
-test('an empty passphrase is refused (no key derived from nothing)', () => {
-  assert.throws(() => backupCrypto.encrypt(plainBuf, ''), /empty/);
+test('an empty passphrase is refused (no key derived from nothing)', async () => {
+  await assert.rejects(backupCrypto.encrypt(plainBuf, ''), /empty/);
 });
