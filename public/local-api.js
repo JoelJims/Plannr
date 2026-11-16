@@ -43,6 +43,7 @@ import * as notificationTimesRoutes from './core/routes/notification-times.js';
 import * as overviewRoutes from './core/routes/overview.js';
 import * as overviewPdf from './core/overview-pdf.js';
 import * as pdfRoutes from './core/routes/pdf.js';
+import * as backupReminderRoutes from './core/routes/backup-reminder.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -133,6 +134,7 @@ export function installFetchShim(repo) {
   const host = checkHost({
     pdf: { render: (html, opts) => renderPdfOnPhone(html, opts) },
     snapshot: { writeJson: (backup) => writeJsonSnapshot(backup) },
+    now: () => new Date(),
   });
   const coreContext = {
     db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
@@ -348,68 +350,9 @@ export function installFetchShim(repo) {
     res.json({ ok: true, snapshot });
   });
 
-  // ---------------------------------------------------------------------------
-  // Phase 15 — backup-overdue reminder, ported verbatim from server.js's identical routes.
-  // last_encrypted_export_at is stamped only by a VERIFIED encrypted full backup (see saveFile() in
-  // data-backup.html, gated on the .db.enc filename) — a JSON export or a Ledger List CSV is not a
-  // complete restore point, so neither touches this. backup_reminder_days is the user's overdue
-  // threshold: unset = the default (7), the literal string 'off' = disabled, otherwise a whole
-  // number of days.
-  // ---------------------------------------------------------------------------
-  const BACKUP_REMINDER_DEFAULT_DAYS = 7;
-  const BACKUP_REMINDER_MIN_DAYS = 1;
-  const BACKUP_REMINDER_MAX_DAYS = 365;
-
-  function getLastExportAt() {
-    const r = db.prepare("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'").get();
-    return (r && r.value) ? r.value : null;
-  }
-
-  function getBackupReminderDays() {
-    const r = db.prepare("SELECT value FROM settings WHERE key = 'backup_reminder_days'").get();
-    if (!r || r.value == null) return BACKUP_REMINDER_DEFAULT_DAYS;
-    if (r.value === 'off') return null;
-    const n = Number(r.value);
-    return Number.isInteger(n) && n >= BACKUP_REMINDER_MIN_DAYS && n <= BACKUP_REMINDER_MAX_DAYS ? n : BACKUP_REMINDER_DEFAULT_DAYS;
-  }
-
-  // Whole days elapsed since `utc` ('YYYY-MM-DD HH:MM:SS', same shape as every other *_at column) —
-  // floored, so "6 days and 23 hours" reads as 6 rather than rounding up to a false "7 days ago".
-  function daysSinceUtc(utc) {
-    const then = new Date(String(utc).replace(' ', 'T') + 'Z').getTime();
-    return Math.max(0, Math.floor((Date.now() - then) / 86400000));
-  }
-
-  function getBackupReminderStatus() {
-    const lastExportAt = getLastExportAt();
-    const reminderDays = getBackupReminderDays();
-    const since = lastExportAt ? daysSinceUtc(lastExportAt) : null;
-    const overdue = reminderDays != null && (since === null || since > reminderDays);
-    return { lastExportAt, reminderDays, daysSince: since, overdue };
-  }
-
-  localApp.get('/api/backup/reminder', (req, res) => { res.json(getBackupReminderStatus()); });
-
-  localApp.put('/api/backup/reminder', (req, res) => {
-    const raw = req.body.days;
-    if (raw === null || raw === 'off') {
-      db.prepare("INSERT INTO settings (key, value) VALUES ('backup_reminder_days', 'off') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
-      return res.json(getBackupReminderStatus());
-    }
-    const n = Number(raw);
-    if (!Number.isInteger(n) || n < BACKUP_REMINDER_MIN_DAYS || n > BACKUP_REMINDER_MAX_DAYS) {
-      return res.status(400).json({ error: `Enter a whole number of days between ${BACKUP_REMINDER_MIN_DAYS} and ${BACKUP_REMINDER_MAX_DAYS}, or turn it off.` });
-    }
-    db.prepare("INSERT INTO settings (key, value) VALUES ('backup_reminder_days', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(n));
-    res.json(getBackupReminderStatus());
-  });
-
-  // Called only after the encrypted backup file is verified to actually exist (Filesystem.stat() on
-  // native, the closest browser equivalent otherwise) — see saveFile() in data-backup.html.
-  localApp.post('/api/backup/mark-exported', (req, res) => {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('last_encrypted_export_at', datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
-    res.json(getBackupReminderStatus());
-  });
+  // Phase 15 backup-overdue reminder (GET/PUT /api/backup/reminder, POST /api/backup/mark-exported):
+  // core/routes/backup-reminder.js (step 1.4 A6). Its clock is host.now().
+  backupReminderRoutes.register(localApp, coreContext);
 
   repo.configure({ contractCols: CONTRACT_COLS }); // backup statements now live in backup-format.js
 

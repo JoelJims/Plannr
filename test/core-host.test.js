@@ -14,21 +14,22 @@ const { pathToFileURL } = require('node:url');
 const ROOT = path.join(__dirname, '..');
 const loadHostModule = () => import(pathToFileURL(path.join(ROOT, 'core', 'host.js')).href);
 const fn = async () => {};
-const completeHost = () => ({ pdf: { render: fn }, snapshot: { writeJson: fn } });
+const completeHost = () => ({ pdf: { render: fn }, snapshot: { writeJson: fn }, now: () => new Date() });
 
 test('checkHost accepts a host with every listed service, and returns it', async () => {
   const { checkHost, HOST_SERVICES } = await loadHostModule();
-  assert.deepStrictEqual(Object.keys(HOST_SERVICES).sort(), ['pdf.render', 'snapshot.writeJson']);
+  assert.deepStrictEqual(Object.keys(HOST_SERVICES).sort(), ['now', 'pdf.render', 'snapshot.writeJson']);
   const h = completeHost();
   assert.strictEqual(checkHost(h), h);
 });
 
 test('checkHost names every missing or non-function service', async () => {
   const { checkHost } = await loadHostModule();
-  assert.throws(() => checkHost(undefined), /missing: pdf\.render, snapshot\.writeJson/);
-  assert.throws(() => checkHost({ pdf: { render: fn } }), /missing: snapshot\.writeJson\b/);
-  assert.throws(() => checkHost({ pdf: { render: 'not a function' }, snapshot: { writeJson: fn } }), /missing: pdf\.render\b/);
-  assert.throws(() => checkHost({ pdf: null, snapshot: { writeJson: fn } }), /missing: pdf\.render\b/);
+  assert.throws(() => checkHost(undefined), /missing: pdf\.render, snapshot\.writeJson, now \(/);
+  assert.throws(() => checkHost({ pdf: { render: fn }, now: fn }), /missing: snapshot\.writeJson \(/);
+  assert.throws(() => checkHost({ pdf: { render: 'not a function' }, snapshot: { writeJson: fn }, now: fn }), /missing: pdf\.render \(/);
+  assert.throws(() => checkHost({ pdf: null, snapshot: { writeJson: fn }, now: fn }), /missing: pdf\.render \(/);
+  assert.throws(() => checkHost({ pdf: { render: fn }, snapshot: { writeJson: fn }, now: new Date() }), /missing: now \(/);
 });
 
 test('hostError carries the status and the exact message for the page, and the cause for logs', async () => {
@@ -56,10 +57,19 @@ for (const [file, importLine] of [
     assert.match(ctx[1], /\bhost,/);
     // The routes that use a service call it through the host, not the platform function directly.
     assert.match(src, /await host\.snapshot\.writeJson\(buildBackup\(/);
+    // A6: the clock is the real one on both platforms.
+    assert.match(src, /\n\s*now: \(\) => new Date\(\),\n/);
   });
 }
 
 test('the shared PDF route renders through host.pdf.render (step 1.4 A5)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'pdf.js'), 'utf8');
   assert.match(src, /await host\.pdf\.render\(overviewPdfHtml\(/);
+});
+
+test('the backup reminder reads the time only through host.now (step 1.4 A6)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'backup-reminder.js'), 'utf8');
+  const code = src.replace(/\/\/.*$/gm, ''); // comments may name what is not used
+  assert.match(code, /host\.now\(\)/);
+  assert.doesNotMatch(code, /Date\.now\(|new Date\(\)|datetime\('now'\)/);
 });

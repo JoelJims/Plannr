@@ -579,3 +579,11 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
   - Each platform now keeps only its renderer.
   - The guard test checks that neither copy still defines the route. The old copies were confirmed
     to be flagged before the move.
+- **A6 (2026-11-16):** the backup reminder routes are in the core (`core/routes/backup-reminder.js`):
+  `GET`/`PUT /api/backup/reminder` and `POST /api/backup/mark-exported`.
+  - `now` joins the host services. Both platforms give `now: () => new Date()`.
+  - `mark-exported` stamps `host.now()` in the same `YYYY-MM-DD HH:MM:SS` UTC shape as before, instead
+    of SQLite's `datetime('now')`. The answers are unchanged.
+  - **Tests:** `test/backup-reminder.test.js`, in both passes. Over HTTP: never exported, a stamp,
+    off, the limits 1 and 365, refusals, and a bad stored value. With a fixed clock: 6 days 23:59:59
+    reads as 6, exactly the threshold is not overdue, the next day is, and a clock set back reads 0.

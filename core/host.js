@@ -14,6 +14,8 @@ export const HOST_SERVICES = Object.freeze({
     + 'Throws hostError(status, message) when the user should see that exact answer.',
   'snapshot.writeJson': 'snapshot.writeJson(backup) -> Promise<string>: save a safety copy of the '
     + 'current data before a JSON restore replaces it; returns where it went.',
+  'now': 'now() -> Date: the current time (A6). The core never reads the clock itself, so a test can '
+    + 'fix it; the backup reminder stamps and counts days with it.',
 });
 
 // An error whose HTTP status and message the core route passes to the page unchanged, e.g. "the
