@@ -40,6 +40,7 @@ import * as contractorPaymentsRoutes from './core/routes/contractor-payments.js'
 import * as trashRoutes from './core/routes/trash.js';
 import * as budgetRoutes from './core/routes/budget.js';
 import * as notificationTimesRoutes from './core/routes/notification-times.js';
+import * as overviewRoutes from './core/routes/overview.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -159,188 +160,13 @@ export function installFetchShim(repo) {
   // The reminder times: core/routes/notification-times.js (step 1.3).
   notificationTimesRoutes.register(localApp, coreContext);
 
-  const CUSTOM_GROUP_NAME = 'Custom / Uncategorized';
-
-  function computeOverview(range) {
-    const start = (range && range.start) || null;
-    const end = (range && range.end) || null;
-    const bounded = !!(start || end);
-    const lo = start || '0000-01-01', hi = end || '9999-12-31';
-
-    // The Phase 5E reimbursement offset is REMOVED, all-or-nothing: no 'included' debit reduces
-    // owed, whatever contract_stated_paise a legacy row still holds. The cumulative 'included' scan
-    // that fed it (and its missing-offset check) is gone with it.
-
-    const contractRows = repo.overview.contracts();
-    const liveContractIds = new Set(contractRows.map((c) => c.id));
-
-    const paidByContract = new Map();
-    let cumulativePaid = 0;
-    const orphan = { count: 0, amountPaise: 0, contractIds: [] };
-    for (const g of repo.overview.paidByContract()) {
-      paidByContract.set(g.contract_id, g.s);
-      cumulativePaid += g.s;
-      if (!liveContractIds.has(g.contract_id)) { orphan.count += g.c; orphan.amountPaise += g.s; orphan.contractIds.push(g.contract_id); }
-    }
-
-    // owed(C) = stated - Sum(paid). An UNSTATED contract reads as stated = 0: nothing in A, nothing
-    // in owed - but its payments still count in B/D/pie.
-    let totalContract = 0, owedToContractors = 0;
-    const contracts = contractRows.map((c) => {
-      const stated = c.price_of_contract_paise || 0;
-      const paid = paidByContract.get(c.id) || 0;
-      const owed = stated - paid;
-      totalContract += stated; owedToContractors += owed;
-      return {
-        id: c.id,
-        contractorName: c.contractor_name || '',
-        areaOfWork: c.area_of_work || '',
-        ledger: c.ledger_code ? ledgerLabel(c.ledger_code, c.subledger_code, c.ledger_custom_name, c.subledger_custom_name) : '',
-        statedPaise: stated, paidPaise: paid, owedPaise: owed,
-      };
-    });
-
-    const zero = () => ({ totalPaise: 0, userPaise: 0, otherPaise: 0 });
-    const add = (o, byType, amt) => { o.totalPaise += amt; if (byType === 'user') o.userPaise += amt; else o.otherPaise += amt; };
-
-    let spentBySelf = 0, paidToContractors = 0, userSpent = 0, otherSpent = 0;
-    const ledMap = new Map();
-    const rollup = (byType, ledgerCode, subCode, subCustom, amt) => {
-      if (byType === 'user') userSpent += amt; else otherSpent += amt;
-      const isCustom = ledgerCode === CUSTOM_CODE;
-      const key = isCustom ? CUSTOM_CODE : ledgerCode;
-      let L = ledMap.get(key);
-      if (!L) {
-        const meta = isCustom ? null : ledgerIndex.byCode().get(ledgerCode);
-        L = { code: key, name: isCustom ? CUSTOM_GROUP_NAME : (meta ? `${meta.code} ${meta.name}` : ledgerCode), isCustom, ...zero(), subs: new Map(), noSub: zero() };
-        ledMap.set(key, L);
-      }
-      add(L, byType, amt);
-      if (subCode) {
-        let subKey, subName;
-        if (subCode === CUSTOM_CODE) { subName = subCustom || 'Custom sub-ledger'; subKey = 'CUSTOM:' + subName; }
-        else {
-          const meta = isCustom ? null : ledgerIndex.byCode().get(ledgerCode);
-          const s = meta && meta.subLedgers.find((x) => x.code === subCode);
-          subName = s ? `${s.code} ${s.name}` : subCode; subKey = subCode;
-        }
-        let S = L.subs.get(subKey);
-        if (!S) { S = { code: subCode, name: subName, ...zero() }; L.subs.set(subKey, S); }
-        add(S, byType, amt);
-      } else {
-        add(L.noSub, byType, amt);
-      }
-    };
-
-    const outs = bounded ? repo.overview.outsRange(lo, hi) : repo.overview.outsAll();
-    const payments = bounded ? repo.overview.paymentsRange(lo, hi) : repo.overview.paymentsAll();
-    for (const r of outs) {
-      spentBySelf += r.amount_paise;
-      rollup(r.by_type, r.ledger_code, r.subledger_code, r.subledger_custom_name, r.amount_paise);
-    }
-    for (const p of payments) {
-      paidToContractors += p.amount_paise;
-      rollup('other', p.ledger_code || CUSTOM_CODE, p.subledger_code, p.subledger_custom_name, p.amount_paise);
-    }
-
-    const loanReceived = repo.overview.loansSum().s;
-    const totalSpent = paidToContractors + spentBySelf;
-
-    const ledgers = [...ledMap.values()]
-      .sort((a, b) => (a.isCustom ? 1 : b.isCustom ? -1 : parseFloat(a.code) - parseFloat(b.code)))
-      .map((L) => ({
-        code: L.code, name: L.name, isCustom: L.isCustom,
-        totalPaise: L.totalPaise, userPaise: L.userPaise, otherPaise: L.otherPaise,
-        noSub: L.noSub, subs: [...L.subs.values()],
-      }));
-
-    const splitSumsToTotal = userSpent + otherSpent === totalSpent;
-    const mainsSumToTotal = ledgers.reduce((a, L) => a + L.totalPaise, 0) === totalSpent;
-    const subsSumToMains = ledgers.every((L) => L.subs.reduce((a, s) => a + s.totalPaise, 0) + L.noSub.totalPaise === L.totalPaise);
-
-    // The over-offset check is RETAINED. With the offset gone it now reads as "contractor payments
-    // exceed the contract value". The missing-offset check is REMOVED: a NULL/0 stated amount on an
-    // 'included' debit is the normal case now, so it would fire on every hand.
-    const appliedAgainstContract = cumulativePaid;
-    const overOffset = { over: totalContract > 0 && appliedAgainstContract > totalContract, contractPaise: totalContract, appliedPaise: appliedAgainstContract, excessPaise: Math.max(0, appliedAgainstContract - totalContract) };
-
-    // Contract Phase A - contractPriceDerivation. A rate-priced contract MATERIALISES rate x area
-    // into price_of_contract_paise so owed/A/the PDF keep reading one column; a materialised derived
-    // value can drift (a restored backup writes columns verbatim rather than re-running the write
-    // path). Recompute and FLAG - the figure is reported as stored, never corrected.
-    const priceDrift = [];
-    for (const c of contractRows) {
-      const expected = unitPricePaise(c.rate_per_sqft_paise, c.measured_area_milli_sqft);
-      if (expected != null && expected !== (c.price_of_contract_paise || 0)) {
-        priceDrift.push({ contractId: c.id, storedPaise: c.price_of_contract_paise, expectedPaise: expected });
-      }
-    }
-    const contractPriceDerivation = { drifted: priceDrift.length > 0, contracts: priceDrift };
-
-    if (!splitSumsToTotal || !mainsSumToTotal || !subsSumToMains) {
-      console.error('Overview reconciliation failed', { splitSumsToTotal, mainsSumToTotal, subsSumToMains });
-    }
-    if (orphan.count > 0) {
-      console.warn(`Overview reconciliation: ${orphan.count} live contractor payment(s) totalling ${orphan.amountPaise} paise reference a soft-deleted or missing contract (contract ids: ${orphan.contractIds.join(', ')}). Counted in B/D/pie but not offset in A/F — figures reported AS-IS, not adjusted. Restore or reassign those payments' contract to rebalance.`);
-    }
-    if (overOffset.over) {
-      console.warn(`Overview reconciliation: contractor payments (${overOffset.appliedPaise} paise) exceed the contract value (${overOffset.contractPaise} paise) by ${overOffset.excessPaise} paise — over-offset. owed is reported unclamped (negative = overpaid), not adjusted.`);
-    }
-    if (contractPriceDerivation.drifted) {
-      console.warn(`Overview reconciliation: ${priceDrift.length} rate-priced contract(s) have a stored price that no longer equals rate × measured area — ${priceDrift.map((d) => `#${d.contractId}: stored ${d.storedPaise} paise, rate × area ${d.expectedPaise} paise`).join('; ')}. The STORED figure is what every total above uses; re-save the contract to recompute it.`);
-    }
-
-    return {
-      budgetPaise: getBudgetPaise(),
-      ledgers,
-      money: {
-        totalContractPaise: totalContract,
-        paidToContractorsPaise: paidToContractors,
-        spentBySelfPaise: spentBySelf,
-        totalSpentPaise: totalSpent,
-        loanReceivedPaise: loanReceived,
-        owedToContractorsPaise: owedToContractors,
-      },
-      contracts,
-      upcomingPayments: computeUpcomingPayments(),
-      reconciliation: {
-        ok: splitSumsToTotal && mainsSumToTotal && subsSumToMains && orphan.count === 0 && !overOffset.over && !contractPriceDerivation.drifted,
-        orphanedContractorPayments: orphan,
-        overOffset: overOffset,
-        contractPriceDerivation,
-      },
-    };
-  }
-
+  // IST dates: coreContext passes istDateStamp to the core routes (a hoisted function, so it is
+  // ready before this line runs).
   const IST_TZ = 'Asia/Kolkata';
   function istDateStamp(d = new Date()) { return new Intl.DateTimeFormat('en-CA', { timeZone: IST_TZ }).format(d); }
-  function daysBetweenIso(fromIso, toIso) {
-    const [ya, ma, da] = fromIso.split('-').map(Number);
-    const [yb, mb, db2] = toIso.split('-').map(Number);
-    return Math.round((Date.UTC(yb, mb - 1, db2) - Date.UTC(ya, ma - 1, da)) / 86400000);
-  }
-  function computeUpcomingPayments() {
-    const today = istDateStamp();
-    const out = [];
-    for (const c of repo.contract.list()) {
-      for (const d of repo.contract.payDatesFor(c.id)) {
-        const daysRemaining = daysBetweenIso(today, d);
-        const paidOnDate = repo.contract.paymentOnDate(c.id, d);
-        out.push({ date: d, daysRemaining, paidOnDate, possiblyOverdue: daysRemaining < 0 && !paidOnDate });
-      }
-    }
-    out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    return out;
-  }
 
-  localApp.get('/api/overview', (req, res) => {
-    const s = parseIsoDate(req.query.start);
-    if (s.error) return res.status(400).json({ error: 'Invalid start date (YYYY-MM-DD).' });
-    const e = parseIsoDate(req.query.end);
-    if (e.error) return res.status(400).json({ error: 'Invalid end date (YYYY-MM-DD).' });
-    if (s.date && e.date && s.date > e.date) return res.status(400).json({ error: 'Start date must be on or before the end date.' });
-    res.json(computeOverview({ start: s.date, end: e.date }));
-  });
+  // The Overview: core/routes/overview.js (step 1.3).
+  const { computeOverview } = overviewRoutes.register(localApp, { ...coreContext, ledgerLabel, CUSTOM_CODE, unitPricePaise, getBudgetPaise });
 
   // ---------------------------------------------------------------------------
   // Overview PDF (Phase 6a) — ported verbatim from server.js: same fmtRs/pdfEsc/PDF_PALETTE/

@@ -551,9 +551,10 @@ Phase 2 scripts.
   - 1.3g `core/routes/contractor-payments.js`;
   - 1.3h `core/routes/trash.js` (the Recycle Bin);
   - 1.3i `core/routes/budget.js`;
-  - 1.3j `core/routes/notification-times.js` (the reminder times).
+  - 1.3j `core/routes/notification-times.js` (the reminder times);
+  - 1.3k `core/routes/overview.js` (every Overview figure, the upcoming payment dates).
 
-  Still to move: the overview and its PDF. The backup and restore routes wait for 1.4, because they decide how
+  Still to move: what goes into the Overview PDF. The backup and restore routes wait for 1.4, because they decide how
   data is stored and restored.
 
 **Rough effort:**
