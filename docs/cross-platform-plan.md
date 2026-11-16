@@ -552,9 +552,14 @@ Phase 2 scripts.
   - 1.3h `core/routes/trash.js` (the Recycle Bin);
   - 1.3i `core/routes/budget.js`;
   - 1.3j `core/routes/notification-times.js` (the reminder times);
-  - 1.3k `core/routes/overview.js` (every Overview figure, the upcoming payment dates).
+  - 1.3k `core/routes/overview.js` (every Overview figure, the upcoming payment dates);
+  - 1.3l `core/overview-pdf.js` (what goes into the PDF: query checks, data, HTML). Each copy keeps
+    its own `/api/overview/pdf` route and renderer (Playwright / the print plugin), as decided in
+    1.2.
 
-  Still to move: what goes into the Overview PDF. The backup and restore routes wait for 1.4, because they decide how
+  Left in the two copies: each one's PDF route and renderer, `/api/health` (dev server only), and
+  the backup routes (export, import, the encrypted pair, the backup reminder) plus `/api/storage`,
+  which wait for step 1.4 because they decide how data is saved and restored. The backup and restore routes wait for 1.4, because they decide how
   data is stored and restored.
 
 **Rough effort:**

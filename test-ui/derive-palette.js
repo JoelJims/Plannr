@@ -172,7 +172,7 @@ if (require.main === module) {
   const grab = (file, name) => (new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`).exec(fs.readFileSync(file, 'utf8'))[1]).match(/#[0-9a-f]{6}/gi);
 
   const screen = grab('public/overview.html', 'LEDGER_PALETTE');
-  const pdf = grab('server.js', 'PDF_PALETTE');
+  const pdf = grab('core/overview-pdf.js', 'PDF_PALETTE');
 
   console.log('=== CURRENT ===');
   report('screen LEDGER_PALETTE', screen, '#111113');

@@ -10,12 +10,11 @@
 // been imported (repo.js prepares statements eagerly at import time) — see local-bootstrap.js,
 // which is the only thing that should ever call this.
 //
-// Phase 6a — PDF export, on-device. server.js renders buildOverviewPdfHtml()'s output with
+// Phase 6a — PDF export, on-device. server.js renders the PDF's HTML (core/overview-pdf.js) with
 // Playwright, which doesn't run on Android. Instead: WebView.createPrintDocumentAdapter(), driven
 // manually against the app's own ParcelFileDescriptor (bypassing the print dialog/spooler entirely)
 // via @capgo/capacitor-pdf-generator, which implements exactly that. Rendering goes through the
-// WebView's own Chromium, so buildOverviewPdfHtml()'s inline <style>/inline SVG need no changes —
-// ported verbatim below, byte-for-byte the same function bodies as server.js.
+// WebView's own Chromium, so the HTML's inline <style>/inline SVG need no changes.
 //
 // Not ported: GET /api/health (never called by any page) and everything in server.js that only
 // exists to drive Playwright specifically (the PDF concurrency guard, warmPdfBrowser, getPdfBrowser)
@@ -41,6 +40,7 @@ import * as trashRoutes from './core/routes/trash.js';
 import * as budgetRoutes from './core/routes/budget.js';
 import * as notificationTimesRoutes from './core/routes/notification-times.js';
 import * as overviewRoutes from './core/routes/overview.js';
+import * as overviewPdf from './core/overview-pdf.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -169,164 +169,11 @@ export function installFetchShim(repo) {
   const { computeOverview } = overviewRoutes.register(localApp, { ...coreContext, ledgerLabel, CUSTOM_CODE, unitPricePaise, getBudgetPaise });
 
   // ---------------------------------------------------------------------------
-  // Overview PDF (Phase 6a) — ported verbatim from server.js: same fmtRs/pdfEsc/PDF_PALETTE/
-  // pdfSlices/pdfPieSvg/fmtDatePdf/buildOverviewPdfHtml, same HTML, same layout. Only the render
-  // BACKEND differs (the print-adapter plugin's WebView instead of Playwright's). fmtRs() is already
-  // declared above (Phase 12: this was a byte-identical redundant re-declaration in the same scope).
+  // Overview PDF (Phase 6a). What goes into it (query checks, data, HTML) is core/overview-pdf.js
+  // (step 1.3), the same as the dev server's. Only the render BACKEND differs: the print-adapter
+  // plugin's WebView here, Playwright there.
   // ---------------------------------------------------------------------------
-  const pdfEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-  // Phase C re-derived this alongside server.js's copy — see the long note there. Before: min ΔE00
-  // 2.99, and #8a5a2b was BOTH the 18th ledger's colour and the Custom slice's, so those two slices
-  // were byte-identical whenever both had spend. After: no exact duplicate, nothing under ΔE00 5,
-  // min 6.00. Still 39 pairs under 10 — a structural ceiling of holding 24 categories inside one
-  // hue family, not something more searching fixes.
-  const PDF_PALETTE = [
-    '#f59e0b', '#ffc31b', '#9a5115', '#d97706', '#e3c153', '#973913', '#ef8a4b', '#d2b001',
-    '#a56b1a', '#dda077', '#c2703d', '#e8d12f', '#7d452a', '#f6ba83', '#876322', '#d29e0f',
-    '#ffcf70', '#845f44', '#eca955', '#6f4518', '#c2410c', '#b45f06', '#7c2d12', '#cea871'];
-  // Custom's slice colour, pulled out of the literal it used to be written as so it can take part in
-  // the distinctness check.
-  const PDF_CUSTOM_COLOR = '#8a5a2b';
-  // Ledgers past the fixed 24 — farthest-point derived, replacing the golden-angle generator that
-  // was blind to the palette it was extending (first generated colour landed ΔE00 3.99 from a fixed
-  // one). Not hue-constrained, as the old generator was not.
-  const PDF_PALETTE_EXT = [
-    '#f720f8', '#1dc2fc', '#144ea8', '#058f67', '#d5cdf2', '#27f164', '#8e2b69', '#7f7a92',
-    '#ff758f', '#b6d9cd', '#49554c', '#638af8', '#277f92', '#739114', '#851cf6', '#868779',
-    '#0d6007', '#d41346', '#11b4b3', '#5d4e56', '#ca8ec6', '#f9c5c5', '#9dbf7c', '#a0adb9'];
-  // Beyond 48 mains — unverified last resort.
-  function extraLedgerColor(extraIndex) {
-    const hue = (extraIndex * 137.508) % 360;
-    return `hsl(${hue.toFixed(1)}, 65%, 50%)`;
-  }
-  function pdfLedgerColor(idx) {
-    if (idx < PDF_PALETTE.length) return PDF_PALETTE[idx];
-    const ext = idx - PDF_PALETTE.length;
-    return ext < PDF_PALETTE_EXT.length ? PDF_PALETTE_EXT[ext] : extraLedgerColor(ext - PDF_PALETTE_EXT.length);
-  }
-  function pdfSlices(o) {
-    return (o.ledgers || []).filter((L) => L.totalPaise > 0).map((L) => {
-      const idx = Math.max(0, ledgerIndex.list().findIndex((x) => x.code === L.code));
-      const color = L.code === CUSTOM_CODE ? PDF_CUSTOM_COLOR : pdfLedgerColor(idx);
-      return { label: L.name, value: L.totalPaise, color };
-    });
-  }
-  function pdfPieSvg(slices) {
-    const total = slices.reduce((a, s) => a + s.value, 0);
-    if (total <= 0) return '<p class="muted">No spending to chart in this range.</p>';
-    const cx = 50, cy = 50, r = 46;
-    if (slices.length === 1) return `<svg viewBox="0 0 100 100" class="pie"><circle cx="${cx}" cy="${cy}" r="${r}" fill="${slices[0].color}"/></svg>`;
-    let a0 = -Math.PI / 2;
-    const paths = slices.map((s) => {
-      const a1 = a0 + (s.value / total) * Math.PI * 2;
-      const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
-      const large = (a1 - a0) > Math.PI ? 1 : 0; a0 = a1;
-      return `<path d="M${cx},${cy} L${x0.toFixed(3)},${y0.toFixed(3)} A${r},${r} 0 ${large},1 ${x1.toFixed(3)},${y1.toFixed(3)} Z" fill="${s.color}" stroke="#fff" stroke-width="0.6"/>`;
-    }).join('');
-    return `<svg viewBox="0 0 100 100" class="pie">${paths}</svg>`;
-  }
-
-  function fmtDatePdf(iso) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso == null ? '' : iso));
-    return m ? (m[3] + '/' + m[2] + '/' + m[1].slice(2)) : String(iso == null ? '' : iso);
-  }
-  function buildOverviewPdfHtml(part, o, rows, range, theme) {
-    const m = o.money;
-    const fmtOwed = (v) => (v < 0 ? 'Overpaid by ' + fmtRs(-v) : fmtRs(v));
-    const rangeLabel = (range.start || range.end) ? `${fmtDatePdf(range.start) || '…'} to ${fmtDatePdf(range.end) || '…'}` : 'All transactions';
-    const slices = pdfSlices(o);
-    const incl = (s) => (s === 'included' ? 'Yes' : 'No');
-
-    const figuresBlock = () => {
-      const figs = [
-        ['Total contract (A)', m.totalContractPaise], ['Paid to contractors (B)', m.paidToContractorsPaise],
-        ['Spent by self (C)', m.spentBySelfPaise], ['Total spent (D)', m.totalSpentPaise],
-        ['Loan received (E)', m.loanReceivedPaise], ['Owed to contractors (F)', m.owedToContractorsPaise],
-      ];
-      return '<h2>Headline figures</h2><div class="figs">' +
-        figs.map(([k, v]) => `<div class="fig"><div class="k">${pdfEsc(k)}</div><div class="v ${v < 0 ? 'neg' : ''}">${k.startsWith('Owed') ? fmtOwed(v) : fmtRs(v)}</div></div>`).join('') + '</div>';
-    };
-    const owedBlock = () => {
-      if (!o.contracts.length) return '<h2>Owed on the contract</h2><p class="muted">No contract yet.</p>';
-      return '<h2>Owed on the contract</h2><table><thead><tr><th>Contractor</th><th>Area · Ledger</th><th class="num">Stated</th><th class="num">Paid</th><th class="num">Owed</th></tr></thead><tbody>' +
-        o.contracts.map((c) => `<tr><td>${pdfEsc(c.contractorName || '—')}</td><td>${pdfEsc([c.areaOfWork, c.ledger].filter(Boolean).join(' · ')) || '—'}</td><td class="num">${fmtRs(c.statedPaise)}</td><td class="num">${fmtRs(c.paidPaise)}</td><td class="num ${c.owedPaise < 0 ? 'neg' : ''}">${fmtOwed(c.owedPaise)}</td></tr>`).join('') +
-        `</tbody><tfoot><tr><td colspan="4">Owed to contractors (F)</td><td class="num">${fmtOwed(m.owedToContractorsPaise)}</td></tr></tfoot></table>`;
-    };
-    const budgetBlock = () => {
-      if (o.budgetPaise == null) return '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>' + fmtRs(m.totalSpentPaise) + '</b>.</p>';
-      const diff = o.budgetPaise - m.totalSpentPaise;
-      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(m.totalSpentPaise)}</b> · ${diff < 0 ? 'Over by <b class="neg">' + fmtRs(-diff) + '</b>' : '<b>' + fmtRs(diff) + '</b> left'}.</p>`;
-    };
-    const pieBlock = () => {
-      if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';
-      return '<h2>Spending by Ledger</h2><div class="pie-wrap">' + pdfPieSvg(slices) +
-        '<div class="legend">' + slices.map((s) => `<div class="lg"><span class="sw" style="background:${s.color}"></span><span class="l">${pdfEsc(s.label)}</span><span class="v">${fmtRs(s.value)}</span></div>`).join('') + '</div></div>';
-    };
-    const ledgerTableBlock = () => {
-      if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';
-      return '<h2>Spending by Ledger</h2><table><thead><tr><th>Ledger</th><th class="num">Amount</th></tr></thead><tbody>' +
-        slices.map((s) => `<tr><td>${pdfEsc(s.label)}</td><td class="num">${fmtRs(s.value)}</td></tr>`).join('') +
-        `</tbody><tfoot><tr><td>Total spent (D)</td><td class="num">${fmtRs(m.totalSpentPaise)}</td></tr></tfoot></table>`;
-    };
-    const txTableBlock = () => {
-      if (!rows.length) return '<h2>Transactions</h2><p class="muted">No outflow entries in this range.</p>';
-      const total = rows.reduce((a, e) => a + e.amountPaise, 0);
-      // The Contract Stated column is gone with the reimbursement offset — the number it printed is
-      // no longer written or used. Contract Included (Yes/No) stays: that label is still recorded.
-      return '<h2>Transactions</h2><table><thead><tr><th class="num">#</th><th>Date</th><th class="num">Amount</th><th>By</th><th>Ledger</th><th>Remark</th><th>Contract Included</th></tr></thead><tbody>' +
-        rows.map((e, i) => `<tr><td class="num">${i + 1}</td><td>${e.txDate ? pdfEsc(fmtDatePdf(e.txDate)) : '—'}</td><td class="num">${fmtRs(e.amountPaise)}</td><td>${pdfEsc(e.by)}</td><td>${pdfEsc(e.ledger)}</td><td>${e.reason ? pdfEsc(e.reason) : '—'}</td><td>${incl(e.contractScope)}</td></tr>`).join('') +
-        `</tbody><tfoot><tr><td colspan="2">Total (${rows.length})</td><td class="num">${fmtRs(total)}</td><td colspan="4"></td></tr></tfoot></table>`;
-    };
-
-    const TITLE = { full: 'Overview', summary: 'Overview — summary', pie: 'Spending by Ledger — chart', table: 'Transactions', ledger: 'Spending by Ledger' };
-    let body;
-    if (part === 'pie') body = pieBlock();
-    else if (part === 'table') body = txTableBlock();
-    else if (part === 'ledger') body = ledgerTableBlock();
-    else if (part === 'summary') body = figuresBlock() + owedBlock() + budgetBlock() + pieBlock() + ledgerTableBlock();
-    else body = figuresBlock() + owedBlock() + budgetBlock() + pieBlock() + txTableBlock();
-
-    const dark = theme === 'dark';
-    const C = dark
-      ? { bg: '#15161a', text: '#ececee', sub: '#a9aab0', head: '#f6b352', accent: '#f5b45b', line: '#2c2d33', line2: '#3a3b42', muted: '#9a9ba1', figB: '#3a3020', neg: '#f87171', swB: 'rgba(255,255,255,0.25)' }
-      : { bg: '#ffffff', text: '#1a1a1a', sub: '#555555', head: '#7c3f12', accent: '#b45309', line: '#eeeeee', line2: '#dddddd', muted: '#888888', figB: '#eadfce', neg: '#b91c1c', swB: 'rgba(0,0,0,0.15)' };
-
-    return `<!doctype html><html><head><meta charset="utf-8"><style>
-    * { box-sizing: border-box; }
-    body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: ${C.text}; background: ${C.bg}; margin: 0; padding: 6px 2px; font-size: 12px; }
-    .hdr { display: flex; align-items: baseline; justify-content: space-between; border-bottom: 2px solid #f59e0b; padding-bottom: 8px; margin-bottom: 16px; }
-    .brand { font-size: 22px; font-weight: 800; letter-spacing: 0.02em; color: ${C.text}; }
-    .brand span { color: ${C.accent}; }
-    .sub { font-size: 12px; color: ${C.sub}; text-align: right; }
-    .sub b { color: ${C.text}; }
-    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: ${C.head}; border-bottom: 1px solid ${C.line}; padding-bottom: 4px; margin: 20px 0 10px; }
-    .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-    .fig { border: 1px solid ${C.figB}; border-radius: 4px; padding: 8px 10px; }
-    .fig .k { font-size: 10.5px; color: ${C.muted}; text-transform: uppercase; letter-spacing: 0.04em; }
-    .fig .v { font-size: 17px; font-weight: 700; margin-top: 3px; color: ${C.accent}; }
-    .fig .v.neg, .neg { color: ${C.neg}; }
-    table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-    th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid ${C.line}; }
-    th { text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; color: ${C.muted}; }
-    td.num, th.num { text-align: right; white-space: nowrap; }
-    tfoot td { font-weight: 700; border-top: 2px solid ${C.line2}; border-bottom: none; }
-    .muted { color: ${C.muted}; }
-    .pie-wrap { display: flex; gap: 22px; align-items: center; }
-    .pie { width: 200px; height: 200px; flex: none; }
-    .legend { flex: 1 1 auto; }
-    .lg { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
-    .sw { width: 12px; height: 12px; flex: none; border: 1px solid ${C.swB}; }
-    .lg .l { flex: 1 1 auto; }
-    .lg .v { font-weight: 600; white-space: nowrap; }
-  </style></head><body>
-    <div class="hdr">
-      <div class="brand">Plann<span>r</span></div>
-      <div class="sub">${pdfEsc(TITLE[part] || 'Overview')}<br>Date range: <b>${pdfEsc(rangeLabel)}</b></div>
-    </div>
-    ${body}
-  </body></html>`;
-  }
+  const { readPdfQuery, overviewPdfHtml } = overviewPdf.createOverviewPdf({ computeOverview, LEDGER_CRUDS, cashOutRow, CUSTOM_CODE, ledgerIndex });
 
   function base64ToBytes(base64) {
     const bin = atob(base64);
@@ -349,11 +196,9 @@ export function installFetchShim(repo) {
   }
 
   localApp.get('/api/overview/pdf', async (req, res) => {
-    const s = parseIsoDate(req.query.start); if (s.error) return res.status(400).json({ error: 'Invalid start date (YYYY-MM-DD).' });
-    const e = parseIsoDate(req.query.end); if (e.error) return res.status(400).json({ error: 'Invalid end date (YYYY-MM-DD).' });
-    if (s.date && e.date && s.date > e.date) return res.status(400).json({ error: 'Start date must be on or before the end date.' });
-    const part = ['full', 'pie', 'table', 'ledger'].includes(String(req.query.part)) ? String(req.query.part) : 'full';
-    const theme = String(req.query.theme) === 'dark' ? 'dark' : 'light';
+    const q = readPdfQuery(req.query);
+    if (q.error) return res.status(400).json({ error: q.error });
+    const { part, theme, range } = q;
 
     const { Capacitor } = await import('@capacitor/core');
     if (!Capacitor.isNativePlatform()) {
@@ -366,11 +211,7 @@ export function installFetchShim(repo) {
     }
     const { PdfGenerator } = await import('@capgo/capacitor-pdf-generator');
 
-    const range = { start: s.date, end: e.date };
-    const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
-    const o = computeOverview(range);
-    const rows = LEDGER_CRUDS.cash_out.list().map(cashOutRow).filter((r) => inR(r.txDate));
-    const html = buildOverviewPdfHtml(part, o, rows, range, theme);
+    const html = overviewPdfHtml({ part, theme, range });
 
     try {
       const result = await withTimeout(

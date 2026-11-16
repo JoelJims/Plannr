@@ -22,7 +22,7 @@ const MIN_DE_SCREEN = 12;
 // The PDF palette is one hue family on white paper by design, which caps how far 24 categories can
 // be pushed apart — measured ceiling ~11.6 while still reading as amber, ~20 if the hue constraint
 // is dropped. 5.5 pins the improvement that was made (from 2.99, and from an outright duplicate)
-// without pretending the printed pie is as readable as the screen one. See PDF_PALETTE in server.js.
+// without pretending the printed pie is as readable as the screen one. See PDF_PALETTE in core/overview-pdf.js.
 const MIN_DE_PDF = 5.5;
 const MIN_CONTRAST = 3.0;
 const PANEL = '#111113';
@@ -141,17 +141,22 @@ function assertDistinct(label, colors, minDE) {
   check('the rendered colours are the shipped palette, in order', JSON.stringify(rendered) === JSON.stringify(screenFixed.slice(0, rendered.length)));
   assertDistinct(`screen palette + extension (${screenFixed.length + screenExt.length} colours)`, screenFixed.concat(screenExt), MIN_DE_SCREEN);
 
-  // server.js and public/local-api.js are deliberately duplicated files; a palette that drifts
-  // between them means the on-device PDF and the desktop PDF are different documents.
-  const pdfSrv = grab('server.js', 'PDF_PALETTE'), pdfLocal = grab('public/local-api.js', 'PDF_PALETTE');
-  const pdfSrvExt = grab('server.js', 'PDF_PALETTE_EXT'), pdfLocalExt = grab('public/local-api.js', 'PDF_PALETTE_EXT');
-  check('PDF_PALETTE is identical in server.js and local-api.js', JSON.stringify(pdfSrv) === JSON.stringify(pdfLocal));
-  check('PDF_PALETTE_EXT is identical in server.js and local-api.js', JSON.stringify(pdfSrvExt) === JSON.stringify(pdfLocalExt));
+  // A palette that drifts between the dev server and the phone means the on-device PDF and the
+  // desktop PDF are different documents. Since step 1.3 both build the PDF's HTML from the one copy
+  // in core/overview-pdf.js, so the check is that no second copy has come back.
+  const PDF_SRC = 'core/overview-pdf.js';
+  const pdfSrv = grab(PDF_SRC, 'PDF_PALETTE');
+  const pdfSrvExt = grab(PDF_SRC, 'PDF_PALETTE_EXT');
+  for (const f of ['server.js', 'public/local-api.js']) {
+    const src = fs.readFileSync(f, 'utf8');
+    check(`${f} has no copy of the PDF palette (it uses ${PDF_SRC})`,
+      !/\bconst (PDF_PALETTE|PDF_PALETTE_EXT|PDF_CUSTOM_COLOR) =/.test(src));
+  }
 
   // The Custom colour used to be a bare literal that was ALSO in the palette — the 18th ledger and
   // the Custom slice came out byte-identical. It is a named constant now precisely so it can be
   // included here.
-  const pdfCustom = /const PDF_CUSTOM_COLOR = '(#[0-9a-f]{6})'/.exec(fs.readFileSync('server.js', 'utf8'));
+  const pdfCustom = /const PDF_CUSTOM_COLOR = '(#[0-9a-f]{6})'/.exec(fs.readFileSync(PDF_SRC, 'utf8'));
   check('PDF_CUSTOM_COLOR is declared as a constant', !!pdfCustom, pdfCustom ? pdfCustom[1] : 'missing');
   const pdfAll = pdfSrv.concat(pdfCustom ? [pdfCustom[1]] : []);
   check('the PDF Custom colour is not also a ledger colour', new Set(pdfAll).size === pdfAll.length,
