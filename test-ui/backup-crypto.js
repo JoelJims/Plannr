@@ -118,6 +118,22 @@ function buildPreTenancyFixture() {
     try { nodeBackupCrypto.decrypt(Buffer.from(browserEncArray), 'wrong-one'); } catch { nodeRejectsWrongPassOnBrowserFile = true; }
     check('cross-compat: Node rejects a wrong passphrase on a browser-encrypted file', nodeRejectsWrongPassOnBrowserFile);
 
+    // ---- 2b. Known-answer files (step 1.4 A1): made once by the two pre-1.4 versions; must open here ----
+    const KAT = path.join(__dirname, '..', 'test', 'fixtures', 'backup-kat');
+    const katManifest = JSON.parse(fs.readFileSync(path.join(KAT, 'manifest.json'), 'utf8'));
+    const katPlain = fs.readFileSync(path.join(KAT, katManifest.plaintext.file));
+    for (const f of katManifest.files) {
+      const r = await page.evaluate(async ({ enc, pass }) => {
+        const mod = await import('/backup-crypto.js');
+        const out = await mod.decrypt(new Uint8Array(enc), pass);
+        let wrongRejected = false;
+        try { await mod.decrypt(new Uint8Array(enc), pass + 'x'); } catch { wrongRejected = true; }
+        return { out: Array.from(out), looksLikeSqlite: mod.looksLikeSqlite(out), wrongRejected };
+      }, { enc: Array.from(fs.readFileSync(path.join(KAT, f.file))), pass: katManifest.passphrase });
+      check(`known-answer file ${f.file} (${f.madeBy}) opens in the browser`, Buffer.from(r.out).equals(katPlain) && r.looksLikeSqlite);
+      check(`  ...and a wrong passphrase is rejected`, r.wrongRejected);
+    }
+
     // ---- Seed the fixed local owner (same as the Phase 5 gate) so the app's own bootstrap works ----
     await page.evaluate(async () => {
       const dbMod = await import('/db.js');

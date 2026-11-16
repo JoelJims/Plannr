@@ -508,3 +508,25 @@ moves.**
 - **D6. The plugin is installed in a test build first (C1).** It is added to `package.json` only at
   C3, after the spike report.
 - **D7. No files are deleted.** The root `backup-crypto.js` stays, as a wrapper.
+
+---
+
+## 8. Progress
+
+The owner approved this plan and decisions D1–D7 on 2026-11-16.
+
+- **A1 (2026-11-16):** the known-answer files are in `test/fixtures/backup-kat/`.
+  - Two files hold the same 2,048 test bytes. They were encrypted once by each version in use
+    before step 1.4:
+    - `node-v1.plbk`, made by `backup-crypto.js` in Node;
+    - `browser-v1.plbk`, made by `public/backup-crypto.js` in Chromium.
+  - `manifest.json` records the passphrase, the SHA-256 of each file, and how each was made.
+  - **The checks:**
+    - `test/backup-kat.test.js` opens both files with both versions and rejects a wrong passphrase.
+    - It also rebuilds each file byte for byte from its own salt and IV using `node:crypto` alone,
+      which pins the format independently of both versions.
+    - `test-ui/backup-crypto.js` opens both files in Chromium.
+  - **Why `.plbk`:** the files end in `.plbk`, not `.db.enc`, so the `.gitignore` rule that keeps
+    real encrypted backups out of git stays as it is.
+  - **Line endings:** `.gitattributes` marks the files as binary, so git never changes their line
+    endings.

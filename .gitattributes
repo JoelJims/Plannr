@@ -1,0 +1,4 @@
+# Known-answer files for the encrypted backup format (step 1.4 A1) must stay byte for byte as
+# they were made: never convert line endings in them.
+test/fixtures/backup-kat/*.bin binary
+test/fixtures/backup-kat/*.plbk binary
