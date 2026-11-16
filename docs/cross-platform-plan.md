@@ -559,8 +559,10 @@ Phase 2 scripts.
 
   Left in the two copies: each one's PDF route and renderer, `/api/health` (dev server only), and
   the backup routes (export, import, the encrypted pair, the backup reminder) plus `/api/storage`,
-  which wait for step 1.4 because they decide how data is saved and restored. The backup and restore routes wait for 1.4, because they decide how
-  data is stored and restored.
+  which wait for step 1.4 because they decide how data is saved and restored.
+
+- **1.4 (planned, not started):** `docs/step-1.4-storage-plan.md` joins this plan's step 1.4 with
+  Phases 2 and 3 and the desktop file adapter from 4.1, in stages A–D. It waits for the owner's OK.
 
 **Rough effort:**
 
