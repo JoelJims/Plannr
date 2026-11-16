@@ -117,7 +117,7 @@ const repo = require('./repo');
 // Request checks shared with the phone (size limits, malformed JSON, unknown /api routes).
 const requestRules = require('./request-rules');
 // Pure input checks and formatting, shared with the phone (cross-platform plan, step 1.3).
-const { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
+const { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
 const { createLedgerIndex } = require('./core/ledger-index.js');
 const { checkHost, hostError } = require('./core/host.js');
 
@@ -334,16 +334,10 @@ function requireAuth(req, res, next) {
 // Soft-deleted rows and all ids/foreign keys are preserved.
 // ---------------------------------------------------------------------------
 const backupFormat = require('./backup-format');
-// Startup drift guard (see backup-format.js): fail at boot, not silently during a restore.
+// The startup drift guard (see backup-format.js) runs when core/routes/backup.js registers. This copy
+// is for the schema tests (app._assertImportOwnershipComplete).
 const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(db);
-assertImportOwnershipComplete();
-const buildBackup = (opts) => backupFormat.buildBackup(db, opts);
-// Read ledgerIndex.byCode() at call time: ledgerIndex.refresh() replaces it after a category import or restore.
-const validateBackup = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate });
 
-// EXPORT: one JSON object (schema version + timestamp + every ledger table as
-// arrays of full rows, incl. soft-deleted + the budget/settings). The frontend
-// downloads it via fetch, but Content-Disposition names it for direct hits too.
 // Phase 10b — full encrypted database snapshot, added specifically so the Ledger List CSV import
 // (below) has something real to trigger as its non-negotiable pre-import restore point: server.js
 // never had an encrypted, user-downloadable backup route before (only the plain-JSON ledger export
@@ -407,20 +401,8 @@ app.get('/api/storage', requireApiAuth, (req, res) => {
   res.json({ mode: 'desktop', databaseBytes, usedBytes: null, limitBytes: null, fraction: null, level: 'ok' });
 });
 
-app.get('/api/backup/export', requireApiAuth, (req, res) => {
-  // Phase 8B — contacts (Gmail + WhatsApp numbers) are excluded unless the user opts in on the Data
-  // page (?includeContacts=1). Default omits them so a shared/stored backup carries no personal data.
-  const includeContacts = req.query.includeContacts === '1';
-  const backup = buildBackup({ includeContacts });
-  res.setHeader('Content-Disposition', `attachment; filename="plannr-backup-${backup.exportedAt.slice(0, 10)}.json"`);
-  res.json(backup);
-});
-
-// IMPORT (REPLACE, made safe): validate fully -> auto-snapshot current data ->
-// replace all ledger data in ONE transaction, preserving ids + foreign keys.
-// Never deletes before the replacement is proven valid; rolls back on any error.
-// This server's snapshot.writeJson (core/host.js, step 1.4 A4): the safety copy goes in a file beside
-// the DB, and the answer reports its path relative to the project.
+// This server's snapshot.writeJson (core/host.js, step 1.4 A4): the safety copy before a JSON
+// restore goes in a file beside the DB, and the answer reports its path relative to the project.
 function writeJsonSnapshotBesideDb(backup) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const snapPath = path.join(path.dirname(DB_PATH), `auto-snapshot-before-import-${stamp}.json`);
@@ -428,33 +410,9 @@ function writeJsonSnapshotBesideDb(backup) {
   return path.relative(__dirname, snapPath).split(path.sep).join('/');
 }
 
-app.post('/api/backup/import', requireApiAuth, async (req, res) => {
-  // 1. VALIDATE — abort before changing anything.
-  const v = validateBackup(req.body);
-  if (v.error) return res.status(400).json({ error: v.error });
-
-  // 2. AUTO-SNAPSHOT the current data first, beside the DB file. Report its path.
-  let snapshot;
-  try {
-    snapshot = await host.snapshot.writeJson(buildBackup({ includeContacts: true })); // local rollback file — keeps contacts
-  } catch (e) {
-    if (!IS_PROD) console.error('Backup snapshot failed:', e);
-    return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
-  }
-
-  // 3. REPLACE in one transaction (backup-format.js). Any error rolls back: current data unchanged.
-  let result;
-  try {
-    result = backupFormat.applyBackup(db, req.body);
-  } catch (e) {
-    if (!IS_PROD) console.error('Backup import failed, rolled back:', e);
-    if (isStorageFullError(e)) return res.status(500).json({ error: 'Storage is full — the import did not go through. Free up space, then try again.', snapshot });
-    return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
-  }
-  ledgerIndex.refresh(); // a v2 backup may have brought its own categories
-
-  res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
-});
+// JSON export and import (REPLACE, made safe: check, safety copy, one transaction):
+// core/routes/backup.js (step 1.4 A7).
+require('./core/routes/backup.js').register(app, { ...coreContext, CUSTOM_CODE });
 
 // Guard the protected pages' RAW filenames BEFORE express.static, so a
 // logged-out request for /home.html or /date.html is redirected instead of

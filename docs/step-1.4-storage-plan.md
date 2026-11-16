@@ -587,3 +587,14 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
   - **Tests:** `test/backup-reminder.test.js`, in both passes. Over HTTP: never exported, a stamp,
     off, the limits 1 and 365, refusals, and a bad stored value. With a fixed clock: 6 days 23:59:59
     reads as 6, exactly the threshold is not overdue, the next day is, and a clock set back reads 0.
+- **A7 (2026-11-16):** the JSON export and import are in the core (`core/routes/backup.js`).
+  - The import keeps its order: check the file, save the safety copy through
+    `host.snapshot.writeJson`, then replace in one transaction (`backup-format.js`). The answers are
+    unchanged. The dev server still names the download; the phone ignores the header.
+  - Neither platform keeps its own `buildBackup` or `validateBackup`. The startup drift guard runs
+    when the core route registers.
+  - The encrypted backup routes stay with each platform until stage B gives the adapter
+    `exportBytes` and `replaceWith`.
+  - **Tests:** `test/backup-routes.test.js`, in both passes: the download name, a refused file makes
+    no safety copy, a failed safety copy changes nothing, and the copy is taken before the replace.
+- **Stage A is done.** Nothing in it changed where or how data is stored.

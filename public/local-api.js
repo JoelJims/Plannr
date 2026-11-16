@@ -27,9 +27,8 @@
 
 import { db, isStorageFullError, rollbackQuietly } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
-import * as backupFormat from './backup-format.js';
 import * as requestRules from './request-rules.js';
-import { str, parsePaise, parseIsoDate, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
+import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
 import { createLedgerIndex } from './core/ledger-index.js';
 import { checkHost, hostError } from './core/host.js';
 import * as peopleRoutes from './core/routes/people.js';
@@ -44,6 +43,7 @@ import * as overviewRoutes from './core/routes/overview.js';
 import * as overviewPdf from './core/overview-pdf.js';
 import * as pdfRoutes from './core/routes/pdf.js';
 import * as backupReminderRoutes from './core/routes/backup-reminder.js';
+import * as backupRoutes from './core/routes/backup.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -236,52 +236,16 @@ export function installFetchShim(repo) {
   pdfRoutes.register(localApp, { ...coreContext, readPdfQuery, overviewPdfHtml });
 
   // ---------------------------------------------------------------------------
-  // Data backup. The format (tables, columns, validation, the restore transaction) lives in
-  // backup-format.js, shared with server.js, so the phone and the desktop cannot drift. The one
-  // phone-specific part is the pre-import safety snapshot (safety-snapshots.js): there is no
-  // file beside the DB here, so it goes into the app's data folder through Capacitor Filesystem.
+  // Data backup. JSON export and import (REPLACE, made safe: check, safety copy, one transaction):
+  // core/routes/backup.js (step 1.4 A7), with the format in backup-format.js, shared with server.js.
+  // The phone's own part is the safety copy, host.snapshot.writeJson (safety-snapshots.js): the
+  // app's private data folder through Capacitor Filesystem, checked with stat; in a plain browser, a
+  // download.
   // ---------------------------------------------------------------------------
-  backupFormat.assertImportOwnershipComplete(db);
-  const buildBackup = (opts) => backupFormat.buildBackup(db, opts);
-  // Read ledgerIndex.byCode() at call time: ledgerIndex.refresh() replaces it after a category import or restore.
-  const validateBackup = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate });
+  backupRoutes.register(localApp, { ...coreContext, CUSTOM_CODE });
 
   // Storage meter on the Data Backup page (Phase 2, Step 3). See measureStorage() above.
   localApp.get('/api/storage', (req, res) => { res.json(measureStorage()); });
-
-  localApp.get('/api/backup/export', (req, res) => {
-    const includeContacts = req.query.includeContacts === '1';
-    const backup = buildBackup({ includeContacts });
-    res.json(backup);
-  });
-
-  // Pre-import safety snapshot: safety-snapshots.js writes it into the app's private data folder
-  // (Capacitor Filesystem, checked with stat) before the import may touch anything. server.js writes
-  // its own to a file beside the DB. In a plain browser it falls back to a download.
-  localApp.post('/api/backup/import', async (req, res) => {
-    const v = validateBackup(req.body);
-    if (v.error) return res.status(400).json({ error: v.error });
-    let snapshot;
-    try {
-      snapshot = await host.snapshot.writeJson(buildBackup({ includeContacts: true }));
-    } catch (e) {
-      console.error('Backup snapshot failed:', e);
-      return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
-    }
-
-    // Replace in one transaction (backup-format.js). Any error rolls back: current data unchanged.
-    let result;
-    try {
-      result = backupFormat.applyBackup(db, req.body);
-    } catch (e) {
-      console.error('Backup import failed, rolled back:', e);
-      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the import did not go through.'), snapshot });
-      return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
-    }
-    ledgerIndex.refresh(); // a v2 backup may have brought its own categories
-
-    res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
-  });
 
   // ---------------------------------------------------------------------------
   // Phase 7 — encrypted full-snapshot backup. A different thing from the plain-JSON export/import

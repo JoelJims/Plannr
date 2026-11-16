@@ -55,8 +55,9 @@ for (const [file, importLine] of [
     const ctx = src.match(/const coreContext = \{([\s\S]*?)\n\s*\};/);
     assert.ok(ctx, 'coreContext found');
     assert.match(ctx[1], /\bhost,/);
-    // The routes that use a service call it through the host, not the platform function directly.
-    assert.match(src, /await host\.snapshot\.writeJson\(buildBackup\(/);
+    // A7: the JSON import (and its safety copy) is core/routes/backup.js, so neither platform keeps
+    // its own backup helpers.
+    assert.doesNotMatch(src, /\b(?:const|function)\s+(?:buildBackup|validateBackup)\b/);
     // A6: the clock is the real one on both platforms.
     assert.match(src, /\n\s*now: \(\) => new Date\(\),\n/);
   });
@@ -65,6 +66,11 @@ for (const [file, importLine] of [
 test('the shared PDF route renders through host.pdf.render (step 1.4 A5)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'pdf.js'), 'utf8');
   assert.match(src, /await host\.pdf\.render\(overviewPdfHtml\(/);
+});
+
+test('the shared JSON import saves its safety copy through host.snapshot.writeJson (step 1.4 A7)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'backup.js'), 'utf8');
+  assert.match(src, /await host\.snapshot\.writeJson\(backupFormat\.buildBackup\(db, \{ includeContacts: true \}\)\)/);
 });
 
 test('the backup reminder reads the time only through host.now (step 1.4 A6)', () => {
