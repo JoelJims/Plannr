@@ -598,3 +598,21 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
   - **Tests:** `test/backup-routes.test.js`, in both passes: the download name, a refused file makes
     no safety copy, a failed safety copy changes nothing, and the copy is taken before the replace.
 - **Stage A is done.** Nothing in it changed where or how data is stored.
+
+**Stage B (started 2026-11-16 after your OK of stage A; B1–B3 only, then stop before B4).**
+Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
+
+- **B1 (2026-11-16):** the adapter interface and the `node-sqlite` adapter.
+  - `core/db-adapter.js`: the method list, `checkAdapter()`, and `createSyncEngineAdapter()`, which
+    builds the async interface over any handle with the `DatabaseSync` surface (`node:sqlite` now,
+    sqlite-wasm in B2). Prepared statements are cached per handle and dropped when the database is
+    replaced. `params` is always an array. The transition methods are `prepare(sql)` and
+    `execSync(sql)`; they go in B17.
+  - `db-adapter-node.js` (Node only, not copied to `public/`): `exportBytes` (`VACUUM INTO` a temp
+    file), `replaceWith` (SQLite header and `integrity_check` first, then write + fsync + rename,
+    refused while a `-journal` or `-wal` is beside the file), `info` (size on disk).
+  - Nothing uses them yet: `db.js` still opens its own handle until B5.
+  - **Tests:** `test/adapter-contract.mjs` (13 cases, no Node imports, so B2 can run it in
+    Chromium) and `test/db-adapter-node.test.js` (the cases on a file and in memory, plus the
+    file-only checks). The suite was checked against 5 deliberately broken adapters; each was
+    caught.
