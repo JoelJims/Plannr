@@ -549,9 +549,10 @@ Phase 2 scripts.
   - 1.3e `core/routes/cash-and-loans.js` (cash in, loans, cash out);
   - 1.3f `core/routes/contracts.js` (the contract, its services and allowances);
   - 1.3g `core/routes/contractor-payments.js`;
-  - 1.3h `core/routes/trash.js` (the Recycle Bin).
+  - 1.3h `core/routes/trash.js` (the Recycle Bin);
+  - 1.3i `core/routes/budget.js`.
 
-  Still to move: the budget, reminder times, and the overview and its PDF. The backup and restore routes wait for 1.4, because they decide how
+  Still to move: reminder times, and the overview and its PDF. The backup and restore routes wait for 1.4, because they decide how
   data is stored and restored.
 
 **Rough effort:**

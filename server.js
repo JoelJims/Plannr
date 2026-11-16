@@ -123,11 +123,10 @@ const { createLedgerIndex } = require('./core/ledger-index.js');
 // Hot prepared statements — hoisted here, AFTER init() has created and migrated every
 // table (incl. the cash_out create-copy-swap rebuild and the contract_services drop), so
 // each binds to the final schema. node:sqlite compiles each SQL once here instead of on
-// every call. These sit on the hottest paths: computeOverview()'s four queries + getBudgetPaise()
-// back the Overview screen and every PDF export.
+// every call. These sit on the hottest paths: computeOverview()'s four queries back the Overview
+// screen and every PDF export (the budget's statement is in core/routes/budget.js).
 // (Order matters — declaring these before init() would prepare against a pre-migration or
 // dropped table. Keep them here.)
-const BUDGET_STMT = db.prepare("SELECT value FROM settings WHERE key = 'budget_paise'");
 // Phase 6C — computeOverview reads each ledger table BOTH cumulatively (a balance) and
 // range-scoped (a period figure), so the two are split into separate queries:
 //
@@ -207,30 +206,8 @@ require('./core/routes/trash.js').register(app, { ...coreContext, CASH_IN_SELECT
 // paise throughout (never float). No editing here — that is a later phase.
 // ---------------------------------------------------------------------------
 
-// Optional overall budget, stored as one settings row. NULL = unset.
-function getBudgetPaise() {
-  const r = BUDGET_STMT.get();
-  if (!r || r.value == null || r.value === '') return null;
-  const n = Number(r.value);
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
-}
-
-app.get('/api/budget', requireApiAuth, (req, res) => {
-  res.json({ budgetPaise: getBudgetPaise() });
-});
-
-// Set (positive ₹) or clear (empty) the overall budget. Optional / non-blocking.
-app.put('/api/budget', requireApiAuth, (req, res) => {
-  const raw = req.body.budgetRupees;
-  if (raw === undefined || raw === null || String(raw).trim() === '') {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL").run();
-    return res.json({ budgetPaise: null });
-  }
-  const paise = parsePaise(raw);
-  if (paise === null) return res.status(400).json({ error: 'Enter a valid budget greater than 0 (up to 2 decimals).' });
-  db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(paise));
-  res.json({ budgetPaise: paise });
-});
+// The overall budget: core/routes/budget.js (step 1.3).
+const { getBudgetPaise } = require('./core/routes/budget.js').register(app, coreContext);
 
 // Phase 6b — up to 5 daily local-notification times ("HH:MM", 24h), replacing the deleted
 // scheduled-email report (Phase 1.3 removed daily-report.js, nodemailer, and its scheduling UI).
