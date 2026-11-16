@@ -616,3 +616,16 @@ Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
     Chromium) and `test/db-adapter-node.test.js` (the cases on a file and in memory, plus the
     file-only checks). The suite was checked against 5 deliberately broken adapters; each was
     caught.
+- **B2 (2026-11-16):** the `wasm-kvvfs` adapter, `public/db-adapter-kvvfs.js` (the phone and the
+  browser preview; not used by the app yet).
+  - `exportBytes`: `sqlite3_js_db_export`. `info`: page count × page size.
+  - `replaceWith`: kvvfs has no file to swap, so the new image is opened in memory and checked
+    (SQLite header, `integrity_check`, `foreign_key_check`) before anything is touched, then copied
+    over the live database in one transaction: tables and rows, the AUTOINCREMENT sequences,
+    `user_version`, then indexes, triggers and views. A failure rolls back and leaves the data as
+    it was. (`local-snapshot.js` keeps its own copy of this until C11 moves the encrypted restore
+    into the core.)
+  - **Tests:** `npm run test:db-adapter-kvvfs` (new UI suite): the 13 contract cases in Chromium,
+    a replaced database is what the next open sees, and a refused replace leaves every
+    `localStorage` record byte for byte as it was. It caught one real bug on the way (the size
+    read through `PRAGMA page_size` came back empty on sqlite-wasm).

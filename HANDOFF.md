@@ -248,6 +248,10 @@ going over an allowance is a normal thing to happen, not an error.
   (outside requests blocked and recorded, `navigator.onLine` false). Logs, edits and deletes an
   entry, downloads both backups and presses the PDF button; fails on any outside request.
   `test/offline.test.js` (in `npm test`, both passes) covers the same at the code level.
+- **`npm run test:db-adapter-kvvfs`** — the database adapter contract suite
+  (`test/adapter-contract.mjs`) on the phone's sqlite-wasm/localStorage adapter in Chromium, plus
+  a replaced database surviving a reopen and a refused replace leaving localStorage untouched.
+  The same cases run on the Node adapter in `npm test` (step 1.4 B1–B2).
 - **`npm run test:backup-roundtrip`** — the phone's backups rebuild the app exactly: fill with
   the fixture, back up (JSON and encrypted), wipe, restore, compare every table row by row;
   the Recycle Bin then lists the fixture's deleted rows.
