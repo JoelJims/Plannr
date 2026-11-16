@@ -17,6 +17,9 @@ const load = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-adapter-'));
 after(() => fs.rmSync(DIR, { recursive: true, force: true }));
 
+// What the contract cases get from the shared core (see test/adapter-contract.mjs).
+const coreEnv = async () => ({ createRequestQueue: (await load('core/request-queue.js')).createRequestQueue });
+
 let n = 0;
 async function withAdapter(fn, { file = true } = {}) {
   const { openNodeSqliteAdapter } = await load('db-adapter-node.js');
@@ -47,6 +50,7 @@ const NAMES = [
   'replaceWith refuses bytes that are not a SQLite database and changes nothing',
   'exportBytes, replaceWith and close are refused inside a transaction',
   'info names the engine and gives a size',
+  'two writes at once through the request queue, one failing: only the failed one is undone',
 ];
 
 test('this file runs every contract case', async () => {
@@ -57,7 +61,8 @@ test('this file runs every contract case', async () => {
 for (const name of NAMES) {
   test(`contract (node-sqlite, file): ${name}`, async () => {
     const { CONTRACT_CASES } = await load('test/adapter-contract.mjs');
-    await withAdapter((db) => CONTRACT_CASES.find((c) => c.name === name).run(db));
+    const env = await coreEnv();
+    await withAdapter((db) => CONTRACT_CASES.find((c) => c.name === name).run(db, env));
   });
 }
 for (const name of NAMES) {
@@ -65,7 +70,8 @@ for (const name of NAMES) {
     const { CONTRACT_CASES } = await load('test/adapter-contract.mjs');
     const c = CONTRACT_CASES.find((x) => x.name === name);
     if (c.needsFile) return t.skip('replaces the database, which needs a file');
-    await withAdapter((db) => c.run(db), { file: false });
+    const env = await coreEnv();
+    await withAdapter((db) => c.run(db, env), { file: false });
   });
 }
 

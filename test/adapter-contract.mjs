@@ -4,9 +4,10 @@
 // wasm-kvvfs in Chromium (stage B2), capacitor-sqlite on the emulator (stage C3). So this file
 // imports nothing: no node:test, no node:assert, no file system.
 //
-// Each case is { name, needsFile?, run(db, t) }. `db` is a fresh, empty adapter; `t` has the small
-// assertion helpers below. needsFile marks the cases that replace the database, which needs a real
-// file (or kvvfs's slot), not :memory:.
+// Each case is { name, needsFile?, run(db, env) }. `db` is a fresh, empty adapter; the assertion
+// helpers are `t` below. needsFile marks the cases that replace the database, which needs a real
+// file (or kvvfs's slot), not :memory:. `env` is what the runner hands in from the shared core:
+// { createRequestQueue } (core/request-queue.js, B3), so the same queue is tested on every engine.
 
 export class ContractFailure extends Error {}
 
@@ -218,6 +219,29 @@ export const CONTRACT_CASES = [
       t.eq(i.engine, db.engine);
       t.ok(typeof i.path === 'string' && i.path.length > 0, 'a path');
       t.ok(Number.isInteger(i.sizeBytes) && i.sizeBytes > 0, `a size (${i.sizeBytes})`);
+    },
+  },
+  {
+    name: 'two writes at once through the request queue, one failing: only the failed one is undone',
+    async run(db, env) {
+      t.ok(env && typeof env.createRequestQueue === 'function', 'the runner hands in createRequestQueue');
+      await db.exec(SCHEMA);
+      const later = () => new Promise((r) => setTimeout(r, 0)); // a real wait, as on an async engine
+      const queue = env.createRequestQueue();
+      const a = queue.run(() => db.transaction(async (tx) => {
+        await tx.run('INSERT INTO item (name, paise) VALUES (?, ?)', ['A first', 100]);
+        await later();
+        await tx.run('INSERT INTO item (name, paise) VALUES (?, ?)', ['A second', 200]);
+        throw new Error('A failed half way');
+      }));
+      const b = queue.run(async () => { await later(); await db.run('INSERT INTO item (name, paise) VALUES (?, ?)', ['B', 300]); });
+      const c = queue.run(() => db.transaction(async (tx) => { await tx.run(UPSERT, ['saved_by', 'C']); }));
+      const [ra, rb, rc] = await Promise.allSettled([a, b, c]);
+      t.eq([ra.status, String(ra.reason && ra.reason.message)], ['rejected', 'A failed half way'], 'A fails');
+      t.eq([rb.status, rc.status], ['fulfilled', 'fulfilled'], `B and C succeed (C: ${rc.reason ? rc.reason.message : 'ok'})`);
+      t.eq(await db.all('SELECT name, paise FROM item ORDER BY id'), [{ name: 'B', paise: 300 }]);
+      t.eq(await db.all('SELECT key, value FROM settings'), [{ key: 'saved_by', value: 'C' }]);
+      t.eq(db.inTransaction, false);
     },
   },
 ];

@@ -629,3 +629,16 @@ Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
     a replaced database is what the next open sees, and a refused replace leaves every
     `localStorage` record byte for byte as it was. It caught one real bug on the way (the size
     read through `PRAGMA page_size` came back empty on sqlite-wasm).
+- **B3 (2026-11-16):** the request queue, `core/request-queue.js`: `createRequestQueue().run(fn)`
+  runs one request at a time, in order, passes back each result or error, and never lets an error
+  stop the requests after it.
+  - **Not wired into `server.js` or `local-api.js` yet.** While every database call is synchronous,
+    a request cannot be interrupted between two of them. It is wired in with the first async
+    database call (B5). Then the slow part of a PDF (rendering finished HTML, no database) should
+    run outside the queue, so a PDF does not hold up the next request.
+  - **Tests:** `test/request-queue.test.js` (order, errors, size; two writes at once with one
+    failing, through the queue and, as the known positive, without it: B's write is silently
+    rolled back with A's, or B's transaction is refused). The contract suite gained the same case
+    (now 14), so it runs on `node-sqlite` and in Chromium on `wasm-kvvfs`; with a do-nothing queue
+    it fails.
+- **Stopped before B4** (`transaction(fn)` in `db.js` and the async migration runner), as asked.

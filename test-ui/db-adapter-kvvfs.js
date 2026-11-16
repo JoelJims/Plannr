@@ -39,18 +39,19 @@ const TEST_PAGE = `<!doctype html><meta charset="utf-8"><title>adapter contract<
     const results = await page.evaluate(async () => {
       const { CONTRACT_CASES } = await import('/__adapter-contract.mjs');
       const { openKvvfsAdapter } = await import('/db-adapter-kvvfs.js');
+      const env = { createRequestQueue: (await import('/core/request-queue.js')).createRequestQueue };
       const wipe = () => { for (const k of Object.keys(localStorage)) if (k.startsWith('kvvfs-local')) localStorage.removeItem(k); };
       const out = [];
       for (const c of CONTRACT_CASES) {
         wipe();
         const db = await openKvvfsAdapter();
-        try { await c.run(db); out.push({ name: c.name, ok: true }); } catch (e) { out.push({ name: c.name, ok: false, error: String(e && e.message) }); }
+        try { await c.run(db, env); out.push({ name: c.name, ok: true }); } catch (e) { out.push({ name: c.name, ok: false, error: String(e && e.message) }); }
         try { await db.close(); } catch { /* a case may close it */ }
       }
       wipe();
       return out;
     });
-    check('every contract case ran', results.length >= 13, `${results.length} cases`);
+    check('every contract case ran', results.length >= 14, `${results.length} cases`);
     for (const r of results) check(`contract (wasm-kvvfs): ${r.name}`, r.ok, r.error);
 
     // ---- What only kvvfs has ----
