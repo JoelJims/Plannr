@@ -530,3 +530,14 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
     real encrypted backups out of git stays as it is.
   - **Line endings:** `.gitattributes` marks the files as binary, so git never changes their line
     endings.
+- **A2 (2026-11-16):** there is now one encryption, `core/backup-crypto.js`.
+  - It uses WebCrypto AES-256-GCM. The platform supplies scrypt through
+    `createBackupCrypto({ scrypt })`.
+  - The format is unchanged: the A1 files open with it, and every file it writes is rebuilt byte
+    for byte by the layout check.
+  - **The phone uses it now.** `public/backup-crypto.js` only supplies scrypt-js (`window.scrypt`)
+    and re-exports the rest. Its API is unchanged, so `local-api.js` needed no edit. A test checks
+    that it has no encryption code of its own.
+  - **The desktop still has its own code** (`backup-crypto.js`, `node:crypto`) until A3.
+  - **Tests:** the core file, with scrypt-js and with `node:crypto`, opens both A1 files. Both
+    scrypt functions derive the same key. The desktop version opens the core's files.
