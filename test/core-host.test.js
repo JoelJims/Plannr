@@ -55,7 +55,11 @@ for (const [file, importLine] of [
     assert.ok(ctx, 'coreContext found');
     assert.match(ctx[1], /\bhost,/);
     // The routes that use a service call it through the host, not the platform function directly.
-    assert.match(src, /await host\.pdf\.render\(overviewPdfHtml\(/);
     assert.match(src, /await host\.snapshot\.writeJson\(buildBackup\(/);
   });
 }
+
+test('the shared PDF route renders through host.pdf.render (step 1.4 A5)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'pdf.js'), 'utf8');
+  assert.match(src, /await host\.pdf\.render\(overviewPdfHtml\(/);
+});

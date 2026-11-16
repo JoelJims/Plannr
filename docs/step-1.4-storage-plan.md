@@ -572,3 +572,10 @@ The owner approved this plan and decisions D1–D7 on 2026-11-16.
     Android app", 500 plugin missing, and 500 unexpected result on the phone. Plain refusals are not
     logged, as before.
   - **Tests:** `test/core-host.test.js`.
+- **A5 (2026-11-16):** the Overview PDF route is in the core (`core/routes/pdf.js`).
+  - The route checks the query, builds the page (`core/overview-pdf.js`), renders it through
+    `host.pdf.render`, sets the file name with the IST date, and passes a `hostError` on with its
+    own status and message.
+  - Each platform now keeps only its renderer.
+  - The guard test checks that neither copy still defines the route. The old copies were confirmed
+    to be flagged before the move.

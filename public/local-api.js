@@ -42,6 +42,7 @@ import * as budgetRoutes from './core/routes/budget.js';
 import * as notificationTimesRoutes from './core/routes/notification-times.js';
 import * as overviewRoutes from './core/routes/overview.js';
 import * as overviewPdf from './core/overview-pdf.js';
+import * as pdfRoutes from './core/routes/pdf.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -228,18 +229,9 @@ export function installFetchShim(repo) {
     return base64ToBytes(result.base64);
   }
 
-  localApp.get('/api/overview/pdf', async (req, res) => {
-    const q = readPdfQuery(req.query);
-    if (q.error) return res.status(400).json({ error: q.error });
-    const { part, theme, range } = q;
-    try {
-      const pdf = await host.pdf.render(overviewPdfHtml({ part, theme, range }), { part });
-      res.send(pdf);
-    } catch (err) {
-      if (!err.status || err.cause) console.error('PDF generation failed:', err.cause || err); // a plain refusal is not logged
-      res.status(err.status || 500).json({ error: err.userMessage || 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
-    }
-  });
+  // The route itself: core/routes/pdf.js (step 1.4 A5). It renders through host.pdf.render, which is
+  // renderPdfOnPhone above.
+  pdfRoutes.register(localApp, { ...coreContext, readPdfQuery, overviewPdfHtml });
 
   // ---------------------------------------------------------------------------
   // Data backup. The format (tables, columns, validation, the restore transaction) lives in

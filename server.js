@@ -305,21 +305,9 @@ function releasePdfSlot() {
   else pdfActive--;     // no one waiting -> free the slot
 }
 
-app.get('/api/overview/pdf', requireApiAuth, async (req, res) => {
-  const q = readPdfQuery(req.query);
-  if (q.error) return res.status(400).json({ error: q.error });
-  const { part, theme, range } = q;
-  // Validated BEFORE the render takes a slot, so bad requests don't consume capacity.
-  try {
-    const pdf = await host.pdf.render(overviewPdfHtml({ part, theme, range }), { part });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${istDateStamp()}.pdf"`); // Phase 10C — IST date, not UTC
-    res.send(pdf);
-  } catch (err) {
-    if (!IS_PROD && (!err.status || err.cause)) console.error('PDF generation failed:', err.cause || err); // "busy" is not logged
-    res.status(err.status || 500).json({ error: err.userMessage || 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
-  }
-});
+// The route itself: core/routes/pdf.js (step 1.4 A5). It renders through host.pdf.render, which is
+// renderOverviewPdf above.
+require('./core/routes/pdf.js').register(app, { ...coreContext, readPdfQuery, overviewPdfHtml });
 
 // ---------------------------------------------------------------------------
 // Phase 2 — one-request health check for the windowless case. Server start time only now.
