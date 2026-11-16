@@ -37,6 +37,7 @@ import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import * as cashAndLoansRoutes from './core/routes/cash-and-loans.js';
 import * as contractsRoutes from './core/routes/contracts.js';
 import * as contractorPaymentsRoutes from './core/routes/contractor-payments.js';
+import * as trashRoutes from './core/routes/trash.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -143,84 +144,8 @@ export function installFetchShim(repo) {
   // The Contractor Payments API: core/routes/contractor-payments.js (step 1.3).
   const { CONTRACTOR_PAYMENTS_SELECT, paymentRow } = contractorPaymentsRoutes.register(localApp, { ...coreContext, makeLedgerCrud, ledgerLabel, resolveLedger, REASON_MAX });
 
-  // ---------------------------------------------------------------------------
-  // Recycle Bin — ported from server.js verbatim.
-  // ---------------------------------------------------------------------------
-  const TRASH_TABLES = ['cash_in', 'cash_out', 'loans', 'contract', 'contractor_payments'];
-  const TRASH_SHAPERS = { cash_in: cashInRow, cash_out: cashOutRow, loans: loanRow, contract: contractRow, contractor_payments: paymentRow };
-  const TRASH_REPO = {
-    cash_in: repo.trash({ table: 'cash_in', select: CASH_IN_SELECT, alias: 'c' }),
-    cash_out: repo.trash({ table: 'cash_out', select: CASH_OUT_SELECT, alias: 'c' }),
-    loans: repo.trash({ table: 'loans', select: LOANS_SELECT, alias: '' }),
-    contract: repo.trash({ table: 'contract', select: 'SELECT * FROM contract', alias: '' }),
-    contractor_payments: repo.trash({ table: 'contractor_payments', select: CONTRACTOR_PAYMENTS_SELECT, alias: 'cp' }),
-  };
-
-  localApp.get('/api/trash', (req, res) => {
-    const trash = {};
-    for (const t of TRASH_TABLES) {
-      trash[t] = TRASH_REPO[t].listDeleted().map((r) => ({ ...TRASH_SHAPERS[t](r), deletedAt: r.deleted_at }));
-    }
-    res.json({ trash });
-  });
-
-  function trashTable(req) { return TRASH_TABLES.includes(req.params.table) ? req.params.table : null; }
-
-  localApp.post('/api/trash/:table/:id/restore', (req, res) => {
-    const table = trashTable(req);
-    if (!table) return res.status(400).json({ error: 'Unknown table.' });
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !TRASH_REPO[table].find(id)) return res.status(404).json({ error: 'That deleted item was not found.' });
-    if (table === 'contractor_payments') {
-      const row = repo.contract.paymentContractId(id);
-      const parent = repo.contract.deletedAt(row.contract_id);
-      if (!parent || parent.deleted_at !== null) {
-        return res.status(409).json({ error: 'Restore the parent contract first — this payment belongs to a contract that is still in the Recycle Bin.' });
-      }
-    }
-    if (table === 'contract' && repo.contract.liveCount() > 0) {
-      return res.status(409).json({ error: 'Another contract is already live — Plannr tracks a single contract. Delete the current one before restoring this from the Recycle Bin.' });
-    }
-    if (table === 'cash_out') {
-      const row = repo.contract.cashOutServiceId(id);
-      if (row && row.contract_service_id != null) {
-        const other = repo.contract.serviceClaimedByOther(row.contract_service_id, id);
-        if (other) {
-          return res.status(409).json({ error: `Can’t restore — its contract service is now linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can offset only one debit. Unlink it there first, then restore.` });
-        }
-      }
-    }
-    TRASH_REPO[table].restore(id);
-    res.json({ ok: true });
-  });
-
-  localApp.delete('/api/trash/:table/:id', (req, res) => {
-    const table = trashTable(req);
-    if (!table) return res.status(400).json({ error: 'Unknown table.' });
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !TRASH_REPO[table].find(id)) return res.status(404).json({ error: 'That deleted item was not found.' });
-    if (table === 'contract') {
-      const n = repo.contract.paymentsForAny(id);
-      if (n > 0) {
-        return res.status(409).json({ error: `This contract still has ${n} contractor payment${n === 1 ? '' : 's'} referencing it (live or in the Recycle Bin). Permanently deleting it would orphan ${n === 1 ? 'that payment' : 'those payments'} — delete or restore ${n === 1 ? 'it' : 'them'} first.` });
-      }
-      // cash_out.contract_service_id has no ON DELETE action, so a contract_services row cascading out
-      // from this delete would otherwise throw a raw FK error if any cash-out entry (live or in the
-      // Recycle Bin) still references one of this contract's services.
-      const m = repo.contract.cashOutReferencingServices(id);
-      if (m > 0) {
-        return res.status(409).json({ error: `This contract still has ${m} cash-out entr${m === 1 ? 'y' : 'ies'} linked to one of its services (live or in the Recycle Bin). Permanently deleting it would orphan ${m === 1 ? 'that entry' : 'those entries'} — unlink or restore ${m === 1 ? 'it' : 'them'} first.` });
-      }
-      // Contract Phase A: contract_allowances CASCADEs the same way and cash_out.contract_allowance_id
-      // has no ON DELETE action either.
-      const k = repo.contract.cashOutReferencingAllowances(id);
-      if (k > 0) {
-        return res.status(409).json({ error: `This contract still has ${k} cash-out entr${k === 1 ? 'y' : 'ies'} drawing against one of its allowances (live or in the Recycle Bin). Permanently deleting it would orphan ${k === 1 ? 'that entry' : 'those entries'} — unlink or restore ${k === 1 ? 'it' : 'them'} first.` });
-      }
-    }
-    TRASH_REPO[table].hardDelete(id);
-    res.json({ ok: true });
-  });
+  // The Recycle Bin: core/routes/trash.js (step 1.3).
+  trashRoutes.register(localApp, { ...coreContext, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CASH_OUT_SELECT, cashOutRow, contractRow, CONTRACTOR_PAYMENTS_SELECT, paymentRow });
 
   // ---------------------------------------------------------------------------
   // Budget + computeOverview() — ported verbatim. This is the money-arithmetic core; nothing here
