@@ -26,9 +26,9 @@ if (!process.argv.includes('--confirm')) {
   process.exit(1);
 }
 
-const { db, init } = require('./db');
+const { db, initSync } = require('./db');
 
-init(); // make sure the schema exists before counting/deleting
+initSync(); // make sure the schema exists before counting/deleting
 
 // SINGLE SOURCE OF TRUTH: every real table, straight from the catalogue.
 const TABLES = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);

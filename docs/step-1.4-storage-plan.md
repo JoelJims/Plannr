@@ -642,3 +642,87 @@ Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
     (now 14), so it runs on `node-sqlite` and in Chromium on `wasm-kvvfs`; with a do-nothing queue
     it fails.
 - **Stopped before B4** (`transaction(fn)` in `db.js` and the async migration runner), as asked.
+
+**B4 (2026-11-17, after your OK, with your five conditions).** Before it: a new bundle of B1–B3,
+`D:\Backups\plannr\plannr-phase2-2026-11-16-0e7b70b.bundle` (verified; the older one kept).
+
+- **`db.js`:** `transaction(fn)` and `dbAdapter()`, the async interface (`core/db-adapter.js`)
+  over `db.js`'s own handle. Only `get`, `all`, `run`, `exec` and `transaction` work through it
+  yet; `exportBytes`, `replaceWith`, `info` and `close` say "stage B5".
+  - `runMigrations(adapter, list)` is async. A step is `{ version, name, async up(tx) }`; each step
+    and its version stamp run in one adapter transaction. If the step fails and the rollback
+    fails too, the error says so and points to the safety snapshot, instead of "your data is
+    unchanged".
+  - `init()` is async: snapshot, then `legacyInit()` (the v2 baseline, unchanged), then the
+    numbered steps. A refusal is a rejection.
+  - `initSync()` is for `server.js`, `reset-db.js` and `seed-demo.js` until they can await (B17).
+    It refuses, before changing anything, a database that needs a numbered step (there are none
+    yet), so a new step cannot be skipped by them quietly.
+  - The phone awaits it: `public/local-bootstrap.js` and `public/local-snapshot.js`.
+- **One fix, a change of behaviour:** a v2 database from an older app that has not had one of
+  the one-off clean-ups yet (its settings marker missing) ran them, the destructive ones
+  included, **without a safety snapshot**. `migrationPlan()` now counts them, so `init()` takes
+  the snapshot first. The old runner did not.
+- **Condition 2, old and new runner give the same database** (`test/migration-equivalence.test.js`,
+  `npm test`, 20 tests, about 5 s). `test/fixtures/schema-history/`: 8 databases, one for every
+  distinct schema the 16 historical versions of `db.js` built (3 at user_version 1, 5 at 2), each
+  with made-up rows in every table, stored as SQL with a checksum; the old runner is `db.js` and
+  `ledgers.js` byte for byte as at 0e7b70b. Each fixture, with and without the approvals, is
+  upgraded by the old `init()`, the new `await init()` and `initSync()`, each in its own process:
+  same outcome, same schema and user_version, same sha256 of every table, same integrity and
+  foreign-key checks; every snapshot is the database before the upgrade. The numbered-step
+  runner is compared too (old sync steps v3–v5 against the new async ones, and with v4 failing).
+  Known positive: two bugs put into `db.js` on purpose gave 12 failures.
+- **Condition 3, a failure at every step** (`test/migration-faults.test.js`, `npm test`, about
+  12 s; `test/slow/migration-faults-v1.test.js`, `npm run test:slow`, about 35 s).
+  - Numbered steps (a test chain v3–v5, every fixture): a failing step leaves the database exactly
+    as before that step, the snapshot is the database before the upgrade, and the next start
+    finishes. Known positive: a rollback turned into a commit fails it.
+  - The v2 baseline, every write: each fixture is upgraded once while every write is recorded,
+    then once per write (the first time each statement runs, and every BEGIN/COMMIT) with that
+    write failing, then started again. At every point: the failure is reported, user_version is
+    not raised, the snapshot holds the database exactly as it was, no row is missing and no
+    value is anything but its old or new value, the file is sound. For the v2 fixtures the next
+    start always finishes with exactly the uninterrupted result. Known positive: no snapshot
+    fails it.
+- **Found, not fixed (older code, both runners the same): a v1 database whose upgrade fails
+  part-way.** The v1 part of `legacyInit()` is several transactions and is not safe to run again
+  once partly done. For a failure in the last 52 of about 115 failure points (per v1 fixture,
+  after its first table rebuild commits, up to the final version stamp):
+  - the data is all there right after the failure and the snapshot is good (condition 3 holds);
+  - but every next start refuses (a `foreign_key_check` or "no such column" error), and before
+    refusing it **drops `contract_services` with all its rows**: the old-shape check at the top
+    of `legacyInit()` ("user_version below 2 and no `tenant_id` column") mistakes the rebuilt
+    table for the pre-Phase-5 one;
+  - each refused start takes another snapshot, so after three more the good one is rotated out.
+  - Who can reach it: only a database made before 2026-08-23 that is upgraded now, and only if
+    that upgrade fails part-way (a crash, a full disk). Phone installs were made at v2.
+  - `npm run test:slow` pins this exactly (52 refusing points, each losing exactly the
+    `contract_services` rows, the snapshot still good), so any change shows.
+  - **Fix, for your decision** (not done in B4, which was to keep the runner's behaviour):
+    1. stop the old-shape check from dropping a table that has the new shape (look for its
+       other columns, not only `tenant_id`), and never drop one with rows in it;
+    2. on a baseline failure, keep the snapshot taken before the upgrade out of the rotation
+       until an upgrade finishes;
+    3. later, make the v1 part restartable, or restore the snapshot by itself on failure.
+- **Test isolation:** each test file now gets its own temp folder (`test/helpers.js`), and the four
+  spawned guard fixtures make their own. They used to share the system temp folder, where an
+  upgrade's safety snapshots were left behind.
+- **Condition 4, emulator `plannr-test`:** the 0e7b70b build was installed and filled through the
+  app's own API with the made-up full dataset (`test/fixtures/full-dataset.js`: a row in every
+  table), every row and the Overview figures recorded; then the B4 build was installed over it.
+  - The install over it succeeded; every row of every table (13 tables, 590 rows), the
+    AUTOINCREMENT counters and user_version 2 are unchanged; no upgrade step ran, so no new
+    snapshot; no startup error.
+  - Every Overview figure is the same as before. (The category names on the Overview now show
+    the renamed ones in the database; the old build had them cached from before the test data
+    was written straight into the database. Days remaining moved by one: a day had passed.)
+  - The app works: a new entry saves and is listed, delete moves it to the Recycle Bin and
+    restore brings it back, the JSON backup exports, all 9 pages open, no console errors.
+    (Three of these checks first failed because the test script read the wrong response
+    fields and opened a page name that does not exist; fixed in the script, then passed.)
+- **Full suite:** all passes. `npm test` 431 tests (409 before; the 22 new ones), 0 failures; the
+  phone pass is unchanged: 182 of 199, the same 17 known differences. `npm run test:slow` passes.
+  Timing: `npm test` went from about 15 s to about 27 s, all of it the new equivalence and fault
+  tests (they start up to 8 processes); the UI suites take the same time as before.
+- **Stopped before B5** (switching the queue on), as asked. Nothing pushed.

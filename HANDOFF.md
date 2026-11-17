@@ -280,6 +280,18 @@ going over an allowance is a normal thing to happen, not an error.
 - **`npm run test:runtime-mode`** — which backend answers `/api` in each of the four cases
   (in the app or a browser, `server.js` or plain files): inside the app always the in-app
   database, with no probe request.
+- **Database upgrades from every past version** (part of `npm test`, step 1.4 B4).
+  `test/fixtures/schema-history/` holds one small database for every schema `db.js` has ever
+  built (8 of them, user_version 1 and 2, made-up rows only), plus the old migration runner
+  (`db.js` and `ledgers.js` exactly as at 0e7b70b). `test/migration-equivalence.test.js`
+  upgrades each one with the old runner, the new `await init()` and `initSync()`, and compares
+  the results: schema, user_version and a checksum of every table.
+  `test/migration-faults.test.js` makes each upgrade fail at every write and checks the data is
+  unchanged, the safety snapshot is there and the next start finishes. The fixtures are made by
+  `node test/fixtures/schema-history/make-fixtures.js` (by hand, from git history; see its
+  header); a fixture file that changes fails the tests.
+- **`npm run test:slow`** — the same failure check for the user_version 1 fixtures (about 350
+  failure points, half a minute). It also pins a known bug in old upgrade code (§8).
 - **Safe updates** (part of `npm test`): `test/release-guards.test.js` fails if the app id or
   the page origin (`https://localhost`) would change — either would open an empty database
   after an update — or if the release key could be committed. `npm run release:android` runs
@@ -440,6 +452,13 @@ There is deliberately **no reset button inside the app**.
 - **The phone database is limited to about 10 MB of `localStorage`,** and a save made less than
   about a second before Android kills the app can be lost (measured on the emulator; the
   database stays consistent). Moving it is proposed, not done: `docs/storage-proposal.md`.
+- **A database made before 2026-08-23 (user_version 1) whose upgrade fails part-way can lose
+  its contract's list of work on the next start** (found in step 1.4 B4; the code is older).
+  The next start refuses to upgrade, but first drops `contract_services`. The safety snapshot
+  from before the upgrade still holds every row, and is the way back; each refused start adds
+  another snapshot, and after three more the good one is rotated out. Databases made since then
+  (every phone install) are not affected. Pinned by `npm run test:slow`; the fix is still to be
+  decided (`docs/step-1.4-storage-plan.md`, B4).
 - **Reminders arrive late unless "Alarms & reminders" is allowed** for Plannr (off by default on
   Android 14+). Home offers a button for it when a reminder time is added, and again each time
   Home opens while it is not allowed. Plannr never opens that settings screen by itself.

@@ -21,6 +21,7 @@ import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
 import { LEDGERS as SEED_LEDGERS } from './ledgers.js';
+import { createSyncEngineAdapter } from './core/db-adapter.js';
 
 const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
 
@@ -88,21 +89,62 @@ export function ready() {
 const BASELINE_VERSION = 2; // v2 = the tenant_id dimension dropped back off (the `userVersion < 2` step in legacyInit()).
 
 // Schema changes after v2. Append only — never edit or reorder a step that has shipped. Each:
-//   { version: <previous + 1>, name: 'what it does', up(db) { ...SQL via db.exec / db.prepare... } }
-// up() runs inside a transaction, so it must not BEGIN/COMMIT or toggle PRAGMA foreign_keys itself.
+//   { version: <previous + 1>, name: 'what it does', async up(tx) { await tx.exec('...'); } }
+// tx is the async database interface (core/db-adapter.js: get/all/run/exec, params as an array).
+// up() runs inside a transaction, so it must not BEGIN/COMMIT or toggle PRAGMA foreign_keys itself
+// (a nested tx.transaction() is refused).
 export const MIGRATIONS = [];
 
 export function assertMigrationList(list, baseline = BASELINE_VERSION) {
   list.forEach((m, i) => {
     const want = baseline + 1 + i;
     if (m.version !== want) throw new Error(`MIGRATIONS[${i}] has version ${m.version}; expected ${want} (versions must count up by one from ${baseline + 1}).`);
-    if (typeof m.up !== 'function' || !m.name) throw new Error(`MIGRATIONS[${i}] (v${m.version}) needs a name and an up(db) function.`);
+    if (typeof m.up !== 'function' || !m.name) throw new Error(`MIGRATIONS[${i}] (v${m.version}) needs a name and an up(tx) function.`);
   });
 }
 assertMigrationList(MIGRATIONS);
 export const SCHEMA_VERSION = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : BASELINE_VERSION;
 
 export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').get().user_version;
+
+// Step 1.4 B4: the async database interface (core/db-adapter.js) over a synchronous handle. Until
+// stage B5 the rest of this file still uses `db` directly; both share the one connection. Only
+// get/all/run/exec/transaction work here: exporting, replacing and closing the database stay with
+// each platform until the adapters take over the whole database (stage B5 onwards).
+const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter yet (stage B5).`); };
+function adapterOver(handle) {
+  return createSyncEngineAdapter({
+    engine: isNode ? 'node-sqlite' : 'wasm-kvvfs',
+    handle,
+    exportBytes: notHereYet('exportBytes'), replaceWith: notHereYet('replaceWith'), info: notHereYet('info'), close: notHereYet('close'),
+  });
+}
+let ownAdapter = null;
+// dbAdapter() is db.js's own connection (one shared adapter, so a nested transaction is refused);
+// dbAdapter(handle) wraps another handle (the tests use throwaway databases).
+export function dbAdapter(dbh) {
+  if (dbh === undefined || dbh === db) return ownAdapter || (ownAdapter = adapterOver(() => db));
+  return adapterOver(() => dbh);
+}
+
+// Run fn(tx) inside one transaction on db.js's connection: COMMIT when it resolves, ROLLBACK when it
+// throws (the error is passed on). One at a time: a nested call is refused.
+export function transaction(fn) {
+  return dbAdapter().transaction(fn);
+}
+
+// The one-off clean-ups in legacyInit() that are gated on a settings marker, not on user_version, so
+// they can still run on a database already at v2 that an older app version made. Two of them delete
+// data once approved (the taxonomy wipe, the service-price drop). Step 1.4 B4 found that such a
+// database got no safety snapshot first; a missing marker now counts as baseline work.
+const LEGACY_MARKERS = ['_migrated_service_price_removed_v1', '_migrated_ledger_taxonomy_v1', '_migrated_generic_ledger_names_v1'];
+function legacyMarkerMissing(dbh) {
+  try {
+    return LEGACY_MARKERS.some((key) => !dbh.prepare('SELECT 1 FROM settings WHERE key = ?').get(key));
+  } catch {
+    return false; // no settings table: not a Plannr database at v2 (an older one is caught by its version)
+  }
+}
 
 // What init() would do to this database, without changing anything. needsSnapshot: there is existing
 // data and at least one step will run (a brand-new, empty database needs no snapshot).
@@ -112,26 +154,32 @@ export function migrationPlan(dbh = db, list = MIGRATIONS) {
   const hasTables = !!dbh.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get();
   const steps = [];
   if (from < BASELINE_VERSION) steps.push({ version: BASELINE_VERSION, name: 'baseline: historic migrations up to schema v2' });
+  else if (from === BASELINE_VERSION && hasTables && legacyMarkerMissing(dbh)) steps.push({ version: BASELINE_VERSION, name: 'baseline: one-off clean-ups this database has not had yet' });
   for (const m of list) if (m.version > from) steps.push({ version: m.version, name: m.name });
   return { from, to, steps, tooNew: from > to, needsSnapshot: hasTables && steps.length > 0 };
 }
 
-// Apply every migration newer than the database's user_version, oldest first. Each step runs inside
-// its own transaction together with its user_version stamp, so a failing step rolls back completely
-// and leaves the database at the previous version (the next start retries it). Returns the versions applied.
-export function runMigrations(dbh = db, list = MIGRATIONS) {
+// Apply every migration newer than the database's user_version, oldest first, through the async
+// interface (`adapter`: dbAdapter() or dbAdapter(handle)). Each step runs inside its own transaction
+// together with its user_version stamp, so a failing step rolls back completely and leaves the
+// database at the previous version (the next start retries it). Resolves to the versions applied.
+export async function runMigrations(adapter = dbAdapter(), list = MIGRATIONS) {
+  if (!adapter || typeof adapter.transaction !== 'function') throw new TypeError('runMigrations: pass the async database interface (dbAdapter(), or dbAdapter(handle)).');
   const applied = [];
   for (const m of list) {
-    const current = schemaVersionOf(dbh);
+    const current = (await adapter.get('PRAGMA user_version')).user_version;
     if (m.version <= current) continue;
-    dbh.exec('BEGIN');
     try {
-      m.up(dbh);
-      dbh.exec(`PRAGMA user_version = ${m.version}`);
-      dbh.exec('COMMIT');
+      await adapter.transaction(async (tx) => {
+        await m.up(tx);
+        await tx.exec(`PRAGMA user_version = ${m.version}`);
+      });
     } catch (e) {
-      rollbackQuietly(dbh);
-      const err = new Error(`Database upgrade to schema v${m.version} (${m.name}) failed and was rolled back; your data is unchanged at v${current}. Cause: ${e.message}`);
+      // The adapter rolls back before passing the error on. If even that failed, say so: the data
+      // is then NOT known to be unchanged, and the safety snapshot is the way back.
+      const err = e && e.rollbackError
+        ? new Error(`Database upgrade to schema v${m.version} (${m.name}) failed, and undoing it failed too (${e.rollbackError.message}). Restore the safety snapshot taken before the upgrade. Cause: ${e.message}`)
+        : new Error(`Database upgrade to schema v${m.version} (${m.name}) failed and was rolled back; your data is unchanged at v${current}. Cause: ${e && e.message}`);
       err.cause = e;
       throw err;
     }
@@ -161,18 +209,42 @@ function writeNodeSnapshot(plan) {
   return file;
 }
 
-// Bring the database up to SCHEMA_VERSION. Called once at startup by server.js and by the phone's
-// local-bootstrap.js (and after an encrypted restore). Options: { snapshot: false } skips the desktop
-// snapshot (the caller already has one, e.g. a restore that just copied a backup in).
-export function init({ snapshot = true } = {}) {
-  const plan = migrationPlan();
+// The checks before any upgrade step, shared by init() and initSync(): refuse a database from a newer
+// app version (nothing changed), then, on the desktop, the safety snapshot.
+function beforeUpgrade(plan, snapshot) {
   if (plan.tooNew) {
-    throw new Error(`This Plannr database was saved by a newer version of the app (schema v${plan.from}; this version understands up to v${SCHEMA_VERSION}). `
+    throw new Error(`This Plannr database was saved by a newer version of the app (schema v${plan.from}; this version understands up to v${plan.to}). `
       + 'Nothing was changed. Install the newer version of Plannr, or restore a backup made with this one.');
   }
   if (plan.needsSnapshot && snapshot && isNode) writeNodeSnapshot(plan);
+}
+
+// Bring the database up to SCHEMA_VERSION. Awaited once at startup by the phone's local-bootstrap.js
+// (and after an encrypted restore). Options: { snapshot: false } skips the desktop snapshot (the
+// caller already has one, e.g. a restore that just copied a backup in); `migrations` replaces the
+// step list (tests only). A refusal or a failed step rejects.
+export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
+  if (migrations !== MIGRATIONS) assertMigrationList(migrations);
+  beforeUpgrade(migrationPlan(db, migrations), snapshot);
   legacyInit();
-  runMigrations(db);
+  await runMigrations(dbAdapter(), migrations);
+}
+
+// TRANSITION ONLY (step 1.4 B4; removed in B17 when server.js starts asynchronously): init() for
+// callers that cannot await yet: server.js, reset-db.js and seed-demo.js. The same checks, snapshot
+// and baseline as init(). The numbered steps run only through the async interface, so this refuses,
+// before changing anything, a database that still needs one; init() runs it.
+export function initSync({ snapshot = true } = {}) {
+  const plan = migrationPlan();
+  if (!plan.tooNew) {
+    const pending = plan.steps.filter((s) => s.version > BASELINE_VERSION);
+    if (pending.length) {
+      throw new Error(`initSync: this database needs upgrade step(s) ${pending.map((s) => `v${s.version} (${s.name})`).join(', ')}, which only the async init() runs. `
+        + 'Nothing was changed. Start this program with await init() (step 1.4 B17).');
+    }
+  }
+  beforeUpgrade(plan, snapshot);
+  legacyInit();
 }
 
 function legacyInit() {

@@ -38,7 +38,7 @@ if (mode === 'server') {
       const { writePreMigrationSnapshot } = await import('./safety-snapshots.js');
       await writePreMigrationSnapshot(plan);
     }
-    init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
+    await init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
   } catch (e) {
     showStartupError(e);
     throw e;

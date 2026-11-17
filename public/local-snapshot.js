@@ -97,7 +97,7 @@ export async function restoreSnapshotBytes(bytes) {
 
     // Outside the transaction above — init() manages its own BEGIN/COMMIT internally for whichever
     // migrations it decides to run, and SQLite does not support nesting a second BEGIN inside one.
-    init({ snapshot: false });
+    await init({ snapshot: false });
 
     const fkViol = db.prepare('PRAGMA foreign_key_check').all();
     if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));

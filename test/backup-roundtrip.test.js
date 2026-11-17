@@ -24,36 +24,36 @@ after(async () => {
 
 // Everything gone, then init() re-seeds exactly what a brand-new install starts with (the owner,
 // the default categories, the migration markers) — the state of a new phone before a restore.
-function wipeToFreshInstall() {
+async function wipeToFreshInstall() {
   const db = H.db;
   db.exec('PRAGMA foreign_keys = OFF');
   for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()) db.exec(`DELETE FROM ${name}`);
   db.exec('DELETE FROM sqlite_sequence');
   db.exec('PRAGMA foreign_keys = ON');
-  init();
+  await init();
 }
-const seedFixture = () => { wipeToFreshInstall(); F.seedInto(H.db, F.DATA); };
+const seedFixture = async () => { await wipeToFreshInstall(); F.seedInto(H.db, F.DATA); };
 async function importJson(body) {
   const r = await H.post('/api/backup/import', body);
   if (r.json && r.json.snapshot) snapshotsWritten.push(r.json.snapshot);
   return r;
 }
 
-test('the fixture puts at least one row in every table (add fixture rows for any new table)', () => {
-  seedFixture();
+test('the fixture puts at least one row in every table (add fixture rows for any new table)', async () => {
+  await seedFixture();
   const dump = F.dumpAll(H.db);
   const empty = Object.entries(dump.tables).filter(([, rows]) => rows.length === 0).map(([t]) => t);
   assert.deepStrictEqual(empty, [], `tables with no fixture rows: ${empty.join(', ')}`);
 });
 
 test('JSON backup (v2): back up -> wipe -> restore gives back every table exactly, row by row', async () => {
-  seedFixture();
+  await seedFixture();
   const before = F.dumpAll(H.db);
   const exp = await H.get('/api/backup/export');
   assert.strictEqual(exp.status, 200);
   assert.strictEqual(exp.json.schemaVersion, 2);
 
-  wipeToFreshInstall();
+  await wipeToFreshInstall();
   assert.notDeepStrictEqual(F.dumpAll(H.db), before, 'the wipe must actually remove the data');
 
   const r = await importJson(exp.json);
@@ -70,7 +70,7 @@ test('JSON backup (v2): the restored categories are live straight away (no resta
 });
 
 test('JSON backup: never contains password hashes; retired contact keys only on opt-in', async () => {
-  seedFixture();
+  await seedFixture();
   H.db.prepare("UPDATE users SET password_hash = '$2b$12$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234' WHERE id = 2").run();
   H.db.prepare("INSERT INTO settings (key, value) VALUES ('daily_report_recipients', 'someone@example.com')").run();
   const plain = await H.get('/api/backup/export');
@@ -82,7 +82,7 @@ test('JSON backup: never contains password hashes; retired contact keys only on 
 });
 
 test('an old v1 JSON backup still restores, and leaves this install\'s categories and people alone', async () => {
-  seedFixture();
+  await seedFixture();
   const v2 = (await H.get('/api/backup/export')).json;
   // What a pre-v2 export looked like: no people, no categories, no counters — and (to be restorable
   // on a fresh install) only category codes that every install has.
@@ -90,7 +90,7 @@ test('an old v1 JSON backup still restores, and leaves this install\'s categorie
   for (const [t, rows] of Object.entries(v2.tables)) if (!['users', 'ledger_mains', 'ledger_subs', 'ledger_customs'].includes(t)) v1.tables[t] = rows;
   v1.tables.cash_out = v1.tables.cash_out.map((r) => (r.ledger_code === '90' ? { ...r, ledger_code: '22.0', subledger_code: null } : r));
 
-  wipeToFreshInstall();
+  await wipeToFreshInstall();
   const freshCategories = F.dumpAll(H.db).tables.ledger_mains;
   const r = await importJson(v1);
   assert.strictEqual(r.status, 200, JSON.stringify(r.json));
@@ -105,11 +105,11 @@ test('an old v1 JSON backup still restores, and leaves this install\'s categorie
 });
 
 test('a v1 backup that uses a category this install lacks is refused cleanly, data unchanged', async () => {
-  seedFixture();
+  await seedFixture();
   const v2 = (await H.get('/api/backup/export')).json;
   const v1 = { ...v2, schemaVersion: 1, tables: { ...v2.tables } };
   for (const t of ['users', 'ledger_mains', 'ledger_subs', 'ledger_customs']) delete v1.tables[t];
-  wipeToFreshInstall();
+  await wipeToFreshInstall();
   const before = F.dumpAll(H.db);
   const r = await importJson(v1);
   assert.strictEqual(r.status, 400);
@@ -118,7 +118,7 @@ test('a v1 backup that uses a category this install lacks is refused cleanly, da
 });
 
 test('a malformed v2 backup is refused before anything changes', async () => {
-  seedFixture();
+  await seedFixture();
   const good = (await H.get('/api/backup/export')).json;
   const before = F.dumpAll(H.db);
   const cases = [
@@ -137,7 +137,7 @@ test('a malformed v2 backup is refused before anything changes', async () => {
 });
 
 test('encrypted backup: contains every table exactly (whole-database copy, counters and version included)', async () => {
-  seedFixture();
+  await seedFixture();
   const before = F.dumpAll(H.db);
   const pass = 'roundtrip-passphrase-123';
   const res = await H.raw('POST', '/api/backup/export-encrypted', { passphrase: pass });

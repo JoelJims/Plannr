@@ -36,12 +36,12 @@ test('Part C2 — summary PDF omits the transactions table but keeps the ledger 
 });
 
 // ---- Part C3 — cash_in.tx_date ----
-test('Part C3 — cash_in has tx_date; migration idempotent; backfill from created_at', () => {
+test('Part C3 — cash_in has tx_date; migration idempotent; backfill from created_at', async () => {
   assert.ok(H.db.prepare('PRAGMA table_info(cash_in)').all().map((c) => c.name).includes('tx_date'), 'fresh CREATE has tx_date');
   const id = Number(H.db.prepare("INSERT INTO cash_in (amount_paise, tx_date, by_type, created_at) VALUES (100000, NULL, 'user', '2025-06-15 10:00:00')").run().lastInsertRowid);
   H.db.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL"); // the migration's backfill
   assert.strictEqual(H.db.prepare('SELECT tx_date FROM cash_in WHERE id=?').get(id).tx_date, '2025-06-15');
-  assert.doesNotThrow(() => require('../db').init(), 're-running init() is idempotent');
+  await assert.doesNotReject(() => require('../db').init(), 're-running init() is idempotent');
 });
 
 test('Part C3 — a new inflow requires a date and round-trips; missing date is rejected', async () => {

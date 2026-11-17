@@ -1,0 +1,1461 @@
+// Database setup for Plannr.
+//
+// Phase 4c: this file is an ES module and picks its SQLite engine at load time — node:sqlite under
+// Node (synchronous, exactly as before; every existing `require('./db')` consumer keeps working with
+// zero changes), or db-engine.js (the WASM/kvvfs adapter, Phase 4b) in a browser. Both engines expose
+// the same DatabaseSync surface (Phase 4a's audit: new DatabaseSync(path[, opts]), .exec(),
+// .prepare().get()/.all()/.run(), .close()) — that's what makes swapping the engine below safe.
+//
+// node:fs / node:path / node:sqlite are imported statically (named imports) so the Node path stays
+// fully synchronous. A real browser can't resolve those three specifiers at all — whatever browser
+// entry point eventually loads this file needs an import map mapping all three to
+// node-builtins-browser-stub.js (see that file's header for the exact snippet). The code paths that
+// would use the stubbed fs/path/DatabaseSync are never reached when isNode is false below.
+//
+// The browser path is async — db-engine.js's own WASM bootstrap is unconditionally async (see its
+// header). `ready()` below is the seam: under Node it's a no-op (db is already open by the time this
+// module finishes loading, synchronously, as today); under a browser it's what a caller MUST await
+// before using `db`/`init` — see `ready()`'s own comment.
+
+import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
+import { LEDGERS as SEED_LEDGERS } from './ledgers.js';
+
+const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+
+const DATA_DIR = isNode ? join(import.meta.dirname, 'data') : '';
+// Browser: DB_PATH is never used for anything real — db-engine.js's DatabaseSync ignores its `path`
+// argument (kvvfs has exactly one persistent slot; see that file's header) — so any placeholder works.
+export const DB_PATH = isNode ? (process.env.PLANNR_DB || join(DATA_DIR, 'plannr.db')) : 'plannr';
+
+function openDb(EngineDatabaseSync) {
+  const d = new EngineDatabaseSync(DB_PATH);
+  // Phase 4a (WASM SQLite port prep): DELETE, not WAL. A WAL-stamped file cannot be opened at all by
+  // the WASM SQLite build this app is moving to (confirmed empirically in Spike A2 — SQLITE_CANTOPEN;
+  // no shared-memory/multi-process primitives in that sandbox). Single-process, single-user desktop/
+  // mobile app has no concurrency need WAL was buying us anyway.
+  d.exec('PRAGMA journal_mode = DELETE');
+  d.exec('PRAGMA foreign_keys = ON'); // enforce foreign keys
+  return d;
+}
+
+export let db;
+let readyPromise = null;
+
+if (isNode) {
+  mkdirSync(DATA_DIR, { recursive: true }); // make sure the folder for the database file exists
+  db = openDb(NodeDatabaseSync);
+}
+
+/**
+ * Must be awaited before the first use of `db`/`init` in a browser. A no-op under Node — db is
+ * already open by the time this module finishes loading (see above), so no existing Node consumer
+ * (server.js, the test suite, reset-db.js, seed-demo.js) needs to call this.
+ *
+ * Note for whoever builds the browser entry point: repo.js prepares its cached statements against
+ * `db` at ITS OWN module top level (eager, on import) — same as it always has. That means repo.js must
+ * be imported (e.g. via a dynamic `import('./repo.js')`) only AFTER this `ready()` resolves, not just
+ * before its functions are first called. repo.js's internals are unchanged from before this phase.
+ */
+export function ready() {
+  if (db) return Promise.resolve();
+  if (!readyPromise) {
+    readyPromise = import('./db-engine.js').then(async (engine) => {
+      await engine.ready();
+      db = openDb(engine.DatabaseSync);
+    });
+  }
+  return readyPromise;
+}
+
+// Schema-version marker: stamped at the END of init() once all migrations succeed. It lets a
+// DESTRUCTIVE, presence-keyed migration be gated so it runs ONLY on a pre-marker DB and can never
+// re-fire if the exact column shape it keys on recurs later — the failure mode where a rebuild keyed
+// on "does column X exist?" wrongly re-runs after some later, unrelated change recreates column X, and
+// a re-run of a create-copy-swap rebuild risks data. Bump this + gate the new step on
+// `userVersion < N` when a future migration needs the same protection.
+//
+// Phase 2 (Step 2) of the review roadmap turned this into a versioned migration chain (see CONTRIBUTING.md):
+//   · BASELINE_VERSION (2): everything legacyInit() below does — the historic, hand-gated migrations
+//     that bring any older database (or an empty new one) up to the v2 shape. Kept exactly as it was.
+//   · MIGRATIONS: every schema change AFTER v2, one numbered step each, applied in order by
+//     runMigrations(), each inside its own transaction together with its user_version stamp.
+//   · init() refuses a database stamped NEWER than this code understands (an older app installed
+//     over newer data), and on the desktop writes a safety snapshot before any step runs. The phone
+//     writes its own (async, Capacitor Filesystem) in local-bootstrap.js before calling init().
+// This file is shared by server.js (desktop/dev) and the phone app, so both run the same chain.
+const BASELINE_VERSION = 2; // v2 = the tenant_id dimension dropped back off (the `userVersion < 2` step in legacyInit()).
+
+// Schema changes after v2. Append only — never edit or reorder a step that has shipped. Each:
+//   { version: <previous + 1>, name: 'what it does', up(db) { ...SQL via db.exec / db.prepare... } }
+// up() runs inside a transaction, so it must not BEGIN/COMMIT or toggle PRAGMA foreign_keys itself.
+export const MIGRATIONS = [];
+
+export function assertMigrationList(list, baseline = BASELINE_VERSION) {
+  list.forEach((m, i) => {
+    const want = baseline + 1 + i;
+    if (m.version !== want) throw new Error(`MIGRATIONS[${i}] has version ${m.version}; expected ${want} (versions must count up by one from ${baseline + 1}).`);
+    if (typeof m.up !== 'function' || !m.name) throw new Error(`MIGRATIONS[${i}] (v${m.version}) needs a name and an up(db) function.`);
+  });
+}
+assertMigrationList(MIGRATIONS);
+export const SCHEMA_VERSION = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : BASELINE_VERSION;
+
+export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').get().user_version;
+
+// What init() would do to this database, without changing anything. needsSnapshot: there is existing
+// data and at least one step will run (a brand-new, empty database needs no snapshot).
+export function migrationPlan(dbh = db, list = MIGRATIONS) {
+  const from = schemaVersionOf(dbh);
+  const to = list.length ? list[list.length - 1].version : BASELINE_VERSION;
+  const hasTables = !!dbh.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get();
+  const steps = [];
+  if (from < BASELINE_VERSION) steps.push({ version: BASELINE_VERSION, name: 'baseline: historic migrations up to schema v2' });
+  for (const m of list) if (m.version > from) steps.push({ version: m.version, name: m.name });
+  return { from, to, steps, tooNew: from > to, needsSnapshot: hasTables && steps.length > 0 };
+}
+
+// Apply every migration newer than the database's user_version, oldest first. Each step runs inside
+// its own transaction together with its user_version stamp, so a failing step rolls back completely
+// and leaves the database at the previous version (the next start retries it). Returns the versions applied.
+export function runMigrations(dbh = db, list = MIGRATIONS) {
+  const applied = [];
+  for (const m of list) {
+    const current = schemaVersionOf(dbh);
+    if (m.version <= current) continue;
+    dbh.exec('BEGIN');
+    try {
+      m.up(dbh);
+      dbh.exec(`PRAGMA user_version = ${m.version}`);
+      dbh.exec('COMMIT');
+    } catch (e) {
+      rollbackQuietly(dbh);
+      const err = new Error(`Database upgrade to schema v${m.version} (${m.name}) failed and was rolled back; your data is unchanged at v${current}. Cause: ${e.message}`);
+      err.cause = e;
+      throw err;
+    }
+    applied.push(m.version);
+  }
+  return applied;
+}
+
+// Desktop only: a whole-database copy beside the database file, before any upgrade step runs. Keeps
+// the newest 3 (the same rule as the phone's Directory.Data/safety-snapshots/).
+const KEEP_SNAPSHOTS = 3;
+function writeNodeSnapshot(plan) {
+  const dir = join(dirname(DB_PATH), 'safety-snapshots');
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = join(dir, `plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stamp}.db`);
+  db.exec(`VACUUM INTO '${file.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  if (!(statSync(file).size > 0)) throw new Error(`Safety snapshot ${file} is empty; the upgrade was not started.`);
+  // Only after the new copy is written and non-empty: delete all but the newest KEEP_SNAPSHOTS (by
+  // modification time), and never the one just written.
+  const old = readdirSync(dir).filter((f) => /^plannr-pre-migration-.*\.db$/.test(f))
+    .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
+    .slice(KEEP_SNAPSHOTS);
+  for (const { f } of old) if (join(dir, f) !== file) rmSync(join(dir, f), { force: true });
+  if (process.env.PLANNR_TEST !== '1') console.log(`[db] safety snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${file}`);
+  return file;
+}
+
+// Bring the database up to SCHEMA_VERSION. Called once at startup by server.js and by the phone's
+// local-bootstrap.js (and after an encrypted restore). Options: { snapshot: false } skips the desktop
+// snapshot (the caller already has one, e.g. a restore that just copied a backup in).
+export function init({ snapshot = true } = {}) {
+  const plan = migrationPlan();
+  if (plan.tooNew) {
+    throw new Error(`This Plannr database was saved by a newer version of the app (schema v${plan.from}; this version understands up to v${SCHEMA_VERSION}). `
+      + 'Nothing was changed. Install the newer version of Plannr, or restore a backup made with this one.');
+  }
+  if (plan.needsSnapshot && snapshot && isNode) writeNodeSnapshot(plan);
+  legacyInit();
+  runMigrations(db);
+}
+
+function legacyInit() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      username      TEXT    NOT NULL COLLATE NOCASE UNIQUE,
+      display_name  TEXT    NOT NULL,
+      password_hash TEXT    NOT NULL,
+      created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Phase 8d: a fresh local/offline database has this table just-created and otherwise empty.
+  // getOwner() (server.js and local-api.js both) assumes a row already exists — every server.js
+  // deployment has had one since some now-removed registration step, long before this check existed,
+  // so this is a no-op there. A brand-new Capacitor install has no such history, so seed exactly one
+  // default owner the first time the table is empty.
+  if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
+    db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)')
+      .run('owner', 'Owner', 'local-single-user-no-auth');
+  }
+
+  // Services phase — contract_services RETURNS (dropped in Phase 5C). If a PRE-Phase-5 database still
+  // carries the OLD-shaped contract_services (detected by the absence of the new tenant_id column),
+  // drop it HERE, BEFORE the ledger CREATE block below recreates it in the new shape — otherwise the
+  // old table would shadow the new CREATE (IF NOT EXISTS). foreign_keys OFF because an ancient cash_out
+  // may still carry the old contract_service_id FK into it (that FK is dropped by the Phase 5B rebuild
+  // further down). No-op on the live/fresh DBs (contract_services absent, or already the new shape).
+  //
+  // BUG FIX: also version-gated (userVersion0 < 2, read fresh here since this runs before init()'s
+  // main userVersion read further down). Absence of tenant_id alone is NOT a safe signal any more:
+  // Step 2a (further below) deliberately drops tenant_id from contract_services once collapsed, and
+  // without this gate, every boot after the first would misread that as "pre-Phase-5 shape", DROP the
+  // table outright (losing every row), and recreate it empty WITH tenant_id — which then never gets
+  // stripped again because Step 2a itself is version-gated and won't re-fire. Caught by booting the
+  // real db.js against one persistent file across two separate processes (not a fresh temp DB each
+  // time) — a second `contract_services` row silently vanished and tenant_id came back.
+  {
+    const userVersion0 = db.prepare('PRAGMA user_version').get().user_version;
+    const cs = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'").get();
+    if (cs && userVersion0 < 2) {
+      const hasTenant = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'tenant_id');
+      if (!hasTenant) {
+        db.exec('PRAGMA foreign_keys = OFF');
+        db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+        db.exec('DROP TABLE contract_services');
+        db.exec('PRAGMA foreign_keys = ON');
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ledger / cost-tracking tables. Each has a live UI page and API routes (Overview,
+  // Money Debited, Cash Inflow, Loans, Contract Details, Contractor Payments, Data Backup).
+  //
+  // MONEY: every *_paise column below stores an INTEGER number of paise
+  // (₹1 = 100 paise). Money is NEVER stored as a float — integer paise avoids
+  // float-rounding bugs. (Formatting to ₹ is a later display concern.)
+  //
+  // Transactional tables carry a nullable `deleted_at TEXT` for soft-delete
+  // (NULL = live row). All statements are IF NOT EXISTS, so this is safe to run
+  // against an existing database — users/sessions and their data are untouched.
+  // ---------------------------------------------------------------------------
+  db.exec(`
+    -- 1. contract: EXACTLY ONE live contract (Phase 5D). At most one row with deleted_at IS NULL
+    --    is allowed — enforced in the DATABASE by the partial unique index idx_contract_single_live
+    --    (created at the end of init), not by app code. Soft-deleted rows may coexist with the one
+    --    live row (the Recycle Bin). The old multi-contract list and the per-contract
+    --    contract_services table were both removed in Phase 5 (contract_services dropped child-first
+    --    after cash_out lost its FK). price_of_contract_paise is the OPTIONAL stated amount that dues
+    --    math starts from (NULL = no stated price: the contract contributes 0 to Total contract and 0
+    --    to owed); contract_end_date is the optional "date ends". ledger_* is a HEADLINE CATEGORY tag
+    --    for the whole contract.
+    CREATE TABLE IF NOT EXISTS contract (
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_name         TEXT,
+      area_of_work            TEXT,             -- Phase 2: required on new writes
+      ledger_code             TEXT,             -- headline category: fixed code (e.g. '5.0'), 'CUSTOM', or NULL
+      subledger_code          TEXT,             -- fixed sub code, 'CUSTOM', or NULL (none)
+      ledger_custom_name      TEXT,             -- typed ledger name when ledger_code = 'CUSTOM'
+      subledger_custom_name   TEXT,             -- typed sub-ledger name when subledger_code = 'CUSTOM'
+      amount_paise            INTEGER,          -- OPTIONAL free-form amount, paise (₹1=100) or NULL
+      price_of_contract_paise INTEGER,          -- OPTIONAL stated amount, paise (dues math starts here); NULL = unstated
+      -- Contract Phase A — RATE-BASED PRICING. This household's contract is a fixed unit-rate lump
+      -- sum: the price is a rate per square foot times the FINAL MEASURED built-up area. Both are
+      -- OPTIONAL and independently editable at any time (the area is not known until final
+      -- measurement). When BOTH are non-NULL the stated price above is DERIVED —
+      -- price_of_contract_paise = round(rate_per_sqft_paise * measured_area_milli_sqft / 1000) — and
+      -- rewritten on every contract write, so owed/A/F and every existing consumer keep reading the
+      -- one column they always read. When either is NULL the stated price is whatever was TYPED.
+      -- (reconciliation.contractPriceDerivation flags any drift between the two.)
+      rate_per_sqft_paise     INTEGER,          -- OPTIONAL rate per sq ft, paise (₹1=100); NULL = not rate-priced
+      -- Area is a MEASUREMENT, not money, so it has no paise. Stored as an INTEGER number of
+      -- THOUSANDTHS of a square foot (1 sq ft = 1000) for the same reason money is integer paise:
+      -- rate x area must be exact integer arithmetic, never a float product rounded after the fact.
+      measured_area_milli_sqft INTEGER,         -- OPTIONAL final measured built-up area, milli-sq-ft; NULL = not measured yet
+      contract_end_date       TEXT,             -- OPTIONAL 'date ends', ISO 'YYYY-MM-DD' or NULL
+      date_signed             TEXT,             -- OPTIONAL signing date, ISO 'YYYY-MM-DD' (Contract Phase A relaxed this from required)
+      -- Contract Phase A — OPTIONAL contract metadata. None of it drives a figure; completion_period_months
+      -- is the only one that derives anything (expectedCompletionDate = date_signed + N months, computed
+      -- at read time, never stored). supervision_rate_pct is a PERCENTAGE applied to change orders by
+      -- agreement — informational only, exactly like loans.interest_rate: no code multiplies by it.
+      completion_period_months INTEGER,         -- OPTIONAL whole months from signing to expected completion
+      supervision_rate_pct    REAL,             -- OPTIONAL supervision % on change orders; informational, drives no calculation
+      specified_brands        TEXT,             -- OPTIONAL free text: brands named in the contract
+      excluded_scope          TEXT,             -- OPTIONAL free text: work explicitly OUT of scope
+      owner_obligations       TEXT,             -- OPTIONAL free text: what the owner must supply/do
+      created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at              TEXT,             -- soft-delete: NULL = live
+      tenant_id               INTEGER NOT NULL REFERENCES users(id), -- Tenancy Phase 2: owning household (a users.id)
+      company                 TEXT              -- Services phase (Part F): OPTIONAL company/firm; presentation only, never in dues math
+    );
+
+    -- 1b. contract_payment_dates: a contract's SCHEDULED payment dates (0..many). The live
+    --     Contractor Payments page offers these as the date-of-payment dropdown for a payment.
+    --     Hard-cascades if a contract row is ever hard-deleted (contracts are soft-deleted in
+    --     practice, so it persists).
+    CREATE TABLE IF NOT EXISTS contract_payment_dates (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      pay_date    TEXT    NOT NULL,             -- ISO 'YYYY-MM-DD' scheduled payment date
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      tenant_id   INTEGER NOT NULL REFERENCES users(id) -- Tenancy Phase 2: owning household (mirrors the parent contract's tenant)
+    );
+
+    -- 2b. contractor_payments: money PAID to a contractor, tied to a specific
+    --     contract (Phase 3). Replaces the old design where contractor spend was a
+    --     cash_out row (removed in Phase 1). Ledger fields are an OPTIONAL DISPLAY tag (same
+    --     'CUSTOM' convention as cash_out) and do NOT drive dues math: owed = stated − Σ amount_paise
+    --     (payments). (The Phase 5E "Option C" reimbursement offset that used to subtract a third term,
+    --     Σ cash_out.contract_stated_paise, has been REMOVED.) A payment's ledger tag only feeds the
+    --     pie/Spending-by-Ledger rollup, never the owed balance.
+    CREATE TABLE IF NOT EXISTS contractor_payments (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id           INTEGER NOT NULL REFERENCES contract(id), -- required parent contract
+      pay_date              TEXT    NOT NULL,   -- ISO 'YYYY-MM-DD' date of payment
+      amount_paise          INTEGER NOT NULL,   -- paise (₹1=100); amount paid, > 0
+      ledger_code           TEXT,               -- OPTIONAL tag: fixed code, 'CUSTOM', or NULL
+      subledger_code        TEXT,               -- fixed sub code, 'CUSTOM', or NULL
+      ledger_custom_name    TEXT,               -- typed ledger name when ledger_code = 'CUSTOM'
+      subledger_custom_name TEXT,               -- typed sub name when subledger_code = 'CUSTOM'
+      phase                 INTEGER,            -- OPTIONAL positive whole number (>=1)
+      subpart               TEXT,               -- OPTIONAL single lowercase letter a-z
+      remarks               TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at            TEXT,               -- soft-delete: NULL = live
+      tenant_id             INTEGER NOT NULL REFERENCES users(id) -- Tenancy Phase 2: owning household (a users.id)
+    );
+
+    -- 2c. contract_services: a contract's SCOPE OF WORK — a plain list of names, nothing else.
+    --     History: it began as the source of cash_out.contract_stated_paise (the Phase 5E offset),
+    --     then kept an OPTIONAL price_paise feeding an informational "remainder" line. Contract
+    --     Phase A REMOVED price_paise outright. A fixed unit-rate lump sum contract is
+    --     lump sum: its schedule of work lists scope items and attaches NO price to any of them, so
+    --     a price field could only ever be filled with a number the owner made up — which then fed
+    --     a remainder ("stated minus priced services") that meant nothing. A service is now purely
+    --     something a debit can NAME (cash_out.contract_service_id) as what the spend was for.
+    --     Soft-delete. Hard-cascades if the parent contract is ever hard-deleted (contracts are
+    --     soft-deleted in practice). ANY live service can be linked from a debit — the old
+    --     "only a PRICED service is linkable" rule went out with the column.
+    CREATE TABLE IF NOT EXISTS contract_services (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      name        TEXT    NOT NULL,             -- service name (required) — the WHOLE row, by design
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at  TEXT,                         -- soft-delete: NULL = live
+      tenant_id   INTEGER NOT NULL REFERENCES users(id) -- Services phase: owning household (mirrors the parent contract's tenant)
+    );
+
+    -- 2d. contract_allowances (Contract Phase A): the contract's ALLOWANCE CAPS — the only rupee
+    --     figures the contract itself attaches to anything. Entirely OPTIONAL: a contract with no
+    --     allowance rows behaves exactly as it did before this table existed.
+    --
+    --     Two kinds of cap, because the contract has two kinds:
+    --       'lump'     — a rupee ceiling for a named item (cap_paise).
+    --       'per_sqft' — a RATE ceiling in paise per square foot (cap_rate_per_sqft_paise). That is
+    --                     not a rupee figure until an area is supplied, so area_milli_sqft is
+    --                     OPTIONAL and, when it is absent, the row shows its ceiling as a rate and
+    --                     NO over/under position. Inventing an area to manufacture a rupee cap is
+    --                     precisely the mistake price_paise was removed for.
+    --
+    --     Spend is DERIVED, never typed: the sum of LIVE cash_out rows whose contract_allowance_id
+    --     points here. Position = effective cap − spend (positive = under, negative = over).
+    --     Where a contract says an overrun is added to the next progress payment and an underrun
+    --     subtracted from the final, Plannr DISPLAYS that position and settles nothing: no
+    --     allowance figure touches owed, Total contract, or any Overview total.
+    CREATE TABLE IF NOT EXISTS contract_allowances (
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id             INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      name                    TEXT    NOT NULL,   -- allowance name (required)
+      cap_kind                TEXT    NOT NULL,   -- 'lump' | 'per_sqft'
+      cap_paise               INTEGER,            -- 'lump': the rupee ceiling, paise. NULL for 'per_sqft'
+      cap_rate_per_sqft_paise INTEGER,            -- 'per_sqft': the ceiling rate, paise per sq ft. NULL for 'lump'
+      area_milli_sqft         INTEGER,            -- 'per_sqft' only, OPTIONAL: the area this allowance covers (milli-sq-ft)
+      sort_order              INTEGER NOT NULL DEFAULT 0, -- display order; caps list in the order the owner added them
+      created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at              TEXT                -- soft-delete: NULL = live
+    );
+
+    -- 3. cash_in: money credited / cash inflow. (Sl.No is NOT stored — it is a
+    --    display row number derived from ordering at query time.)
+    CREATE TABLE IF NOT EXISTS cash_in (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise INTEGER NOT NULL,            -- paise (₹1=100)
+      tx_date      TEXT,                         -- Phase 4C: user-chosen inflow date, ISO 'YYYY-MM-DD' (mirrors cash_out.tx_date; required on new writes)
+      by_type      TEXT    NOT NULL,            -- 'user' | 'relative' | 'custom'
+      by_user_id   INTEGER REFERENCES users(id),-- set when by_type='user'
+      by_label     TEXT,                        -- custom/relative display text when not a user
+      reason       TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at   TEXT,                        -- soft-delete: NULL = live
+      tenant_id    INTEGER NOT NULL REFERENCES users(id) -- Tenancy Phase 2: owning household (a users.id)
+    );
+
+    -- 4. cash_out: money debited / cash outflow. Carries an Included/Extra
+    --    contract_scope tag.
+    CREATE TABLE IF NOT EXISTS cash_out (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise        INTEGER NOT NULL,      -- paise (₹1=100); actual amount spent
+      tx_date             TEXT,                  -- user-chosen transaction date, ISO 'YYYY-MM-DD' (required on new writes; see Phase 1)
+      by_type             TEXT    NOT NULL,      -- 'user' | 'custom' (legacy 'contractor' possible but NO LONGER WRITTEN; verified 0 in the live DB — all 11 rows are 'user')
+      by_user_id          INTEGER REFERENCES users(id),
+      by_label            TEXT,
+      ledger_code         TEXT    NOT NULL,      -- e.g. '4.2' (fixed 23-ledger list), or 'CUSTOM'
+      subledger_code      TEXT,                  -- fixed sub code, 'CUSTOM', or NULL (none)
+      ledger_custom_name    TEXT,                -- typed ledger name when ledger_code = 'CUSTOM'
+      subledger_custom_name TEXT,                -- typed sub-ledger name when subledger_code = 'CUSTOM'
+      reason              TEXT,
+      contract_scope      TEXT    NOT NULL,      -- 'included' | 'extra'
+      contract_stated_paise INTEGER,             -- RETIRED (was Phase 5E "Option C": the contract's STATED
+                                                 -- amount for an 'included' item, offset against dues). The
+                                                 -- offset is gone; NOTHING writes or reads this column now.
+                                                 -- Kept nullable, NOT dropped: dropping a column in SQLite is
+                                                 -- a full table rebuild, and historical values + backups are
+                                                 -- worth preserving. New rows are always NULL.
+      phase               INTEGER,               -- OPTIONAL: a positive whole number (>=1), or NULL
+      subpart             TEXT,                  -- OPTIONAL: a single lowercase letter a-z, or NULL
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at          TEXT,                  -- soft-delete: NULL = live
+      tenant_id           INTEGER NOT NULL REFERENCES users(id), -- Tenancy Phase 2: owning household (a users.id)
+      -- Services phase (Part C/D): which contract_services row this debit was for — PROVENANCE, and
+      -- the key for the one-live-debit-per-service guard. NULL when the debit is 'extra' or no service
+      -- was picked. A partial UNIQUE index (idx_cash_out_service_live, WHERE deleted_at IS NULL)
+      -- enforces that at most one LIVE debit links any given service. That index was built to stop a
+      -- service offsetting dues twice; with the offset removed it now guards a bookkeeping rule
+      -- ("record each service once") rather than any figure, and is kept for that reason.
+      contract_service_id INTEGER REFERENCES contract_services(id),
+      -- Contract Phase A: which contract_allowances row this spend DRAWS AGAINST, or NULL (the
+      -- ordinary case). Deliberately NOT unique, unlike contract_service_id: an allowance
+      -- accumulates a RUNNING spend from many debits, which is the entire point of a cap.
+      -- idx_cash_out_allowance_live (non-unique, live rows only) is the rollup index; it is created
+      -- at the END of init() for the same reason the service index is.
+      contract_allowance_id INTEGER REFERENCES contract_allowances(id)
+    );
+
+    -- 5. loans: one-time loan record. NO EMI/repayment logic. interest_rate is INFORMATIONAL only
+    --    (drives no calculation). Interest actually PAID is recorded as an ordinary cash_out row under
+    --    ledger 22.0, sub-ledger 22.5 (Loan interest) — see ledger_mains/ledger_subs — so it counts in spend.
+    CREATE TABLE IF NOT EXISTS loans (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise  INTEGER,                     -- paise (₹1=100)
+      bank_name     TEXT,
+      interest_rate REAL,                        -- annual percentage rate (a rate, not money); informational
+      tenure        TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at    TEXT,                        -- soft-delete: NULL = live
+      tenant_id     INTEGER NOT NULL REFERENCES users(id) -- Tenancy Phase 2: owning household (a users.id)
+    );
+
+    -- 6. settings: a tiny key/value store for app-wide options (currently just
+    --    the optional overall budget). Least-intrusive place for a single value;
+    --    NULL value = unset. Safe to run against an existing DB (IF NOT EXISTS).
+    CREATE TABLE IF NOT EXISTS settings (
+      -- Per-tenant key/value via a COMPOSITE primary key. tenant_id is a scoping integer (a users.id;
+      -- 0 is RESERVED for global, non-account rows). Deliberately NO foreign key: settings is a config
+      -- store; the global sentinel (0) has no user row, and a setting must survive account deletion
+      -- without an orphan-FK error. COMPOSITE key rather than NAMESPACED keys so a value can still be
+      -- read by key ALONE (WHERE key = ?) with no tenant filter; namespacing would bury the tenant
+      -- inside the key and force every read to become tenant-aware. Writes UPSERT on (tenant_id, key).
+      tenant_id INTEGER NOT NULL,
+      key       TEXT    NOT NULL,
+      value     TEXT,
+      PRIMARY KEY (tenant_id, key)
+    );
+
+    -- 6b. ledger_customs: a PER-USER saved list of custom ledger names (Services phase, Part E).
+    --     ledger_custom_name on a cash_out row is free text, so customs were never reusable; this
+    --     makes a typed name selectable again after first use. Unlike the household ledger tables,
+    --     this list is genuinely PER-USER and its read endpoint IS filtered by the caller (a personal
+    --     pick-list, not shared household data) — so it does not leak in the isolation harness.
+    CREATE TABLE IF NOT EXISTS ledger_customs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id  INTEGER NOT NULL REFERENCES users(id), -- the owning user (per-user list)
+      name       TEXT    NOT NULL,                       -- the custom ledger name
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- 6c. ledger_mains / ledger_subs (Phase 10b): the fixed ledger taxonomy, now user-editable via
+    --     CSV export/import on the Data Backup page instead of hardcoded in ledgers.js. "code" IS the
+    --     identity (no separate internal id) — a row's code is what cash_out/contract/
+    --     contractor_payments store and what a re-import matches against, so a rename (same code, new
+    --     name) never orphans historical spend. sort_order preserves display/CSV-export order
+    --     (defaults to seed/import order; not alphabetical). ledgers.js now supplies only the SEED
+    --     rows inserted below the first time this table is empty — see init()'s seeding step and that
+    --     file's own header.
+    CREATE TABLE IF NOT EXISTS ledger_mains (
+      code       TEXT PRIMARY KEY,
+      name       TEXT    NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS ledger_subs (
+      code       TEXT PRIMARY KEY,
+      main_code  TEXT NOT NULL REFERENCES ledger_mains(code),
+      name       TEXT    NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_subs_main_code ON ledger_subs(main_code);
+
+    -- Indexes later phases will need (minimal + sensible).
+    CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code);
+    CREATE INDEX IF NOT EXISTS idx_cash_in_by_user_id           ON cash_in(by_user_id);
+    -- Phase 6C: idx_cash_{out,in}_deleted_at were REMOVED. deleted_at is NULL for ~every row, so
+    -- an index on it is non-selective (can't narrow WHERE deleted_at IS NULL) — and worse, the
+    -- planner CHOSE idx_cash_out_deleted_at over the effective idx_cash_out_txdate_live for the
+    -- range query, degrading it to a full deleted_at search + tx_date scan (proved by EXPLAIN).
+    -- Dropping them lets the range query use the partial date index; the list queries full-scan,
+    -- which is correct (they read every live row anyway). The DROP for existing DBs is at init end.
+    CREATE INDEX IF NOT EXISTS idx_contract_payment_dates_cid   ON contract_payment_dates(contract_id);
+    CREATE INDEX IF NOT EXISTS idx_contractor_payments_cid      ON contractor_payments(contract_id);
+    -- Services phase: FK lookup for a contract's services, and a per-user uniqueness guard so the
+    -- saved custom-name list never stores a duplicate for the same user.
+    CREATE INDEX IF NOT EXISTS idx_contract_services_cid         ON contract_services(contract_id);
+    -- Contract Phase A: FK lookup for a contract's allowance rows (same shape as the services one).
+    CREATE INDEX IF NOT EXISTS idx_contract_allowances_cid       ON contract_allowances(contract_id);
+    -- idx_ledger_customs_name (name-only, post-collapse) is created unconditionally inside the
+    -- Step 2a migration below — never here, so a second boot never tries to recreate the OLD
+    -- (tenant_id, name) index against a column that Step 2a has already dropped.
+    -- Phase 6C partial date indexes (idx_cash_out_txdate_live / _paydate_live) and the Services-phase
+    -- idx_cash_out_service_live are created at the END of init() (after the cash_out rebuild + the
+    -- contract_service_id ADD COLUMN), so a rebuild can't drop them and the column always exists first.
+  `);
+
+  // Phase 10b — seed ledger_mains/ledger_subs from ledgers.js the first time they're empty (a fresh
+  // install, or an upgrade from a pre-10b database). Presence-keyed, not version-gated: once a
+  // household has edited the taxonomy via CSV import, the table is never empty again, so this can
+  // never re-fire and stomp an edit — it only ever runs once, on a genuinely empty table.
+  if (!db.prepare('SELECT 1 FROM ledger_mains LIMIT 1').get()) {
+    const insMain = db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)');
+    const insSub = db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)');
+    // Phase 12: these ~190 inserts were each their own autocommit transaction (a journal
+    // create/fsync/delete per row under DELETE journal mode) — 0.5-1.1s on a fresh install, the very
+    // first thing a new user waits on. One transaction for the whole seed: same rows, same order, same
+    // end state, ~7-12ms instead.
+    db.exec('BEGIN');
+    try {
+      let order = 0;
+      for (const L of SEED_LEDGERS) {
+        insMain.run(L.code, L.name, order++);
+        for (const s of L.subLedgers) insSub.run(s.code, L.code, s.name, order++);
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      rollbackQuietly(db);
+      throw e;
+    }
+  }
+
+  // Idempotent migration: add the custom ledger/sub-ledger name columns to
+  // cash_out for databases created before they existed (fresh DBs already have
+  // them from the CREATE above). ALTER ADD COLUMN appends a nullable TEXT column;
+  // existing rows get NULL — no data is altered.
+  const cashOutCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  for (const col of ['ledger_custom_name', 'subledger_custom_name']) {
+    if (!cashOutCols.includes(col)) db.exec(`ALTER TABLE cash_out ADD COLUMN ${col} TEXT`);
+  }
+
+  // Idempotent migration: add contract_end_date to contract for databases
+  // created before it existed (fresh DBs already have it from the CREATE above).
+  // Nullable TEXT; existing rows get NULL — no data is altered.
+  const contractCols = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  if (!contractCols.includes('contract_end_date')) {
+    db.exec('ALTER TABLE contract ADD COLUMN contract_end_date TEXT');
+  }
+
+  // Idempotent migration (Phase 2): contract becomes a multi-row list — add the new
+  // per-contract columns + soft-delete. ALTER ADD COLUMN appends nullable columns;
+  // existing rows get NULL (the DB is empty at this phase, so there is no data to
+  // lose; this also stays correct for a pre-existing single-contract row).
+  // SHAPE DETECTED: "column absent" ⇒ "add it". This is presence-keyed like the guards above, but
+  // ADDITIVE-ONLY — the worst a wrong-fire can do is skip or add a NULL column; it can never drop or
+  // overwrite. So, unlike the destructive cash_out rebuild, it stays safe as a pure presence key and
+  // deliberately needs NO version gate (a legitimately re-absent column SHOULD be re-added).
+  const contractColsP2 = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  for (const [col, type] of [
+    ['area_of_work', 'TEXT'], ['ledger_code', 'TEXT'], ['subledger_code', 'TEXT'],
+    ['ledger_custom_name', 'TEXT'], ['subledger_custom_name', 'TEXT'],
+    ['amount_paise', 'INTEGER'], ['date_signed', 'TEXT'], ['deleted_at', 'TEXT'],
+  ]) {
+    if (!contractColsP2.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+  }
+
+  // Migration: cash_out phase/subpart are SIMPLE SCALARS — phase is a positive whole
+  // number (INTEGER >=1 or NULL) and subpart is a single lowercase letter (TEXT
+  // 'a'..'z' or NULL). An EARLIER version stored them as a '1'..'4' / 'a'..'c' + 'CUSTOM'
+  // sentinel design with phase_custom_name / subpart_custom_name columns. If that old
+  // shape is present (detected by phase_custom_name), rebuild cash_out to the new shape:
+  // SQLite can't retype or drop columns in place, so use the standard create-copy-swap
+  // rebuild inside a transaction — preserving every OTHER column, id, foreign key and
+  // soft-delete state EXACTLY, and mapping any value that doesn't fit the new rule
+  // (e.g. 'CUSTOM', a non-integer, or a multi-char subpart) to NULL. Fresh DBs already
+  // have the final shape from the CREATE above. STORED ONLY: a POSSIBLE future Overview
+  // "by phase" view could group on them — they never affect any Overview total.
+  // UNAMBIGUOUS GUARD (Phase 11B): presence of phase_custom_name ALONE is NOT a safe key — if that
+  // column were ever re-added for a new purpose this DESTRUCTIVE rebuild would re-fire and null live
+  // data (exactly the Phase-5B landmine, where a re-added contract_service_id re-armed a presence-only
+  // guard). So it is ALSO gated on the schema-version marker: the rebuild runs ONLY on a DB that
+  // predates the marker (user_version 0). init() stamps user_version = SCHEMA_VERSION on success, so
+  // no later re-add of the column can re-trigger it. Read the marker BEFORE any migration changes it.
+  const userVersion = db.prepare('PRAGMA user_version').get().user_version;
+  const coCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  if (userVersion === 0 && (coCols.includes('phase_custom_name') || coCols.includes('subpart_custom_name'))) {
+    db.exec('PRAGMA foreign_keys = OFF'); // standard rebuild guard (nothing references cash_out anyway)
+    db.exec('BEGIN');
+    try {
+      db.exec(`CREATE TABLE cash_out_rebuild (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount_paise        INTEGER NOT NULL,
+        by_type             TEXT    NOT NULL,
+        by_user_id          INTEGER REFERENCES users(id),
+        by_label            TEXT,
+        ledger_code         TEXT    NOT NULL,
+        subledger_code      TEXT,
+        ledger_custom_name    TEXT,
+        subledger_custom_name TEXT,
+        reason              TEXT,
+        contract_scope      TEXT    NOT NULL,
+        phase               INTEGER,
+        subpart             TEXT,
+        created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+        deleted_at          TEXT
+      )`);
+      db.exec(`INSERT INTO cash_out_rebuild
+        (id, amount_paise, by_type, by_user_id, by_label, ledger_code, subledger_code,
+         ledger_custom_name, subledger_custom_name, reason, contract_scope,
+         phase, subpart, created_at, updated_at, deleted_at)
+        SELECT id, amount_paise, by_type, by_user_id, by_label, ledger_code, subledger_code,
+               ledger_custom_name, subledger_custom_name, reason, contract_scope,
+               CASE WHEN phase GLOB '[1-9]*' AND phase NOT GLOB '*[^0-9]*' THEN CAST(phase AS INTEGER) ELSE NULL END,
+               CASE WHEN subpart GLOB '[A-Za-z]' THEN lower(subpart) ELSE NULL END,
+               created_at, updated_at, deleted_at
+          FROM cash_out`);
+      db.exec('DROP TABLE cash_out');
+      db.exec('ALTER TABLE cash_out_rebuild RENAME TO cash_out');
+      db.exec('COMMIT');
+    } catch (e) {
+      rollbackQuietly(db);
+      throw e;
+    }
+    db.exec('PRAGMA foreign_keys = ON');
+    // The old table's indexes went with it on DROP; recreate the ledger one (Phase 6C dropped the
+    // useless deleted_at index — not recreated here; the tx_date partial index is made below).
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code)');
+  } else {
+    // Fresh or already-migrated DB: just ensure the two scalar columns exist.
+    if (!coCols.includes('phase')) db.exec('ALTER TABLE cash_out ADD COLUMN phase INTEGER');
+    if (!coCols.includes('subpart')) db.exec('ALTER TABLE cash_out ADD COLUMN subpart TEXT');
+  }
+
+  // Idempotent migration (Phase 1): cash_out gains tx_date — the user-chosen
+  // transaction date, ISO 'YYYY-MM-DD'. New writes REQUIRE it. Existing rows are
+  // backfilled from their created_at calendar date so no live row is left dateless
+  // (a valid, sensible date rather than NULL). Run LAST so a table rebuilt above
+  // (old phase_custom_name shape) also picks up the column. No data is altered.
+  const coDateCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  if (!coDateCols.includes('tx_date')) {
+    db.exec('ALTER TABLE cash_out ADD COLUMN tx_date TEXT');
+    db.exec("UPDATE cash_out SET tx_date = date(created_at) WHERE tx_date IS NULL");
+  }
+
+  // Idempotent migration (Phase 4C): cash_in gains tx_date — inflows were undateable before. Same
+  // shape/backfill as cash_out's above: ADD COLUMN (a metadata-only op — NO table rebuild, so no
+  // PRAGMA foreign_keys toggling is needed), then backfill existing rows from date(created_at) so no
+  // live row is left dateless. Guarded on the column's absence, so it no-ops on fresh installs (whose
+  // CREATE already has it) and on a second boot. New writes REQUIRE tx_date (validated in server.js).
+  const ciDateCols = db.prepare('PRAGMA table_info(cash_in)').all().map((c) => c.name);
+  if (!ciDateCols.includes('tx_date')) {
+    db.exec('ALTER TABLE cash_in ADD COLUMN tx_date TEXT');
+    db.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL");
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 5B — rebuild cash_out ONCE: drop the two dead columns (the OLD contract_service_id + its FK
+  // to the OLD contract_services, and units_covered — both verified 0 non-null across the live 11 rows)
+  // and add contract_stated_paise (Option C reimbursement offset). SQLite can't drop a column with a
+  // foreign key in place, so use the create-copy-swap rebuild, preserving id, every kept column,
+  // and soft-delete state EXACTLY.
+  //
+  // Services phase FIX: the Services phase RE-ADDS a (new-meaning) contract_service_id AFTER this
+  // block. So `contract_service_id present` alone is NO LONGER a valid guard — it would re-fire here
+  // every reboot and DROP the new column. The unambiguous OLD-shape signal is `contract_service_id
+  // present AND contract_stated_paise ABSENT` (the whole point of 5B was to ADD contract_stated_paise;
+  // if it's already there, 5B has run). The new shape has BOTH columns, so this stays false for it.
+  const coColsP5 = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  if (coColsP5.includes('contract_service_id') && !coColsP5.includes('contract_stated_paise')) {
+    // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, restore AFTER
+    // COMMIT, and read it back to prove enforcement is actually off (Phase 4B's trap).
+    // Preserve the AUTOINCREMENT high-water mark. create-copy-swap re-inserts ids 1..MAX(id) into a
+    // NEW table, so its sqlite_sequence becomes MAX(id) — which RESETS the counter if rows past the
+    // current max were ever created and deleted (e.g. the live DB has seq=17 with max id 11). Left
+    // unfixed, new rows would REUSE deleted ids 12..17. Capture the old high-water mark and restore
+    // it after the swap so the next insert always lands strictly past the highest id ever used.
+    const oldSeqRow = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'cash_out'").get();
+    const oldSeq = oldSeqRow ? oldSeqRow.seq : null;
+    db.exec('PRAGMA foreign_keys = OFF');
+    const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+    if (fkOff !== 0) throw new Error(`cash_out rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
+    db.exec('BEGIN');
+    try {
+      // Final shape = the current base CREATE above, minus contract_service_id + units_covered,
+      // plus contract_stated_paise. Same column order as the CREATE so fresh == migrated.
+      db.exec(`CREATE TABLE cash_out_p5 (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount_paise          INTEGER NOT NULL,
+        tx_date               TEXT,
+        by_type               TEXT    NOT NULL,
+        by_user_id            INTEGER REFERENCES users(id),
+        by_label              TEXT,
+        ledger_code           TEXT    NOT NULL,
+        subledger_code        TEXT,
+        ledger_custom_name    TEXT,
+        subledger_custom_name TEXT,
+        reason                TEXT,
+        contract_scope        TEXT    NOT NULL,
+        contract_stated_paise INTEGER,
+        phase                 INTEGER,
+        subpart               TEXT,
+        created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+        deleted_at            TEXT
+      )`);
+      // Explicit column lists (never SELECT *). Copy id explicitly to preserve row ids (1–11).
+      // contract_service_id + units_covered are simply not selected (dropped); contract_stated_paise
+      // starts NULL. phase + subpart carried through unchanged (deliberately dormant — not swept here).
+      db.exec(`INSERT INTO cash_out_p5
+        (id, amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code,
+         ledger_custom_name, subledger_custom_name, reason, contract_scope, contract_stated_paise,
+         phase, subpart, created_at, updated_at, deleted_at)
+        SELECT id, amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code,
+               ledger_custom_name, subledger_custom_name, reason, contract_scope, NULL,
+               phase, subpart, created_at, updated_at, deleted_at
+          FROM cash_out`);
+      db.exec('DROP TABLE cash_out');
+      db.exec('ALTER TABLE cash_out_p5 RENAME TO cash_out');
+      // Restore the AUTOINCREMENT high-water mark (see note above) so ids are never reused.
+      db.exec("DELETE FROM sqlite_sequence WHERE name = 'cash_out'");
+      if (oldSeq != null) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('cash_out', ?)").run(oldSeq);
+      db.exec('COMMIT');
+    } catch (e) {
+      rollbackQuietly(db);
+      db.exec('PRAGMA foreign_keys = ON');
+      throw e;
+    }
+    db.exec('PRAGMA foreign_keys = ON');
+    // The dropped table took its indexes with it. Recreate the ledger one; NOT
+    // idx_cash_out_contract_service_id (column gone) and NOT idx_cash_out_deleted_at (Phase 6C
+    // dropped it as counter-productive). The tx_date partial index is (re)created at init end.
+    // (sqlite_sequence was restored to its pre-rebuild high-water mark inside the transaction above.)
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code ON cash_out(ledger_code)');
+    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    if (fkViol.length) throw new Error('cash_out rebuild: foreign_key_check found ' + JSON.stringify(fkViol));
+  } else if (!coColsP5.includes('contract_stated_paise')) {
+    // Already lost the dead columns (e.g. a phase_custom_name-era DB rebuilt above) but predates
+    // contract_stated_paise — just add the nullable column. No data altered.
+    db.exec('ALTER TABLE cash_out ADD COLUMN contract_stated_paise INTEGER');
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 5C — the old contract_services was dropped here. The Services phase RE-INTRODUCES
+  // contract_services (new shape), so the unconditional drop is GONE; the conditional old-shape drop
+  // moved ABOVE the ledger CREATE block (see "Services phase — contract_services RETURNS"). The old
+  // child index drop is kept (harmless if it lingers on an ancient DB).
+  db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+
+  // ===========================================================================
+  // Tenancy Phase 2 (Part A) — add the tenant dimension. SCHEMA + BACKFILL ONLY: no read/write
+  // filter is applied here (that is Phase 3). Model: one account per household, so tenant_id holds a
+  // users.id. Named tenant_id (never user_id) so real multi-person households later become a table +
+  // backfill, not a rename across ~90 call sites.
+  //
+  // MECHANISM (verified empirically against node:sqlite): `ALTER TABLE ADD COLUMN tenant_id INTEGER
+  // NOT NULL` with NO default is REJECTED on a NON-EMPTY table ("Cannot add a NOT NULL column with
+  // default value NULL") but ALLOWED on an EMPTY one. So per table: EMPTY -> ADD COLUMN NOT NULL
+  // (cheap, no rebuild, sqlite_sequence untouched); NON-EMPTY -> a forced create-copy-swap rebuild
+  // that backfills tenant_id in the INSERT..SELECT and PRESERVES sqlite_sequence. A DEFAULT is
+  // deliberately REFUSED: a default silently assigns any future insert that forgets tenant_id to the
+  // wrong tenant; NOT NULL with no default makes that a hard error instead. In the live DB only
+  // cash_out is non-empty (11 rows, sqlite_sequence=17 with max id 11 — a naive rebuild would reset
+  // it to 11 and let new rows REUSE deleted ids 12..17), so exactly one table takes the rebuild path.
+  // ---------------------------------------------------------------------------
+  // Part D — the tenant every existing row would be assigned to, IF this migration runs at all.
+  // Computed unconditionally (cheap, read-only) because Step 2a further below also needs it.
+  const tenantUsers = db.prepare('SELECT id FROM users ORDER BY id ASC').all().map((u) => u.id);
+  const chosenTenant = tenantUsers.length ? tenantUsers[0] : null;
+
+  // BUG FIX: this whole block (Parts A/B/C — add tenant_id, the per-tenant settings PK, the
+  // per-tenant contract index) used to be gated ONLY on column presence ("tenant_id is absent ->
+  // add it"). That is unsafe now that Step 2a (further below) deliberately DROPS tenant_id: on the
+  // very next boot, presence-gating can't tell "genuinely pre-tenancy" apart from "already
+  // collapsed" — it saw the column missing, decided the DB was pre-tenancy, and tried to add it
+  // back (and/or recreate an index against it), which is wrong at best and throws at worst. Traced
+  // both paths: a pre-tenancy DB is at user_version 0 (< 2) — this block runs, exactly as before,
+  // and Step 2a's block immediately after collapses it back down in the SAME boot. A collapsed DB
+  // is at user_version 2 (>= 2) — this block is now skipped ENTIRELY, so nothing re-adds tenant_id
+  // and nothing tries to build an index against a column that no longer exists.
+  if (userVersion < 2) {
+    const TENANT_TABLES = ['cash_out', 'cash_in', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments'];
+    const rowsNeedingTenant = TENANT_TABLES.filter((t) => {
+      const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+      return !cols.includes('tenant_id') && db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n > 0;
+    });
+    if (rowsNeedingTenant.length && chosenTenant == null) {
+      throw new Error(`Tenancy Phase 2: tables [${rowsNeedingTenant.join(', ')}] hold rows but there are NO users to own them — refusing to backfill tenant_id to a non-existent user (the FK would fail). Register the household user first, then reboot.`);
+    }
+    if (rowsNeedingTenant.length && tenantUsers.length > 1) {
+      console.warn(`[db] Tenancy Phase 2: ${tenantUsers.length} users share this ledger and it cannot be split — assigning the ENTIRE database to tenant_id=${chosenTenant} (the lowest/first user id). Other users (${tenantUsers.slice(1).join(', ')}) keep their logins but own no ledger rows. This is the documented single-tenant collapse; see README "Tenancy".`);
+    }
+
+    // create-copy-swap: rebuild `table` with a trailing NOT NULL tenant_id, backfilling every row to
+    // `tenant`. Preserves ids, sqlite_sequence, the table's own indexes, and FK integrity. Reuses the
+    // table's CURRENT DDL (comments stripped) so there is no second copy of each schema to drift.
+    const rebuildAddingTenant = (table, oldCols, tenant) => {
+      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+      const oldSeq = seqRow ? seqRow.seq : null;                        // AUTOINCREMENT high-water mark
+      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table); // DROP TABLE takes indexes with it
+      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(table).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
+      const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
+      const tmp = `${table}__tenant_rebuild`;
+      // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, read it back to
+      // PROVE enforcement is off (this project's twice-hit trap), restore AFTER COMMIT.
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`${table} tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
+      db.exec('BEGIN');
+      try {
+        db.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
+        const colList = oldCols.join(', ');
+        db.prepare(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`).run(tenant);
+        db.exec(`DROP TABLE ${table}`);
+        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        // RENAME set sqlite_sequence for the table to the copied max id; restore the true high-water
+        // mark so the next insert lands strictly PAST the highest id ever used (never reuses 12..17).
+        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
+        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
+        db.exec('COMMIT');
+      } catch (e) {
+        rollbackQuietly(db);
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
+      db.exec('PRAGMA foreign_keys = ON');
+      // Replay the table's own indexes (DROP TABLE removed them). Skip the old database-wide
+      // single-live-contract index — the per-tenant block below creates the correct replacement.
+      for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') db.exec(idx.sql); }
+      const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+      if (fkViol.length) throw new Error(`${table} tenant rebuild: foreign_key_check found ${JSON.stringify(fkViol)}`);
+    };
+
+    // Add tenant_id to one table: no-op if present (idempotent / fresh install), ADD COLUMN if empty,
+    // forced rebuild if it holds rows.
+    const addTenantId = (table) => {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+      if (cols.includes('tenant_id')) return;
+      const n = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+      if (n === 0) { db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
+      rebuildAddingTenant(table, cols, chosenTenant);
+    };
+    for (const t of TENANT_TABLES) addTenantId(t);
+
+    // Part C — settings becomes PER-TENANT via a composite (tenant_id, key) primary key. The PK change
+    // forces a create-copy-swap rebuild (SQLite can't add a column to a PK in place). Backfill every
+    // existing row to the tenant: no CURRENT settings key is genuinely global — budget, recipients,
+    // schedule times, and the last-success/attempt/alert bookkeeping are all per-household. (The one
+    // genuinely-global piece of state, the shared WhatsApp client session, lives in .wwebjs_auth on
+    // disk, not here; a future infra key would use the reserved tenant_id = 0.)
+    const settingsCols = db.prepare('PRAGMA table_info(settings)').all().map((c) => c.name);
+    if (!settingsCols.includes('tenant_id')) {
+      const settingsRows = db.prepare('SELECT COUNT(*) AS n FROM settings').get().n;
+      if (settingsRows > 0 && chosenTenant == null) {
+        throw new Error('Tenancy Phase 2: settings holds rows but there are NO users to own them — register the household user first, then reboot.');
+      }
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`settings tenant rebuild: foreign_keys still ${fkOff} after OFF.`);
+      db.exec('BEGIN');
+      try {
+        // No FK on tenant_id (see the CREATE note). backfill = chosenTenant for every existing row.
+        db.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
+        db.prepare('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings').run(chosenTenant);
+        db.exec('DROP TABLE settings');
+        db.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
+        db.exec('COMMIT');
+      } catch (e) {
+        rollbackQuietly(db);
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+
+    // Part B — the single-live-contract invariant becomes PER-TENANT. The old database-wide
+    // idx_contract_single_live made a SECOND user unable to create ANY contract (the INSERT
+    // failed); replace it so each tenant gets exactly one live contract. Fail LOUDLY first if any
+    // tenant already holds more than one live contract — never silently pick a winner.
+    const dupLiveTenants = db.prepare('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1').all();
+    if (dupLiveTenants.length) {
+      throw new Error(`Tenancy Phase 2 (Part B): tenant(s) ${dupLiveTenants.map((d) => `${d.tenant_id} (${d.n} live)`).join(', ')} already hold more than one live contract; the per-tenant invariant allows one each. Soft-delete the extras, then reboot — refusing to pick a winner automatically.`);
+    }
+    db.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
+  }
+
+  // ===========================================================================
+  // Services phase — contract line-item services + per-user customs. contract_services and
+  // ledger_customs are created by the base block above (empty new tables → NOT NULL tenant_id is fine
+  // with no rows). Two idempotent ADD COLUMNs for the columns that live on EXISTING tables:
+  //  · contract.company (Part F) — optional, nullable.
+  //  · cash_out.contract_service_id (Part C/D) — nullable FK to contract_services. Runs AFTER the
+  //    Phase 2 cash_out tenant-rebuild (so it isn't dropped) and after contract_services exists.
+  const contractColsSvc = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  if (!contractColsSvc.includes('company')) db.exec('ALTER TABLE contract ADD COLUMN company TEXT');
+  const cashOutColsSvc = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  if (!cashOutColsSvc.includes('contract_service_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_service_id INTEGER REFERENCES contract_services(id)');
+
+  // Part E — one-time backfill of the per-user custom list so existing free-text ledger names are not
+  // orphaned: they still display from their own cash_out.ledger_custom_name (unchanged), AND become
+  // selectable. Seed the distinct live custom names to the PRIMARY tenant (chosenTenant, from Phase 2
+  // above). Gated on an EMPTY list so a user who later deletes a saved name isn't re-seeded on reboot.
+  // ALSO gated on userVersion < 2 AND ledger_customs actually having a tenant_id column. Version alone
+  // is not enough here: unlike the 6 TENANT_TABLES above (which Part A actively retrofits whenever
+  // userVersion < 2, regardless of current shape), ledger_customs/contract_services only ever get
+  // tenant_id at table-CREATION time — there is no ALTER/rebuild path that adds it back. So a boot
+  // where userVersion reads < 2 but the column is already gone (e.g. user_version was reset without
+  // the schema being reset to match) must not attempt this INSERT.
+  // Phase 12: check the cheap userVersion gate FIRST — short-circuits the PRAGMA call below (and
+  // everything after it) on every already-migrated boot, same as every other userVersion < 2 gate here.
+  if (userVersion < 2 && db.prepare('PRAGMA table_info(ledger_customs)').all().map((c) => c.name).includes('tenant_id') && chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
+    db.prepare(
+      "INSERT OR IGNORE INTO ledger_customs (tenant_id, name) " +
+      "SELECT DISTINCT ?, ledger_custom_name FROM cash_out " +
+      "WHERE ledger_code = 'CUSTOM' AND ledger_custom_name IS NOT NULL AND trim(ledger_custom_name) <> '' AND deleted_at IS NULL"
+    ).run(chosenTenant);
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 6C — index tuning (done LAST so the cash_out rebuild above can't drop these).
+  //  · DROP the useless full deleted_at indexes: deleted_at is NULL for ~every row (non-selective),
+  //    and idx_cash_out_deleted_at was being CHOSEN over the effective partial index for the range
+  //    query, degrading it. Proved with EXPLAIN QUERY PLAN. The list queries full-scan (correct —
+  //    they read every live row). IF EXISTS so it's a no-op on fresh DBs / second boot.
+  //  · CREATE the PARTIAL date indexes that the Overview range queries actually use — keyed on the
+  //    date, restricted to live rows, so `WHERE deleted_at IS NULL AND <date> BETWEEN ?..?` is an
+  //    index range scan.
+  db.exec('DROP INDEX IF EXISTS idx_cash_out_deleted_at');
+  db.exec('DROP INDEX IF EXISTS idx_cash_in_deleted_at');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_txdate_live ON cash_out(tx_date) WHERE deleted_at IS NULL');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_contractor_payments_paydate_live ON contractor_payments(pay_date) WHERE deleted_at IS NULL');
+  // Part A — the amount-range filter on the outflow search is a range predicate, so it gets the SAME
+  // partial-index-on-live-rows treatment as tx_date above: `WHERE deleted_at IS NULL AND amount_paise
+  // BETWEEN ?..?` becomes an index range scan instead of a full table scan. (EXPLAIN-verified: turns the
+  // amount-only search from a SCAN into SEARCH … USING idx_cash_out_amount_live.)
+  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_amount_live ON cash_out(amount_paise) WHERE deleted_at IS NULL');
+
+  // Services phase (Part D) — the ONE-SERVICE-ONE-OFFSET invariant, enforced in the DATABASE (mirrors
+  // idx_contract_single_live_tenant): at most one LIVE debit may link any given service, so a single
+  // substitution can never offset the contractor's dues twice. Partial + restricted to non-null
+  // service ids (a NULL link — the common case — is unconstrained). Created here at init end so the
+  // cash_out rebuilds above can't drop it and contract_service_id is guaranteed to exist by now.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
+
+  // ===========================================================================
+  // Tenancy Phase 2, Step 2a — SCHEMA-ONLY collapse back to a single tenant. The app is becoming a
+  // single-user offline Android install: exactly one users row will ever exist, so tenant_id (added
+  // above for a household-sharing feature) is being removed entirely, not frozen. repo.js and
+  // server.js still pass/require req.user.id as a tenant argument today — updating THOSE is a later,
+  // separate step; this migration only reshapes storage.
+  //
+  // Version-gated (userVersion < 2, read at the top of init() before any migration touches the
+  // marker — same convention as the phase_custom_name/cash_out rebuild above) rather than
+  // presence-keyed: "tenant_id is absent" is not a safe trigger here (a database that has ALREADY run
+  // this migration also has no tenant_id, so a presence check would re-fire it forever). NEEDS
+  // TENANT_TABLES/rebuildAddingTenant() ABOVE to still exist and run first: a genuinely pre-Tenancy
+  // database has no tenant_id at all, and this migration's DELETEs below assume the column is there.
+  // That add-then-immediately-remove round trip is redundant work for such a database but produces
+  // the correct end state, using the already-proven backfill/rebuild logic instead of a second
+  // special case here.
+  if (userVersion < 2) {
+    // Row-count guard (see Part 6 below): snapshot every table's count BEFORE this migration
+    // touches anything, and track exactly how many rows each deliberate delete/dedupe step removes.
+    const GUARD_TABLES = ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs', 'settings'];
+    const countsBefore = {};
+    const deliberatelyRemoved = {};
+    for (const t of GUARD_TABLES) { countsBefore[t] = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n; deliberatelyRemoved[t] = 0; }
+
+    // The one real tenant: the lowest users.id (same "household head" convention Tenancy Phase 2
+    // used above; `chosenTenant` is that same computed value, still in scope). Any OTHER tenant_id
+    // surviving in these tables at this point is a test artifact, not a second real household.
+    if (chosenTenant != null) {
+      // Before touching any column: drop every row belonging to a tenant other than the real one,
+      // across all 8 tenant-bearing tables, so each table's rebuild below has nothing left to lose.
+      // contract_services/ledger_customs are NOT in TENANT_TABLES above, so — unlike the other 6 —
+      // nothing retrofits tenant_id onto them if it's already absent; skip a table here if it
+      // doesn't currently have the column, rather than assume every gated table always does.
+      for (const t of ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs']) {
+        const hasTenantCol = db.prepare(`PRAGMA table_info(${t})`).all().some((c) => c.name === 'tenant_id');
+        if (!hasTenantCol) continue;
+        const info = db.prepare(`DELETE FROM ${t} WHERE tenant_id <> ?`).run(chosenTenant);
+        deliberatelyRemoved[t] += info.changes;
+      }
+    }
+
+    // Part 1 — settings: composite (tenant_id, key) PK back to a plain key PK. Where the same key
+    // still exists under more than one tenant (shouldn't happen after the delete above unless a row
+    // for that key never belonged to chosenTenant to begin with), keep the lowest tenant_id's row.
+    {
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`settings de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting.`);
+      db.exec('BEGIN');
+      try {
+        db.exec('CREATE TABLE settings__detenant_rebuild (key TEXT NOT NULL PRIMARY KEY, value TEXT)');
+        const insInfo = db.prepare(`
+          INSERT INTO settings__detenant_rebuild (key, value)
+          SELECT s.key, s.value FROM settings s
+          WHERE s.tenant_id = (SELECT MIN(tenant_id) FROM settings WHERE key = s.key)
+        `).run();
+        deliberatelyRemoved.settings = countsBefore.settings - insInfo.changes;
+        db.exec('DROP TABLE settings');
+        db.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
+        db.exec('COMMIT');
+      } catch (e) {
+        rollbackQuietly(db);
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+
+    // Part 2 — contract: collapse the per-tenant single-live invariant to a database-wide one. If
+    // more than one live contract still exists across tenants (shouldn't happen after the delete
+    // above, since idx_contract_single_live_tenant already capped each tenant at one), keep the
+    // lowest users.id's and soft-delete the rest — never a silent hard-delete of a live row.
+    db.exec(`
+      UPDATE contract SET deleted_at = datetime('now')
+      WHERE deleted_at IS NULL
+        AND tenant_id <> (SELECT MIN(tenant_id) FROM contract WHERE deleted_at IS NULL)
+    `);
+
+    // Part 3 — ledger_customs: dedupe by NAME, keeping the lowest id (lowest id, not lowest
+    // tenant_id — this becomes a flat pick-list once the tenant dimension is gone, so ties break on
+    // row age, not on ownership).
+    {
+      const dedupInfo = db.prepare('DELETE FROM ledger_customs WHERE id NOT IN (SELECT MIN(id) FROM ledger_customs GROUP BY name)').run();
+      deliberatelyRemoved.ledger_customs += dedupInfo.changes;
+    }
+
+    // Part 4 — drop tenant_id from all 8 tenant-bearing tables via create-copy-swap, preserving the
+    // AUTOINCREMENT high-water mark exactly as rebuildAddingTenant() does above (so no id is ever
+    // reused), and replaying each table's OWN indexes afterward — skipping any that reference
+    // tenant_id (the two that do, idx_contract_single_live_tenant and idx_ledger_customs_tenant_name,
+    // are replaced with their tenant-free equivalents in Part 5, not replayed here).
+    const rebuildDroppingTenant = (table, bodySql, keptCols) => {
+      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+      const oldSeq = seqRow ? seqRow.seq : null;
+      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table);
+      const tmp = `${table}__detenant_rebuild`;
+      db.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      if (fkOff !== 0) throw new Error(`${table} de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
+      db.exec('BEGIN');
+      try {
+        db.exec(`CREATE TABLE ${tmp} (${bodySql})`);
+        const colList = keptCols.join(', ');
+        db.exec(`INSERT INTO ${tmp} (${colList}) SELECT ${colList} FROM ${table}`);
+        db.exec(`DROP TABLE ${table}`);
+        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
+        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
+        db.exec('COMMIT');
+      } catch (e) {
+        rollbackQuietly(db);
+        db.exec('PRAGMA foreign_keys = ON');
+        throw e;
+      }
+      db.exec('PRAGMA foreign_keys = ON');
+      for (const idx of idxDdls) { if (!/tenant_id/i.test(idx.sql)) db.exec(idx.sql); }
+    };
+
+    rebuildDroppingTenant('contract', `
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_name         TEXT,
+      area_of_work            TEXT,
+      ledger_code             TEXT,
+      subledger_code          TEXT,
+      ledger_custom_name      TEXT,
+      subledger_custom_name   TEXT,
+      amount_paise            INTEGER,
+      price_of_contract_paise INTEGER,
+      contract_end_date       TEXT,
+      date_signed             TEXT,
+      created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at              TEXT,
+      company                 TEXT
+    `, ['id', 'contractor_name', 'area_of_work', 'ledger_code', 'subledger_code', 'ledger_custom_name',
+        'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date',
+        'date_signed', 'created_at', 'updated_at', 'deleted_at', 'company']);
+
+    rebuildDroppingTenant('contract_payment_dates', `
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      pay_date    TEXT    NOT NULL,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    `, ['id', 'contract_id', 'pay_date', 'created_at']);
+
+    rebuildDroppingTenant('contractor_payments', `
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id           INTEGER NOT NULL REFERENCES contract(id),
+      pay_date              TEXT    NOT NULL,
+      amount_paise          INTEGER NOT NULL,
+      ledger_code           TEXT,
+      subledger_code        TEXT,
+      ledger_custom_name    TEXT,
+      subledger_custom_name TEXT,
+      phase                 INTEGER,
+      subpart               TEXT,
+      remarks               TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at            TEXT
+    `, ['id', 'contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code',
+        'ledger_custom_name', 'subledger_custom_name', 'phase', 'subpart', 'remarks',
+        'created_at', 'updated_at', 'deleted_at']);
+
+    // contract_services' shape is no longer fixed here: price_paise exists only on a database that
+    // predates Contract Phase A's A3 drop, which runs LATER in init() than this collapse. A pinned
+    // column list would therefore fail one way or the other — "no such column: price_paise" on a
+    // fresh install (the CREATE above has no such column), or a silent loss of the old prices before
+    // A3 gets the chance to archive them. So: copy the column when it is there, skip it when it is
+    // not. Either way A3 removes it a few hundred lines below, with its own data-loss guard.
+    const csHasPrice = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'price_paise');
+    rebuildDroppingTenant('contract_services', `
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
+      name        TEXT    NOT NULL,${csHasPrice ? '\n      price_paise INTEGER,' : ''}
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at  TEXT
+    `, ['id', 'contract_id', 'name', ...(csHasPrice ? ['price_paise'] : []), 'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('cash_in', `
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise INTEGER NOT NULL,
+      tx_date      TEXT,
+      by_type      TEXT    NOT NULL,
+      by_user_id   INTEGER REFERENCES users(id),
+      by_label     TEXT,
+      reason       TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at   TEXT
+    `, ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason',
+        'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('cash_out', `
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise          INTEGER NOT NULL,
+      tx_date               TEXT,
+      by_type               TEXT    NOT NULL,
+      by_user_id            INTEGER REFERENCES users(id),
+      by_label              TEXT,
+      ledger_code           TEXT    NOT NULL,
+      subledger_code        TEXT,
+      ledger_custom_name    TEXT,
+      subledger_custom_name TEXT,
+      reason                TEXT,
+      contract_scope        TEXT    NOT NULL,
+      contract_stated_paise INTEGER,
+      phase                 INTEGER,
+      subpart               TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at            TEXT,
+      contract_service_id   INTEGER REFERENCES contract_services(id)
+    `, ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code',
+        'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope',
+        'contract_stated_paise', 'phase', 'subpart', 'created_at', 'updated_at', 'deleted_at',
+        'contract_service_id']);
+
+    rebuildDroppingTenant('loans', `
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount_paise  INTEGER,
+      bank_name     TEXT,
+      interest_rate REAL,
+      tenure        TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at    TEXT
+    `, ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at']);
+
+    rebuildDroppingTenant('ledger_customs', `
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT    NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    `, ['id', 'name', 'created_at']);
+
+    // Part 5 — retire the tenant-scoped indexes. idx_contract_single_live_tenant is dropped with NO
+    // replacement: SQLite cannot index a constant expression, so there is no database-wide
+    // equivalent to create, and app-level enforcement (a 409 on a second live contract — see
+    // test/contract.test.js) is sufficient on a single-user app. idx_ledger_customs_tenant_name IS
+    // replaced, by a plain unique index on name. (The table rebuilds above already dropped both
+    // along with their tables via DROP TABLE; the explicit DROP INDEX here is just defensive in case
+    // either survives on an unusual DB.)
+    db.exec('DROP INDEX IF EXISTS idx_contract_single_live_tenant');
+    db.exec('DROP INDEX IF EXISTS idx_ledger_customs_tenant_name');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_name ON ledger_customs(name)');
+
+    // Part 6 — row-count guard. A create-copy-swap that silently drops (or duplicates) a row is the
+    // failure mode this migration most needs to catch. `deliberatelyRemoved` tracks, per table, only
+    // the rows THIS migration intentionally removes (the non-chosen-tenant purge above, plus
+    // ledger_customs' own name-dedupe and settings' own key-dedupe); every other step here is a
+    // column-drop or soft-delete that must never change a row count. Checked with exact equality —
+    // stricter than "no more than expected", so it also catches an unexpected UNDER-removal, not
+    // only silent loss during the rebuilds.
+    for (const t of GUARD_TABLES) {
+      const after = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+      const expected = countsBefore[t] - deliberatelyRemoved[t];
+      if (after !== expected) {
+        throw new Error(`Tenancy collapse (Step 2a): row-count guard failed for ${t} — before=${countsBefore[t]}, deliberately removed=${deliberatelyRemoved[t]}, expected after=${expected}, found ${after}. Refusing to stamp the migration as complete.`);
+      }
+    }
+
+    // Part 7 — integrity check before this migration is allowed to be marked done (user_version is
+    // stamped unconditionally at the end of init(), so a throw here leaves it at 0 and the whole
+    // chain retries next boot).
+    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
+  }
+
+  // ===========================================================================================
+  // Contract Phase A — the contract becomes a fixed unit-rate lump sum.
+  //
+  // Placed HERE, after the Tenancy Step 2a collapse above, ON PURPOSE. That collapse rebuilds
+  // `contract` and `cash_out` create-copy-swap from a FIXED column list, so any column added to
+  // either table EARLIER in init() is silently dropped again on a pre-v2 database (the only reason
+  // `company` survives is that somebody remembered to add it to that list too — an easy trap to
+  // fall into and an invisible one to fall out of). Adding these columns after the rebuild is
+  // order-independent: the collapse can strip whatever it likes, and this puts them back.
+  // ===========================================================================================
+
+  // --- A1. ADDITIVE: rate-based pricing + the optional contract metadata ---------------------
+  // Presence-keyed with no version gate, exactly like the Phase 2 loop: re-adding an absent
+  // nullable column is always correct and can never drop or overwrite anything. Existing rows get
+  // NULL, which is the right value — every one of these fields is optional, and a NULL rate/area
+  // just means the contract keeps whatever stated price was typed.
+  const contractColsPA = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  for (const [col, type] of [
+    ['rate_per_sqft_paise', 'INTEGER'], ['measured_area_milli_sqft', 'INTEGER'],
+    ['completion_period_months', 'INTEGER'], ['supervision_rate_pct', 'REAL'],
+    ['specified_brands', 'TEXT'], ['excluded_scope', 'TEXT'], ['owner_obligations', 'TEXT'],
+  ]) {
+    if (!contractColsPA.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+  }
+
+  // --- A2. ADDITIVE: the allowance link on cash_out, and its rollup index --------------------
+  const cashOutColsAllow = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  if (!cashOutColsAllow.includes('contract_allowance_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_allowance_id INTEGER REFERENCES contract_allowances(id)');
+  // NOT unique, unlike idx_cash_out_service_live. A service is claimed by at most one live debit;
+  // an allowance is a CAP that many debits draw against, so uniqueness here would break the
+  // feature rather than protect it. Partial + non-null, so an ordinary unlinked debit costs nothing.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
+
+  // --- A3. DESTRUCTIVE: drop contract_services.price_paise ------------------------------------
+  // A fixed unit-rate lump sum contract prices nothing per service: the schedule of work lists scope items
+  // and attaches no rupee figure to any of them. A price field on a service could therefore only be
+  // filled with an invented number, which then fed an informational "remainder" (stated − sum of
+  // priced services) that meant nothing at all. The column goes.
+  //
+  // This is the one step in Phase A that can DESTROY data, so it follows the Phase 10a taxonomy
+  // guard's shape exactly:
+  //   · MARKER-gated on its own settings key, not the shared user_version counter — several test
+  //     fixtures reset user_version to exercise other migrations, and a "< N" gate would re-fire
+  //     this one every time they did. Presence of the column alone is not a safe key either (a
+  //     future re-add for a new purpose would re-arm the drop — the Phase 5B landmine).
+  //   · If any service actually HAS a price, REFUSE TO BOOT and say so, rather than dropping it
+  //     silently. Throwing leaves the marker unset, so the refusal repeats every boot instead of
+  //     being a one-shot the owner can miss.
+  //   · The common paths are untouched: a fresh install (no such column) and any database whose
+  //     services were all unpriced both proceed with no prompt.
+  //
+  // One difference from the taxonomy guard, because it costs five lines: on an APPROVED drop the
+  // prices are ARCHIVED into settings as JSON before the column goes. settings is in the backup
+  // export, so the figures survive in every future backup even though the column does not — the
+  // guard's "export a backup first" advice would otherwise be hollow, since the export's column
+  // list no longer mentions price_paise.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_service_price_removed_v1'").get()) {
+    const svcCols = db.prepare('PRAGMA table_info(contract_services)').all().map((c) => c.name);
+    if (svcCols.includes('price_paise')) {
+      const priced = db.prepare('SELECT id, name, price_paise FROM contract_services WHERE price_paise IS NOT NULL ORDER BY id ASC').all();
+      const approved = (isNode && process.env.PLANNR_ALLOW_SERVICE_PRICE_DROP === '1')
+        || !!db.prepare("SELECT 1 FROM settings WHERE key = '_service_price_drop_approved' AND value = '1'").get();
+      if (priced.length > 0 && !approved) {
+        const shown = priced.slice(0, 20).map((r) => `  · ${r.name}: ₹${(r.price_paise / 100).toFixed(2)}`).join('\n');
+        const more = priced.length > 20 ? `\n  … and ${priced.length - 20} more` : '';
+        throw new Error(
+          `Plannr stopped to protect your data.\n\n`
+          + `Contract services no longer carry a price, and completing that change DELETES the `
+          + `price column from contract_services. ${priced.length} service${priced.length === 1 ? ' has' : 's have'} a price stored here:\n\n`
+          + `${shown}${more}\n\n`
+          + `Under a fixed unit-rate lump sum contract no service has its own price, so these are `
+          + `figures nothing in the contract backs — which is why the field is being removed rather `
+          + `than kept. Nothing has been deleted by this check.\n\n`
+          + `Write these numbers down if you still want them, EXPORT A BACKUP (Data Backup > Export), `
+          + `then approve the change and start again:\n`
+          + `  · Node / desktop: set PLANNR_ALLOW_SERVICE_PRICE_DROP=1\n`
+          + `  · any build:      INSERT INTO settings (key, value) VALUES ('_service_price_drop_approved', '1');\n\n`
+          + `Until one of those is set, Plannr will keep refusing to start and your data stays untouched.`
+        );
+      }
+      if (priced.length > 0) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('_archived_service_prices_v1', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+          .run(JSON.stringify(priced));
+      }
+      // price_paise is in no index and no constraint, so a plain DROP COLUMN is enough — no
+      // create-copy-swap rebuild, and nothing else about the table changes.
+      db.exec('ALTER TABLE contract_services DROP COLUMN price_paise');
+    }
+    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_service_price_removed_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  }
+
+  // Phase 10a — the 23-category ledger taxonomy (public/ledgers.js) was replaced with a fresh
+  // 24-category one covering residential construction more completely. The old
+  // and new taxonomies reuse the SAME "N.M" code shape with DIFFERENT meanings per code (old 4.2 =
+  // Cement, new 4.2 = Demolition) — so "does this code still exist" is not a safe survival test: a
+  // stale row could coincidentally collide with an unrelated new category and silently display the
+  // wrong thing forever, which is worse than an obviously-broken one.
+  //
+  // cash_out.ledger_code is NOT NULL (every debit needs a real category), so a stale row can't be
+  // repaired by clearing the tag — and at the time this shipped every existing row was seeded mock
+  // data, with no real payment ever entered against the old taxonomy, so wiping the table lost
+  // nothing of value and left nothing mislabeled. The guard below is what protects anyone whose
+  // database does NOT match that assumption.
+  //
+  // contract.ledger_code/subledger_code and contractor_payments.ledger_code/subledger_code are
+  // OPTIONAL — the same stale-code risk applies, but clearing just the tag (not the row) is enough
+  // since the contract/payment record itself is still otherwise valid. CUSTOM-tagged rows are left
+  // alone: their free-text name never depended on the fixed taxonomy.
+  //
+  // Gated on a DEDICATED settings marker, NOT the shared `userVersion < N` counter every migration
+  // above uses: several test fixtures (migration-guard, tenancy-collapse) deliberately reset
+  // user_version to simulate an old database while testing a DIFFERENT migration's behaviour — a
+  // shared "< N" gate would re-fire this one every time they do that, wiping cash_out rows those
+  // tests insert for unrelated reasons and need to survive. This migration only cares "has THIS
+  // cleanup run yet", independent of whatever the version counter is otherwise made to say.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'").get()) {
+    // ---- DATA-LOSS GUARD (added after this block silently wiped a real ledger) -------------------
+    // The DELETE below removes EVERY cash_out row, and this block is MARKER-gated, not version-gated
+    // (see the note above for why). So `user_version` is no warning at all: a database already
+    // stamped at the current schema version still runs this on its first pass. Installing an update
+    // onto any database that predates Phase 10a therefore wipes the whole Money Debited history with
+    // no prompt and no error. A silent DELETE of a construction ledger is the worst failure this app
+    // can have, so: if there is anything to lose, REFUSE TO BOOT and say why.
+    //
+    // The common paths are untouched — a fresh install and any database that never held
+    // pre-taxonomy rows both have an empty cash_out here, so the cleanup proceeds exactly as before.
+    // The guard only fires where data would actually be destroyed.
+    //
+    // Approving it deliberately, AFTER exporting a backup (both are checked; either is enough):
+    //   Node / desktop : PLANNR_ALLOW_TAXONOMY_WIPE=1
+    //   any build      : INSERT INTO settings (key, value) VALUES ('_taxonomy_wipe_approved', '1');
+    // The settings key exists because the Android/browser build has no environment variables, and an
+    // env-only escape hatch would leave an affected device permanently unable to start.
+    //
+    // Throwing here leaves the marker UNSET, so the refusal is stable and repeats on every boot
+    // rather than being a one-shot the user can miss.
+    const doomed = db.prepare('SELECT COUNT(*) n FROM cash_out').get().n;
+    const approved = (isNode && process.env.PLANNR_ALLOW_TAXONOMY_WIPE === '1')
+      || !!db.prepare("SELECT 1 FROM settings WHERE key = '_taxonomy_wipe_approved' AND value = '1'").get();
+    if (doomed > 0 && !approved) {
+      throw new Error(
+        `Plannr stopped to protect your data.\n\n`
+        + `This database still needs the ledger-taxonomy cleanup, and completing it DELETES every `
+        + `Money Debited (cash_out) row. There are ${doomed} here.\n\n`
+        + `Those rows use the OLD ledger codes, whose meanings changed in the current 24-category `
+        + `list (old 4.2 = Cement, new 4.2 = Demolition), so they cannot be carried across safely `
+        + `and the cleanup removes them rather than leave them mislabelled.\n\n`
+        + `Your ${doomed} Money Debited row(s) are still intact - this check deleted nothing.\n\n`
+        + `EXPORT A BACKUP FIRST (Data Backup → Export). Then approve the cleanup and start again:\n`
+        + `  · Node / desktop: set PLANNR_ALLOW_TAXONOMY_WIPE=1\n`
+        + `  · any build:      INSERT INTO settings (key, value) VALUES ('_taxonomy_wipe_approved', '1');\n\n`
+        + `Until one of those is set, Plannr will keep refusing to start and your rows stay untouched.`
+      );
+    }
+    // ---- end guard -------------------------------------------------------------------------------
+    db.exec('DELETE FROM cash_out');
+    db.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    db.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  }
+
+  // Generic-taxonomy rename — five seeded sub-ledger LABELS were copied out of one construction
+  // agreement ("Foundation depth beyond 2.5 ft", "Plinth height beyond 1.5 ft") or named a single
+  // supplier/region ("Electricity connection (KSEB)", "Equipment rental — mixer, JCB", "Plastic waste
+  // — Harithakarmasena"). ledgers.js now seeds generic names instead, but that file is read ONLY when
+  // ledger_subs is empty (see the Phase 10b seed above), so an installed database would keep the old
+  // labels forever. This renames them in place.
+  //
+  // NOT the Phase 10a class of change, and deliberately NOT guarded like it. Nothing is deleted and no
+  // CODE changes: "code IS the identity across a rename" is the taxonomy's own rule, so every cash_out /
+  // contract / contractor_payments row keeps pointing at exactly the sub-ledger it always pointed at and
+  // only the label it displays changes. There is no data at stake, so there is nothing to refuse over —
+  // the destructive-migration hatches (PLANNR_ALLOW_TAXONOMY_WIPE and friends) would be theatre here.
+  //
+  // Each UPDATE matches the OLD NAME as well as the code, so a household that already renamed one of
+  // these via the Ledger List CSV round trip is never stomped: a row that no longer reads exactly as
+  // seeded is left exactly as the owner left it. Marker-gated, so a later deliberate rename BACK to one
+  // of these is not undone on the next boot.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_generic_ledger_names_v1'").get()) {
+    const rename = db.prepare('UPDATE ledger_subs SET name = ? WHERE code = ? AND name = ?');
+    for (const [code, from, to] of [
+      ['20.1', 'Electricity connection (KSEB)', 'Electricity connection'],
+      ['21.1', 'Equipment rental — mixer, JCB', 'Equipment rental — mixer, excavator'],
+      ['23.4', 'Plastic waste — Harithakarmasena', 'Plastic waste handover'],
+      ['24.2', 'Foundation depth beyond 2.5 ft', 'Additional foundation work'],
+      ['24.3', 'Plinth height beyond 1.5 ft', 'Additional plinth work'],
+    ]) rename.run(to, code, from);
+    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_generic_ledger_names_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  }
+
+  // Schema-version marker (Phase 11B) — stamped ONLY here, after every migration above has succeeded,
+  // so a mid-migration throw leaves it at 0 and the next boot retries the whole chain. Disambiguates
+  // the historical presence-keyed DESTRUCTIVE rebuild(s) above: those run only while user_version is 0,
+  // so re-adding a same-named column later can never re-arm them. Additive ADD-COLUMN guards stay
+  // presence-keyed on purpose — adding an absent column is always correct, so they need no version gate.
+  // Phase 2: only ever RAISE the version here — a database already past the baseline (stamped by a
+  // later MIGRATIONS step) must never be pulled back to 2, or that step would re-run on every start.
+  if (db.prepare('PRAGMA user_version').get().user_version < BASELINE_VERSION) db.exec(`PRAGMA user_version = ${BASELINE_VERSION}`);
+}
+
+// Phase 4a/4c (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which
+// SQLite binding raised it. node:sqlite exposes the raw result code as `err.errcode`; the real
+// sqlite-wasm engine (Phase 4b) exposes it as `err.resultCode` — its actual SQLite3Error property,
+// confirmed by reading the package's own type definitions (an earlier guess at `err.sqlite3Rc` was
+// wrong; db-engine.js no longer compensates for that, since this checks the real name directly). Both
+// use SQLite's own result-code numbering, where every IOERR subcode (SQLITE_IOERR_WRITE, _SHORT_READ,
+// etc.) shares base code 10 in its low byte. This is the failure mode confirmed in the kvvfs
+// storage-ceiling spike: exceeding the quota surfaces as a clean, atomically-rolled-back SQLITE_IOERR,
+// never silent corruption — so a write path seeing this can safely tell the user "storage is full"
+// instead of a raw SQLite message.
+// Roll back after a failed write, without hiding why it failed. When a write hits the phone's storage
+// limit (SQLITE_IOERR from kvvfs) SQLite has usually rolled the transaction back by itself already, and
+// a second ROLLBACK throws "cannot rollback - no transaction is active" — which would replace the real
+// error, so the user saw "Something went wrong" instead of "Storage is full" (measured in Phase 2,
+// Step 3; test-ui/storage-limit.js). Every catch block that rolls back uses this and then rethrows
+// the ORIGINAL error. Any other rollback failure is still thrown.
+export function rollbackQuietly(dbh = db) {
+  try { dbh.exec('ROLLBACK'); } catch (e) { if (!/no transaction is active/i.test(String(e && e.message))) throw e; }
+}
+
+export function isStorageFullError(err) {
+  const code = err && (err.errcode ?? err.resultCode);
+  if (typeof code === 'number' && (code & 0xff) === 10) return true;
+  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error/i.test(err.message));
+}

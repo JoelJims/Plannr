@@ -11,8 +11,12 @@ const assert = require('node:assert');
 
 // --- env, set BEFORE any require of ./db or ./server ---------------------------------------------
 process.env.PLANNR_TEST = '1';                       // structural: makeTransport() -> null
+// Each test file gets its own temp folder: init() may write a safety snapshot beside the database
+// (safety-snapshots/), and that must never land in the shared temp folder.
+let TEST_DIR = null;
 if (!process.env.PLANNR_DB) {
-  process.env.PLANNR_DB = path.join(os.tmpdir(), `plannr-test-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
+  TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), `plannr-test-${process.pid}-${crypto.randomBytes(4).toString('hex')}-`));
+  process.env.PLANNR_DB = path.join(TEST_DIR, 'plannr.db');
 }
 const TEST_DB = process.env.PLANNR_DB;
 // Defensive: never let a test touch the live DB even if something is misconfigured.
@@ -149,7 +153,10 @@ function clearLedger() {
 }
 
 // Best-effort cleanup of the temp DB when the file's process exits.
-process.on('exit', () => { for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } } });
+process.on('exit', () => {
+  for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } }
+  if (TEST_DIR) { try { db.close(); } catch { /* ignore */ } try { fs.rmSync(TEST_DIR, { recursive: true, force: true }); } catch { /* ignore */ } }
+});
 
 module.exports = {
   app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,

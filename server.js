@@ -10,7 +10,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
-const { db, init, DB_PATH, isStorageFullError, rollbackQuietly } = require('./db');
+const { db, initSync, DB_PATH, isStorageFullError, rollbackQuietly } = require('./db');
 const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // the encrypted export (also the Ledger List import's safety backup)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -101,7 +101,7 @@ const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 const SERVER_START = new Date(); // Phase 2 — process start time, surfaced by GET /api/health
 
-init();
+initSync(); // step 1.4 B4: the synchronous start, until server.js awaits init() (B17)
 
 // Single-user offline app: no login, no sessions. The one existing users row is the fixed
 // local owner; every request resolves to it, regardless of any cookie. There is no

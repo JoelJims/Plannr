@@ -9,8 +9,8 @@
 
 const { guardDbTarget } = require('./db-guard');
 guardDbTarget();                          // refuses data/plannr.db unless --i-really-mean-the-live-db
-const { db, init } = require('./db');
-init();
+const { db, initSync } = require('./db');
+initSync(); // step 1.4 B4: synchronous until B17
 // Phase 10b: the taxonomy is DB-backed now (seeded from ledgers.js on first run, but potentially
 // edited since) — read the live table, not the seed file, so a demo re-seed reflects reality.
 const { ledgers: repoLedgers } = require('./repo');

@@ -1,0 +1,176 @@
+{
+  "note": "Made by make-fixtures.js. sha256 is of each file's exact bytes; oldRunner.blobs are git blob ids at that commit.",
+  "oldRunner": {
+    "commit": "0e7b70b",
+    "dir": "runner-0e7b70b",
+    "blobs": {
+      "db.js": "4e37a86b3e36767eca480d98598cf97aae523274",
+      "ledgers.js": "eda3ff9808666aabc0c6c18b5cdfc83bb81ff8c1"
+    }
+  },
+  "fixtures": [
+    {
+      "file": "01-7cfcf89.sql",
+      "commit": "7cfcf89",
+      "userVersion": 1,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "edit_locks": 1,
+        "ledger_customs": 2,
+        "loans": 2,
+        "sessions": 1,
+        "settings": 2,
+        "users": 2,
+        "sqlite_sequence": 9
+      },
+      "sha256": "6f7daace2eb983db21f4d09a2fe73d7c4ed9dd27ab25b1bc40ed89e481f8c019"
+    },
+    {
+      "file": "02-2ebaf69.sql",
+      "commit": "2ebaf69",
+      "userVersion": 1,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "loans": 2,
+        "sessions": 1,
+        "settings": 2,
+        "users": 2,
+        "sqlite_sequence": 9
+      },
+      "sha256": "218baf2eb83c0eb15f02528ea748fa08fdb1a6a85543062d7cf73b6afaed7a41"
+    },
+    {
+      "file": "03-42ff006.sql",
+      "commit": "42ff006",
+      "userVersion": 1,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "loans": 2,
+        "settings": 2,
+        "users": 2,
+        "sqlite_sequence": 9
+      },
+      "sha256": "19e8efc14facad81ae78ba50e603afa7fa89acedbdfdd8768448513f924fb58d"
+    },
+    {
+      "file": "04-6f2c653.sql",
+      "commit": "6f2c653",
+      "userVersion": 2,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "loans": 2,
+        "settings": 2,
+        "users": 2,
+        "sqlite_sequence": 9
+      },
+      "sha256": "b929734ea1c96a4c60be64971f6f294bd291be03bdafacb35c67435b1f31b7ca"
+    },
+    {
+      "file": "05-f89af97.sql",
+      "commit": "f89af97",
+      "userVersion": 2,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "loans": 2,
+        "settings": 3,
+        "users": 2,
+        "sqlite_sequence": 9
+      },
+      "sha256": "591bcf43b4c5c58b04d064df59a6d9bd43668b200d1f1f9256f50c65823868d2"
+    },
+    {
+      "file": "06-852445d.sql",
+      "commit": "852445d",
+      "userVersion": 2,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "ledger_mains": 25,
+        "ledger_subs": 164,
+        "loans": 2,
+        "settings": 3,
+        "users": 2,
+        "sqlite_sequence": 9
+      },
+      "sha256": "a10806b0f02640cb09cf7fad3c84c592e2f8a6aa04f043713e4f8ccc113b00ea"
+    },
+    {
+      "file": "07-8e89166.sql",
+      "commit": "8e89166",
+      "userVersion": 2,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_allowances": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "ledger_mains": 25,
+        "ledger_subs": 164,
+        "loans": 2,
+        "settings": 4,
+        "users": 2,
+        "sqlite_sequence": 10
+      },
+      "sha256": "1ebbb4d6a848aefb9f3fe6a3c1d7b5a1f2796b9375835eab8d8f9f1416fdacb2"
+    },
+    {
+      "file": "08-266614c.sql",
+      "commit": "266614c",
+      "userVersion": 2,
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_allowances": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "ledger_customs": 2,
+        "ledger_mains": 25,
+        "ledger_subs": 164,
+        "loans": 2,
+        "settings": 5,
+        "users": 2,
+        "sqlite_sequence": 10
+      },
+      "sha256": "9a9de5a5a8d954bea94903906d2694788dc3acdfe98231c53b72bb1d320b3d4f"
+    }
+  ]
+}

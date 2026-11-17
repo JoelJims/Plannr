@@ -12,15 +12,19 @@ forward. There is no server to fix it later.
 - The database stores its schema version in `PRAGMA user_version`.
 - `db.js` holds the list of upgrade steps, `MIGRATIONS`. The same file runs on the phone (copied to
   `public/db.js` by `npm run sync:public-modules`) and in the desktop dev server, so they cannot drift.
-- `init()` runs at every start. It:
+- `await init()` runs at every start. It:
   1. refuses a database from a newer app version and changes nothing;
   2. makes a safety snapshot of the whole database before any step runs (phone:
      `Directory.Data/safety-snapshots/`; desktop: `safety-snapshots/` beside the database file),
      keeping the newest 3;
   3. applies each missing step in order. Each step runs in its own transaction together with its
      version stamp, so a failing step rolls back completely.
+- `init()` is async (step 1.4 B4). `server.js`, `reset-db.js` and `seed-demo.js` cannot wait yet and
+  call `initSync()` until step B17. `initSync()` refuses a database that still needs a numbered step
+  (only `init()` runs those), so a new step makes them fail loudly until then.
 - Version 2 is the baseline: everything up to it is the older, hand-gated code in `legacyInit()`.
-  Do not add new schema changes there.
+  Do not add new schema changes there. A v2 database made by an older app can still need some of its
+  one-off clean-ups (gated on settings markers); `init()` takes the snapshot before those too.
 
 ### Adding a migration
 
@@ -28,15 +32,18 @@ forward. There is no server to fix it later.
    is 3):
 
    ```js
-   { version: 3, name: 'add cash_out.receipt_note', up(db) {
-       db.exec('ALTER TABLE cash_out ADD COLUMN receipt_note TEXT');
+   { version: 3, name: 'add cash_out.receipt_note', async up(tx) {
+       await tx.exec('ALTER TABLE cash_out ADD COLUMN receipt_note TEXT');
+       await tx.run('UPDATE cash_out SET receipt_note = ? WHERE reason IS NULL', ['']);
    } },
    ```
 
+   - `tx` is the async database interface (`core/db-adapter.js`): `get`, `all`, `run`, `exec`;
+     parameters always as an array. Await every call.
    - Never edit, reorder or delete a step that has shipped.
-   - `up()` already runs inside a transaction: no `BEGIN`/`COMMIT`, and no `PRAGMA foreign_keys`
-     (it has no effect inside a transaction). A table rebuild that needs foreign keys off needs a
-     different design; ask first.
+   - `up()` already runs inside a transaction: no `BEGIN`/`COMMIT` (a nested `tx.transaction()` is
+     refused), and no `PRAGMA foreign_keys` (it has no effect inside a transaction). A table rebuild
+     that needs foreign keys off needs a different design; ask first.
    - Keep the data: copy rows across, never drop a table or column that still holds user data.
 2. Keep the backups complete. If you add a table or column, add it to `BACKUP_TABLES` /
    `BACKUP_COLS` in `backup-format.js` and give it rows in `test/fixtures/full-dataset.js`. The
@@ -44,7 +51,9 @@ forward. There is no server to fix it later.
 3. Add a test that builds a database at the previous version, with data, runs the migration and
    checks that every row and value is still there. `test/migrations.test.js` and
    `test/_versioned-migrate-fixture.js` show both styles (in-memory, and a real `init()` in a fresh
-   process).
+   process). `test/migration-equivalence.test.js` and `test/migration-faults.test.js` also run every
+   step on a database from every past schema (`test/fixtures/schema-history/`), with a failure at
+   each step; they pick up a new step without changes.
 4. Run everything: `npm test` and every `npm run test:*` UI suite. Then try it on a phone: install
    the new build over the old one and check the data is still there (`docs/RELEASE.md`).
 
