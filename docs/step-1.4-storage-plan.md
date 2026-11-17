@@ -674,7 +674,7 @@ Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
   runner is compared too (old sync steps v3–v5 against the new async ones, and with v4 failing).
   Known positive: two bugs put into `db.js` on purpose gave 12 failures.
 - **Condition 3, a failure at every step** (`test/migration-faults.test.js`, `npm test`, about
-  12 s; `test/slow/migration-faults-v1.test.js`, `npm run test:slow`, about 35 s).
+  12 s; `test/slow/migration-faults-v1.test.js`, `npm run test:slow`, about 30 s).
   - Numbered steps (a test chain v3–v5, every fixture): a failing step leaves the database exactly
     as before that step, the snapshot is the database before the upgrade, and the next start
     finishes. Known positive: a rollback turned into a commit fails it.
@@ -685,26 +685,44 @@ Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
     value is anything but its old or new value, the file is sound. For the v2 fixtures the next
     start always finishes with exactly the uninterrupted result. Known positive: no snapshot
     fails it.
-- **Found, not fixed (older code, both runners the same): a v1 database whose upgrade fails
-  part-way.** The v1 part of `legacyInit()` is several transactions and is not safe to run again
-  once partly done. For a failure in the last 52 of about 115 failure points (per v1 fixture,
-  after its first table rebuild commits, up to the final version stamp):
-  - the data is all there right after the failure and the snapshot is good (condition 3 holds);
-  - but every next start refuses (a `foreign_key_check` or "no such column" error), and before
-    refusing it **drops `contract_services` with all its rows**: the old-shape check at the top
-    of `legacyInit()` ("user_version below 2 and no `tenant_id` column") mistakes the rebuilt
-    table for the pre-Phase-5 one;
-  - each refused start takes another snapshot, so after three more the good one is rotated out.
-  - Who can reach it: only a database made before 2026-08-23 that is upgraded now, and only if
-    that upgrade fails part-way (a crash, a full disk). Phone installs were made at v2.
-  - `npm run test:slow` pins this exactly (52 refusing points, each losing exactly the
-    `contract_services` rows, the snapshot still good), so any change shows.
-  - **Fix, for your decision** (not done in B4, which was to keep the runner's behaviour):
-    1. stop the old-shape check from dropping a table that has the new shape (look for its
-       other columns, not only `tenant_id`), and never drop one with rows in it;
-    2. on a baseline failure, keep the snapshot taken before the upgrade out of the rotation
-       until an upgrade finishes;
-    3. later, make the v1 part restartable, or restore the snapshot by itself on failure.
+- **Found by the failure tests, then fixed (options 1 and 2, your OK of 2026-11-17): a v1 database
+  whose upgrade fails part-way.** The v1 part of `legacyInit()` is several transactions and was not
+  safe to run again once partly done. For a failure in the last 52 of about 115 failure points (per
+  v1 fixture, after its first table rebuild commits, up to the final version stamp), the data was
+  all there right after the failure (condition 3 held), but:
+  - every next start refused, and before refusing **dropped `contract_services` with all its
+    rows**: the old-shape check at the top of `legacyInit()` ("user_version below 2 and no
+    `tenant_id` column") mistook the rebuilt table for the pre-Phase-5 one;
+  - each refused start took another snapshot, so after three more the good one was rotated out.
+  - Who could reach it: only a database made before 2026-08-23 that is upgraded now, and only if
+    that upgrade fails part-way (a crash, a full disk). Phone installs were made at v2. Both
+    runners, old and new, behaved the same.
+  - **Fix 1 (`db.js`, `legacyInit()`):** a `contract_services` with the Services-phase columns is
+    never taken for the old one, whatever the version. An unrecognised old table that still holds
+    rows is never dropped: it is renamed to `contract_services_pre_phase5` with its rows (a new
+    empty table is made as before; an empty old one is still dropped).
+  - **Fix 2 (`db.js` on the desktop, `public/safety-snapshots.js` and `local-bootstrap.js` on the
+    phone):** the snapshot taken before an upgrade is kept until an upgrade finishes. The first
+    snapshot of an upgrade is recorded in `safety-snapshots/plannr-upgrade-pending.json`; while that
+    record names a snapshot that is there, no clean-up deletes it (it counts as one of the 3). The
+    record is removed once `init()` (or `initSync()`) completes. If it cannot be read, nothing is
+    deleted.
+  - **Result:** no failure point loses anything any more. 105 of 115 per v1 fixture now finish on
+    the next start with exactly the uninterrupted upgrade. The other 10 (the last steps, up to the
+    version stamp) refuse once ("no such column: contract_allowance_id") and finish on the start
+    after that, again exactly as uninterrupted; the snapshot from before the upgrade is there
+    throughout. `npm run test:slow` pins both numbers.
+  - **Tests:** `test/upgrade-retry.test.js` (`npm test`, 6 tests): a half-upgraded v1 table keeps
+    every row and the start finishes as if never interrupted; an old table with rows is set aside,
+    an empty one dropped; five failed starts in a row keep the first snapshot, never more than 3,
+    and it rotates out once an upgrade finishes; `initSync()` clears the record; an unreadable
+    record deletes nothing. `test/safety-snapshots.test.js` gained 7 phone cases. Undoing each
+    part of either fix (6 ways) fails these tests.
+  - **Full suite after the fix:** all passes; `npm test` 444 tests (13 new), 0 failures; the phone
+    pass is unchanged (182 of 199, the same 17 known differences); `npm run test:slow` passes.
+    No slowdown: the UI suites take the same time on the code before and after the fix.
+  - **Still open (option 3, not asked for):** make those last v1 steps safe to run again, so even
+    the one refused start does not happen.
 - **Test isolation:** each test file now gets its own temp folder (`test/helpers.js`), and the four
   spawned guard fixtures make their own. They used to share the system temp folder, where an
   upgrade's safety snapshots were left behind.

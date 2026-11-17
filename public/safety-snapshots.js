@@ -11,6 +11,14 @@
 // clean-up never fails the operation (the new snapshot is safe; old ones simply stay a while longer).
 // The desktop applies the same rule to its own pre-upgrade copies (db.js writeNodeSnapshot()).
 //
+// An unfinished upgrade (step 1.4 B4): the snapshot taken before an upgrade is kept until that
+// upgrade finishes. A failed upgrade can leave the database part-way, and each later start takes a
+// snapshot of THAT; without this, three failed starts rotated the only copy from before the upgrade
+// out. writePreMigrationSnapshot() records the first snapshot of an upgrade in PENDING_UPGRADE
+// ({ snapshot, from, to, startedAt }); local-bootstrap.js calls finishUpgrade() once init() has
+// completed. While the record names a snapshot that is there, no clean-up deletes it (it counts as
+// one of the 3). If the record cannot be read, the clean-up deletes nothing.
+//
 // Compression (Phase 2, Step 5): snapshots are gzip-compressed (.json.gz / .db.gz) with the
 // browser's built-in CompressionStream. Android Auto Backup copies this folder and skips the WHOLE
 // backup if the app's data passes 25 MB; measured with storage full (≈13,400 entries) one JSON
@@ -27,6 +35,7 @@
 
 export const DIR = 'safety-snapshots';
 export const KEEP_SNAPSHOTS = 3;
+export const PENDING_UPGRADE = 'plannr-upgrade-pending.json';
 // Matches compressed and (older, Step 2-4) uncompressed snapshots, so old ones are pruned too.
 export const SNAPSHOT_NAME = /^plannr-(safety-snapshot|pre-restore|pre-migration)-.+\.(json|db)(\.gz)?$/;
 
@@ -39,21 +48,34 @@ const loadFs = () => import('@capacitor/filesystem');
 // Which existing files to delete so that `justWritten` plus the newest others make KEEP_SNAPSHOTS.
 // `entries` are Filesystem.readdir() results ({ name, mtime }); files that are not Plannr snapshots
 // are never touched. Newest first by modification time (then by name, which carries a timestamp).
-export function snapshotsToDelete(entries, justWritten, keep = KEEP_SNAPSHOTS) {
+// `pinned`: the snapshot an unfinished upgrade started from; never deleted, and it counts as one.
+export function snapshotsToDelete(entries, justWritten, keep = KEEP_SNAPSHOTS, pinned = null) {
+  const isPinned = !!pinned && pinned !== justWritten && entries.some((e) => e && e.name === pinned);
   const others = entries
-    .filter((e) => e && e.type !== 'directory' && SNAPSHOT_NAME.test(e.name) && e.name !== justWritten)
+    .filter((e) => e && e.type !== 'directory' && SNAPSHOT_NAME.test(e.name) && e.name !== justWritten && e.name !== pinned)
     .sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0) || (b.name < a.name ? -1 : b.name > a.name ? 1 : 0));
-  return others.slice(Math.max(0, keep - 1)).map((e) => e.name);
+  return others.slice(Math.max(0, keep - 1 - (isPinned ? 1 : 0))).map((e) => e.name);
+}
+
+// The snapshot an unfinished upgrade started from (a name in `names`), or null if there is none.
+// Throws if a record is there but cannot be read: the caller then deletes nothing.
+async function pinnedSnapshot(names, { Filesystem, Directory, Encoding }) {
+  if (!names.has(PENDING_UPGRADE)) return null;
+  const { data } = await Filesystem.readFile({ path: `${DIR}/${PENDING_UPGRADE}`, directory: Directory.Data, encoding: Encoding.UTF8 });
+  const p = JSON.parse(typeof data === 'string' ? data : new TextDecoder().decode(data));
+  if (!p || typeof p.snapshot !== 'string' || !SNAPSHOT_NAME.test(p.snapshot)) throw new Error(`${PENDING_UPGRADE} names no snapshot`);
+  return names.has(p.snapshot) ? p.snapshot : null;
 }
 
 export async function pruneSnapshots(justWritten, fsApi, keep = KEEP_SNAPSHOTS) {
-  const { Filesystem, Directory } = fsApi || await loadFs();
+  const { Filesystem, Directory, Encoding } = fsApi || await loadFs();
   const deleted = [];
   try {
     const { files } = await Filesystem.readdir({ path: DIR, directory: Directory.Data });
     const names = new Set(files.map((f) => f.name));
     if (!names.has(justWritten)) throw new Error(`the new snapshot ${justWritten} is not in ${DIR}/; nothing deleted`);
-    for (const name of snapshotsToDelete(files, justWritten, keep)) {
+    const pinned = await pinnedSnapshot(names, { Filesystem, Directory, Encoding });
+    for (const name of snapshotsToDelete(files, justWritten, keep, pinned)) {
       await Filesystem.deleteFile({ path: `${DIR}/${name}`, directory: Directory.Data });
       deleted.push(name);
     }
@@ -114,11 +136,11 @@ export function bytesToBase64(bytes) {
 }
 
 // A whole-database copy (a standard SQLite file, unencrypted, gzipped, in the app's private folder).
-async function writeDatabaseSnapshot(filename) {
+async function writeDatabaseSnapshot(filename, fsApi) {
   const { exportSnapshotBytes } = await import('./local-snapshot.js');
   const bytes = exportSnapshotBytes();
   if (!bytes || !bytes.length) throw new Error('the database export for the safety snapshot was empty');
-  return saveSnapshot(filename, bytes);
+  return saveSnapshot(filename, bytes, fsApi);
 }
 
 // Before an encrypted restore replaces everything. Returns a description, or null in a plain browser.
@@ -137,7 +159,37 @@ export async function writePreMigrationSnapshot(plan) {
     console.warn(`[safety-snapshots] not inside the app: no pre-upgrade snapshot written (schema v${plan.from} -> v${plan.to}).`);
     return null;
   }
-  const path = await writeDatabaseSnapshot(`plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stampNow()}.db`);
-  console.log(`[safety-snapshots] snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${path}`);
+  const filename = `plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stampNow()}.db`;
+  return savePreMigrationSnapshot(filename, plan, (fsApi) => writeDatabaseSnapshot(filename, fsApi), await loadFs());
+}
+
+// The steps of writePreMigrationSnapshot() after the native check, testable in Node: `write(fsApi)`
+// saves the snapshot (saveSnapshot); then, if no unfinished upgrade is recorded, this one is.
+export async function savePreMigrationSnapshot(filename, plan, write, fsApi) {
+  const { Filesystem, Directory, Encoding } = fsApi;
+  const path = await write(fsApi);
+  const { files } = await Filesystem.readdir({ path: DIR, directory: Directory.Data });
+  const names = new Set(files.map((f) => f.name));
+  let pinned;
+  try { pinned = await pinnedSnapshot(names, fsApi); } catch { pinned = undefined; }
+  if (pinned === null) {
+    await Filesystem.writeFile({ path: `${DIR}/${PENDING_UPGRADE}`, directory: Directory.Data, encoding: Encoding.UTF8,
+      data: JSON.stringify({ snapshot: `${filename}.gz`, from: plan.from, to: plan.to, startedAt: new Date().toISOString() }) });
+    console.log(`[safety-snapshots] snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${path}`);
+  } else if (pinned) {
+    console.log(`[safety-snapshots] snapshot before retrying the upgrade v${plan.from} -> v${plan.to}: ${path}; the one from before the first try is kept: ${DIR}/${pinned}`);
+  }
   return path;
+}
+
+// init() completed: the snapshot from before the upgrade goes back into the normal rotation. Never
+// fails the start (a record left behind only keeps one extra snapshot until the next upgrade).
+export async function finishUpgrade(fsApi) {
+  try {
+    const { Filesystem, Directory } = fsApi || await loadFs();
+    const { files } = await Filesystem.readdir({ path: DIR, directory: Directory.Data });
+    if (files.some((f) => f.name === PENDING_UPGRADE)) await Filesystem.deleteFile({ path: `${DIR}/${PENDING_UPGRADE}`, directory: Directory.Data });
+  } catch (e) {
+    console.warn('[safety-snapshots] could not clear the upgrade record:', e);
+  }
 }

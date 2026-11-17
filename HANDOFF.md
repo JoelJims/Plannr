@@ -291,7 +291,9 @@ going over an allowance is a normal thing to happen, not an error.
   `node test/fixtures/schema-history/make-fixtures.js` (by hand, from git history; see its
   header); a fixture file that changes fails the tests.
 - **`npm run test:slow`** — the same failure check for the user_version 1 fixtures (about 350
-  failure points, half a minute). It also pins a known bug in old upgrade code (§8).
+  failure points, half a minute), including several starts after each failure. It pins the one
+  known limit of the old upgrade code (§8). `test/upgrade-retry.test.js` (in `npm test`) checks
+  the two fixes it led to directly.
 - **Safe updates** (part of `npm test`): `test/release-guards.test.js` fails if the app id or
   the page origin (`https://localhost`) would change — either would open an empty database
   after an update — or if the release key could be committed. `npm run release:android` runs
@@ -313,7 +315,9 @@ going over an allowance is a normal thing to happen, not an error.
   upgrade, the app copies the current data into its private folder,
   `Directory.Data/safety-snapshots/` (`public/safety-snapshots.js`), and checks the copy before
   going ahead. Only the newest 3 are kept; older ones are deleted only after the new one is
-  safely written. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
+  safely written. The one taken before an upgrade that has not finished (it failed, and the app
+  is being started again) is never deleted until an upgrade finishes; it is named in
+  `safety-snapshots/plannr-upgrade-pending.json`. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
   no screen to restore one: they are for recovery with `adb` on a debug build, or from Android's
   Auto Backup.
 - **Android Auto Backup** is on, limited to the ledger (the WebView's localStorage) and the
@@ -452,13 +456,12 @@ There is deliberately **no reset button inside the app**.
 - **The phone database is limited to about 10 MB of `localStorage`,** and a save made less than
   about a second before Android kills the app can be lost (measured on the emulator; the
   database stays consistent). Moving it is proposed, not done: `docs/storage-proposal.md`.
-- **A database made before 2026-08-23 (user_version 1) whose upgrade fails part-way can lose
-  its contract's list of work on the next start** (found in step 1.4 B4; the code is older).
-  The next start refuses to upgrade, but first drops `contract_services`. The safety snapshot
-  from before the upgrade still holds every row, and is the way back; each refused start adds
-  another snapshot, and after three more the good one is rotated out. Databases made since then
-  (every phone install) are not affected. Pinned by `npm run test:slow`; the fix is still to be
-  decided (`docs/step-1.4-storage-plan.md`, B4).
+- **A database made before 2026-08-23 (user_version 1) whose upgrade fails in its last steps
+  needs two starts.** The next start shows an error once ("no such column:
+  contract_allowance_id"); the start after that finishes the upgrade. Nothing is lost, and the
+  safety snapshot from before the upgrade is kept until it finishes. Databases made since then
+  (every phone install) are not affected. Pinned by `npm run test:slow`; making those steps safe
+  to run again is still to do (`docs/step-1.4-storage-plan.md`, B4).
 - **Reminders arrive late unless "Alarms & reminders" is allowed** for Plannr (off by default on
   Android 14+). Home offers a button for it when a reminder time is added, and again each time
   Home opens while it is not allowed. Plannr never opens that settings screen by itself.

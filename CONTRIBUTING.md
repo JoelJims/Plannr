@@ -16,7 +16,8 @@ forward. There is no server to fix it later.
   1. refuses a database from a newer app version and changes nothing;
   2. makes a safety snapshot of the whole database before any step runs (phone:
      `Directory.Data/safety-snapshots/`; desktop: `safety-snapshots/` beside the database file),
-     keeping the newest 3;
+     keeping the newest 3, and always the one from before an upgrade that has not finished
+     (`plannr-upgrade-pending.json`);
   3. applies each missing step in order. Each step runs in its own transaction together with its
      version stamp, so a failing step rolls back completely.
 - `init()` is async (step 1.4 B4). `server.js`, `reset-db.js` and `seed-demo.js` cannot wait yet and
@@ -53,7 +54,7 @@ forward. There is no server to fix it later.
    `test/_versioned-migrate-fixture.js` show both styles (in-memory, and a real `init()` in a fresh
    process). `test/migration-equivalence.test.js` and `test/migration-faults.test.js` also run every
    step on a database from every past schema (`test/fixtures/schema-history/`), with a failure at
-   each step; they pick up a new step without changes.
+   each step and the starts after it; they pick up a new step without changes.
 4. Run everything: `npm test` and every `npm run test:*` UI suite. Then try it on a phone: install
    the new build over the old one and check the data is still there (`docs/RELEASE.md`).
 

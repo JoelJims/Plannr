@@ -19,11 +19,15 @@
 // All three map to this one file; db.js only imports the named bindings below from each.
 
 // node:fs — never called in a browser (see db.js's `isNode` guard; the desktop-only safety snapshot
-// before a schema upgrade uses readdirSync/rmSync/statSync).
+// before a schema upgrade and its "upgrade pending" record use these).
+export function existsSync() { return false; }
 export function mkdirSync() {}
 export function readdirSync() { return []; }
+export function readFileSync() { throw new Error('node-builtins-browser-stub: readFileSync is desktop-only.'); }
+export function renameSync() { throw new Error('node-builtins-browser-stub: renameSync is desktop-only.'); }
 export function rmSync() {}
 export function statSync() { throw new Error('node-builtins-browser-stub: statSync is desktop-only.'); }
+export function writeFileSync() { throw new Error('node-builtins-browser-stub: writeFileSync is desktop-only.'); }
 // node:path — never called either
 export function join(...parts) { return parts.join('/'); }
 export function dirname(p) { return String(p).replace(/[\\/][^\\/]*$/, '') || '.'; }

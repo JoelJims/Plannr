@@ -3,6 +3,7 @@
 // checked, and the one just written is never deleted. Runs the real public/safety-snapshots.js with
 // an in-memory stand-in for Capacitor's Filesystem plugin (same calls, same result shapes).
 // Since Step 5 snapshots are gzip-compressed (<name>.gz) to keep Android Auto Backup under 25 MB.
+// Since step 1.4 B4 the snapshot taken before an upgrade that has not finished is kept until it does.
 const { test } = require('node:test');
 const assert = require('node:assert');
 
@@ -20,6 +21,12 @@ function fakeFs({ badStat = false, deleteFails = false, writeFails = false } = {
       if (writeFails) throw new Error('disk full');
       const bytes = encoding ? Buffer.from(data, 'utf8') : Buffer.from(data, 'base64');
       files.set(name(path), { bytes, size: bytes.length, mtime: (clock += 1000) });
+    },
+    async readFile({ path, encoding }) {
+      log.push(`read ${name(path)}`);
+      const f = files.get(name(path));
+      if (!f) throw new Error('File does not exist');
+      return { data: encoding ? f.bytes.toString('utf8') : f.bytes.toString('base64') };
     },
     async stat({ path }) {
       log.push(`stat ${name(path)}`);
@@ -145,4 +152,98 @@ test('a saved snapshot is gzip: it decompresses to exactly the original, and is 
   const stored = fs.files.get('plannr-safety-snapshot-big.json.gz').bytes;
   assert.deepStrictEqual(new Uint8Array(zlib.gunzipSync(stored)), original, 'gunzip gives back the exact bytes');
   assert.ok(stored.length * 5 < original.length, `compressed ${stored.length} vs ${original.length} bytes`);
+});
+
+// --- Step 1.4 B4: an upgrade that has not finished keeps the snapshot taken before it ---------------
+
+const PLAN = { from: 2, to: 3 };
+// One start of the app that needs the upgrade: the snapshot (as writePreMigrationSnapshot takes it),
+// then init() fails (no finishUpgrade) or completes (finishUpgrade).
+async function start(m, fs, i, { finishes }) {
+  const filename = `plannr-pre-migration-v2-to-v3-${String(i).padStart(2, '0')}.db`;
+  await m.savePreMigrationSnapshot(filename, PLAN, (fsApi) => m.saveSnapshot(filename, enc(`database at start ${i}`), fsApi), fs.fsApi);
+  if (finishes) await m.finishUpgrade(fs.fsApi);
+  return `${filename}.gz`;
+}
+const record = (fs) => (fs.files.has('plannr-upgrade-pending.json') ? JSON.parse(fs.files.get('plannr-upgrade-pending.json').bytes.toString('utf8')) : null);
+const snapshotNames = (fs) => [...fs.files.keys()].filter((n) => n.startsWith('plannr-pre') || n.startsWith('plannr-safety')).sort();
+
+test('snapshotsToDelete never deletes the pinned snapshot, and counts it as one of the 3', async () => {
+  const { snapshotsToDelete } = await load();
+  const e = (name, mtime) => ({ name, type: 'file', mtime });
+  const entries = [e('plannr-pre-migration-v2-to-v3-a.db.gz', 1), e('plannr-pre-migration-v2-to-v3-b.db.gz', 2), e('plannr-pre-migration-v2-to-v3-c.db.gz', 3), e('plannr-pre-migration-v2-to-v3-d.db.gz', 4)];
+  assert.deepStrictEqual(snapshotsToDelete(entries, 'plannr-pre-migration-v2-to-v3-d.db.gz', 3, 'plannr-pre-migration-v2-to-v3-a.db.gz'), ['plannr-pre-migration-v2-to-v3-b.db.gz']);
+  // Without a pin: the usual rule.
+  assert.deepStrictEqual(snapshotsToDelete(entries, 'plannr-pre-migration-v2-to-v3-d.db.gz'), ['plannr-pre-migration-v2-to-v3-a.db.gz']);
+  // A pin naming a file that is not there changes nothing.
+  assert.deepStrictEqual(snapshotsToDelete(entries, 'plannr-pre-migration-v2-to-v3-d.db.gz', 3, 'plannr-pre-migration-gone.db.gz'), ['plannr-pre-migration-v2-to-v3-a.db.gz']);
+});
+
+test('an upgrade that keeps failing: the snapshot from before the first try survives every retry, and there are never more than 3', async () => {
+  const m = await load();
+  const fs = fakeFs();
+  fs.seed('plannr-safety-snapshot-old-1.json.gz', 'plannr-pre-restore-old-2.db.gz');
+  const first = await start(m, fs, 1, { finishes: false });
+  assert.deepStrictEqual(record(fs) && record(fs).snapshot, first, 'the first snapshot of the upgrade is recorded');
+  for (let i = 2; i <= 8; i++) {
+    await quietly(() => start(m, fs, i, { finishes: false }));
+    assert.ok(fs.files.has(first), `after ${i} starts the snapshot from before the upgrade is still there`);
+    assert.strictEqual(snapshotNames(fs).length, 3, `after ${i} starts: ${snapshotNames(fs).join(', ')}`);
+    assert.strictEqual(record(fs).snapshot, first, 'the record keeps naming the first one');
+  }
+  assert.deepStrictEqual(snapshotNames(fs), [first, 'plannr-pre-migration-v2-to-v3-07.db.gz', 'plannr-pre-migration-v2-to-v3-08.db.gz']);
+});
+
+test('once the upgrade finishes, the record goes and that snapshot rotates out as usual', async () => {
+  const m = await load();
+  const fs = fakeFs();
+  const first = await start(m, fs, 1, { finishes: false });
+  await quietly(() => start(m, fs, 2, { finishes: false }));
+  await quietly(() => start(m, fs, 3, { finishes: true }));
+  assert.strictEqual(record(fs), null, 'the record is removed when init() completes');
+  assert.ok(fs.files.has(first));
+  // The next upgrade starts its own record; the old one is now an ordinary snapshot.
+  const next = await start(m, fs, 4, { finishes: false });
+  assert.strictEqual(record(fs).snapshot, next);
+  assert.ok(!fs.files.has(first), 'the oldest snapshot rotates out again');
+  assert.strictEqual(snapshotNames(fs).length, 3);
+});
+
+test('other snapshots (a restore, a JSON restore) never delete the pinned one either', async () => {
+  const m = await load();
+  const fs = fakeFs();
+  const first = await start(m, fs, 1, { finishes: false });
+  for (let i = 0; i < 5; i++) await m.saveSnapshot(`plannr-pre-restore-${i}.db`, enc('db'), fs.fsApi);
+  assert.ok(fs.files.has(first));
+  assert.strictEqual(snapshotNames(fs).length, 3);
+});
+
+test('a record that cannot be read: nothing is deleted, and it is not overwritten', async () => {
+  const m = await load();
+  const fs = fakeFs();
+  fs.seed('plannr-pre-migration-v2-to-v3-old-1.db.gz', 'plannr-pre-migration-v2-to-v3-old-2.db.gz', 'plannr-pre-migration-v2-to-v3-old-3.db.gz');
+  fs.files.set('plannr-upgrade-pending.json', { bytes: Buffer.from('{not json'), size: 9, mtime: 1 });
+  await quietly(() => start(m, fs, 4, { finishes: false }));
+  assert.strictEqual(snapshotNames(fs).length, 4, 'nothing deleted');
+  assert.strictEqual(fs.files.get('plannr-upgrade-pending.json').bytes.toString('utf8'), '{not json');
+});
+
+test('a record naming a snapshot that is gone is replaced by the new one', async () => {
+  const m = await load();
+  const fs = fakeFs();
+  fs.files.set('plannr-upgrade-pending.json', { bytes: Buffer.from(JSON.stringify({ snapshot: 'plannr-pre-migration-v2-to-v3-gone.db.gz' })), size: 60, mtime: 1 });
+  const now = await start(m, fs, 1, { finishes: false });
+  assert.strictEqual(record(fs).snapshot, now);
+});
+
+test('finishUpgrade with no record does nothing and never fails', async () => {
+  const m = await load();
+  const fs = fakeFs();
+  fs.seed('plannr-pre-migration-v2-to-v3-1.db.gz');
+  await m.finishUpgrade(fs.fsApi);
+  assert.deepStrictEqual([...fs.files.keys()], ['plannr-pre-migration-v2-to-v3-1.db.gz']);
+  assert.ok(!fs.log.some((l) => l.startsWith('delete')));
+  const broken = fakeFs({ deleteFails: true });
+  broken.files.set('plannr-upgrade-pending.json', { bytes: Buffer.from('{}'), size: 2, mtime: 1 });
+  await quietly(() => m.finishUpgrade(broken.fsApi)); // resolves
 });

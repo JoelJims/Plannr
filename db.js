@@ -17,7 +17,7 @@
 // module finishes loading, synchronously, as today); under a browser it's what a caller MUST await
 // before using `db`/`init` — see `ready()`'s own comment.
 
-import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
 import { LEDGERS as SEED_LEDGERS } from './ledgers.js';
@@ -190,23 +190,63 @@ export async function runMigrations(adapter = dbAdapter(), list = MIGRATIONS) {
 
 // Desktop only: a whole-database copy beside the database file, before any upgrade step runs. Keeps
 // the newest 3 (the same rule as the phone's Directory.Data/safety-snapshots/).
+//
+// The snapshot taken before an upgrade that has not finished yet is kept until it finishes. A failed
+// upgrade can leave the database part-way, and each later start takes a snapshot of THAT; without
+// this, three failed starts rotated the only copy from before the upgrade out. The record is
+// safety-snapshots/plannr-upgrade-pending.json ({ snapshot, from, to, startedAt }): written with the
+// first snapshot of an upgrade, removed by finishUpgrade() once init() completes. While it names a
+// snapshot that is there, that one is never deleted (it counts as one of the 3). If the record
+// cannot be read, nothing is deleted.
 const KEEP_SNAPSHOTS = 3;
+export const PENDING_UPGRADE = 'plannr-upgrade-pending.json';
+const snapshotDir = () => join(dirname(DB_PATH), 'safety-snapshots');
+// The snapshot an unfinished upgrade started from: its file name, null if there is none, or
+// undefined if a record is there but cannot be read (then the caller deletes nothing).
+function pendingUpgradeSnapshot(dir) {
+  const file = join(dir, PENDING_UPGRADE);
+  if (!existsSync(file)) return null;
+  try {
+    const p = JSON.parse(readFileSync(file, 'utf8'));
+    if (p && typeof p.snapshot === 'string' && /^plannr-pre-migration-.*\.db$/.test(p.snapshot)) return existsSync(join(dir, p.snapshot)) ? p.snapshot : null;
+  } catch { /* unreadable: fall through */ }
+  return undefined;
+}
 function writeNodeSnapshot(plan) {
-  const dir = join(dirname(DB_PATH), 'safety-snapshots');
+  const dir = snapshotDir();
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const file = join(dir, `plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stamp}.db`);
+  const name = `plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stamp}.db`;
+  const file = join(dir, name);
   db.exec(`VACUUM INTO '${file.replace(/\\/g, '/').replace(/'/g, "''")}'`);
   if (!(statSync(file).size > 0)) throw new Error(`Safety snapshot ${file} is empty; the upgrade was not started.`);
+  let pinned = pendingUpgradeSnapshot(dir);
+  if (pinned === null) {
+    // The first snapshot of this upgrade: record it before any step runs (written whole, then renamed).
+    const tmp = join(dir, `${PENDING_UPGRADE}.tmp`);
+    writeFileSync(tmp, JSON.stringify({ snapshot: name, from: plan.from, to: plan.to, startedAt: new Date().toISOString() }));
+    renameSync(tmp, join(dir, PENDING_UPGRADE));
+    pinned = name;
+  }
   // Only after the new copy is written and non-empty: delete all but the newest KEEP_SNAPSHOTS (by
-  // modification time), and never the one just written.
-  const old = readdirSync(dir).filter((f) => /^plannr-pre-migration-.*\.db$/.test(f))
-    .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
-    .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
-    .slice(KEEP_SNAPSHOTS);
-  for (const { f } of old) if (join(dir, f) !== file) rmSync(join(dir, f), { force: true });
-  if (process.env.PLANNR_TEST !== '1') console.log(`[db] safety snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${file}`);
+  // modification time), never the one just written, never the one the unfinished upgrade started from.
+  if (pinned !== undefined) {
+    const keepOthers = KEEP_SNAPSHOTS - (pinned === name ? 1 : 2);
+    const old = readdirSync(dir).filter((f) => /^plannr-pre-migration-.*\.db$/.test(f) && f !== name && f !== pinned)
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
+      .slice(keepOthers);
+    for (const { f } of old) rmSync(join(dir, f), { force: true });
+  }
+  if (process.env.PLANNR_TEST !== '1') {
+    console.log(`[db] safety snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${file}`);
+    if (pinned && pinned !== name) console.log(`[db] an earlier upgrade did not finish; the snapshot from before it is kept: ${join(dir, pinned)}`);
+  }
   return file;
+}
+// The upgrade finished: the snapshot from before it goes back into the normal rotation.
+function finishUpgrade() {
+  if (isNode) rmSync(join(snapshotDir(), PENDING_UPGRADE), { force: true });
 }
 
 // The checks before any upgrade step, shared by init() and initSync(): refuse a database from a newer
@@ -228,6 +268,7 @@ export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
   beforeUpgrade(migrationPlan(db, migrations), snapshot);
   legacyInit();
   await runMigrations(dbAdapter(), migrations);
+  finishUpgrade();
 }
 
 // TRANSITION ONLY (step 1.4 B4; removed in B17 when server.js starts asynchronously): init() for
@@ -245,6 +286,7 @@ export function initSync({ snapshot = true } = {}) {
   }
   beforeUpgrade(plan, snapshot);
   legacyInit();
+  finishUpgrade();
 }
 
 function legacyInit() {
@@ -283,15 +325,35 @@ function legacyInit() {
   // stripped again because Step 2a itself is version-gated and won't re-fire. Caught by booting the
   // real db.js against one persistent file across two separate processes (not a fresh temp DB each
   // time) — a second `contract_services` row silently vanished and tenant_id came back.
+  //
+  // FIX 2 (step 1.4 B4, found by test/slow/migration-faults-v1.test.js): the version gate is not
+  // enough either. Step 2a commits before user_version becomes 2, so an upgrade that fails after it
+  // leaves a v1 database whose contract_services already has the new shape without tenant_id, and
+  // the next start dropped it with every row. So: a table with the Services-phase columns is never
+  // the old one, whatever its version. And a table that is not recognised but still holds rows is
+  // never dropped: it is renamed aside (contract_services_pre_phase5) with its rows, and a new empty
+  // contract_services is created below as before.
   {
     const userVersion0 = db.prepare('PRAGMA user_version').get().user_version;
     const cs = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'").get();
     if (cs && userVersion0 < 2) {
-      const hasTenant = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'tenant_id');
-      if (!hasTenant) {
+      const cols = db.prepare('PRAGMA table_info(contract_services)').all().map((c) => c.name);
+      const servicesPhaseShape = ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at'].every((c) => cols.includes(c));
+      if (!cols.includes('tenant_id') && !servicesPhaseShape) {
+        const rows = db.prepare('SELECT COUNT(*) AS n FROM contract_services').get().n;
         db.exec('PRAGMA foreign_keys = OFF');
         db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
-        db.exec('DROP TABLE contract_services');
+        if (rows === 0) {
+          db.exec('DROP TABLE contract_services');
+        } else {
+          let aside = 'contract_services_pre_phase5';
+          for (let n = 2; db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(aside); n++) aside = `contract_services_pre_phase5_${n}`;
+          // legacy_alter_table: other tables' REFERENCES contract_services keep that name (the new
+          // table below), instead of being rewritten to follow the old one aside.
+          db.exec('PRAGMA legacy_alter_table = ON');
+          try { db.exec(`ALTER TABLE contract_services RENAME TO ${aside}`); } finally { db.exec('PRAGMA legacy_alter_table = OFF'); }
+          if (isNode && process.env.PLANNR_TEST !== '1') console.warn(`[db] an old contract_services table with ${rows} row(s) was kept as ${aside}; nothing in it was deleted.`);
+        }
         db.exec('PRAGMA foreign_keys = ON');
       }
     }

@@ -34,11 +34,14 @@ if (mode === 'server') {
   // a newer app version (an older APK installed over newer data) without changing anything.
   const plan = migrationPlan();
   try {
+    let snapshots = null;
     if (plan.needsSnapshot && !plan.tooNew) {
-      const { writePreMigrationSnapshot } = await import('./safety-snapshots.js');
-      await writePreMigrationSnapshot(plan);
+      snapshots = await import('./safety-snapshots.js');
+      // Keeps the snapshot from before an earlier, unfinished try of this upgrade (safety-snapshots.js).
+      if (!(await snapshots.writePreMigrationSnapshot(plan))) snapshots = null;
     }
     await init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
+    if (snapshots) await snapshots.finishUpgrade(); // the upgrade finished: back to the normal rotation
   } catch (e) {
     showStartupError(e);
     throw e;
