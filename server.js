@@ -120,6 +120,7 @@ const requestRules = require('./request-rules');
 const { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
 const { createLedgerIndex } = require('./core/ledger-index.js');
 const { checkHost, hostError } = require('./core/host.js');
+const { createRequestQueue, queuedRoutes } = require('./core/request-queue.js');
 
 // Prepared statements go here or later, AFTER init() has created and migrated every table, so each
 // binds to the final schema (preparing before init() would bind to a pre-migration or dropped
@@ -158,6 +159,11 @@ const host = checkHost({
   snapshot: { writeJson: async (backup) => writeJsonSnapshotBesideDb(backup) },
   now: () => new Date(),
 });
+// One request at a time (core/request-queue.js, step 1.4 B5): every /api route is registered through
+// `api`, which runs its handler inside this queue. Pages and static files do not touch the database
+// and stay on `app`. The phone (public/local-api.js) does the same.
+const requestQueue = createRequestQueue();
+const api = queuedRoutes(app, requestQueue);
 const coreContext = {
   db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
   host,
@@ -165,9 +171,10 @@ const coreContext = {
   logError: (...args) => { if (!IS_PROD) console.error(...args); },
   storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
   ledgerIndex,
+  exclusive: (fn) => requestQueue.run(fn), // for the one route outside the queue (the PDF): its database part
 };
-require('./core/routes/people.js').register(app, coreContext);
-require('./core/routes/ledger-list.js').register(app, coreContext);
+require('./core/routes/people.js').register(api, coreContext);
+require('./core/routes/ledger-list.js').register(api, coreContext);
 
 // ---------------------------------------------------------------------------
 // Cash Inflow API (cash_in) + the shared "people" source. Logged-in only.
@@ -185,19 +192,19 @@ function requireApiAuth(req, res, next) {
 
 // The shared list/add/edit/delete/batch routes for the ledger tables live in core/ledger-crud.js
 // (step 1.3). Each table below registers through makeLedgerCrud.
-const { makeLedgerCrud, LEDGER_CRUDS } = require('./core/ledger-crud.js').createLedgerCrud(app, coreContext);
+const { makeLedgerCrud, LEDGER_CRUDS } = require('./core/ledger-crud.js').createLedgerCrud(api, coreContext);
 
 // Cash in, loans and cash out: core/routes/cash-and-loans.js (step 1.3). What it returns is used by
 // the routes still written below.
-const { REASON_MAX, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CUSTOM_CODE, ledgerLabel, resolveLedger, CASH_OUT_SELECT, cashOutRow } = require('./core/routes/cash-and-loans.js').register(app, { ...coreContext, makeLedgerCrud });
+const { REASON_MAX, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CUSTOM_CODE, ledgerLabel, resolveLedger, CASH_OUT_SELECT, cashOutRow } = require('./core/routes/cash-and-loans.js').register(api, { ...coreContext, makeLedgerCrud });
 // The Contract Details API (contracts, services, allowances): core/routes/contracts.js (step 1.3).
-const { unitPricePaise, contractRow, CONTRACT_COLS } = require('./core/routes/contracts.js').register(app, { ...coreContext, ledgerLabel, resolveLedger });
+const { unitPricePaise, contractRow, CONTRACT_COLS } = require('./core/routes/contracts.js').register(api, { ...coreContext, ledgerLabel, resolveLedger });
 
 // The Contractor Payments API: core/routes/contractor-payments.js (step 1.3).
-const { CONTRACTOR_PAYMENTS_SELECT, paymentRow } = require('./core/routes/contractor-payments.js').register(app, { ...coreContext, makeLedgerCrud, ledgerLabel, resolveLedger, REASON_MAX });
+const { CONTRACTOR_PAYMENTS_SELECT, paymentRow } = require('./core/routes/contractor-payments.js').register(api, { ...coreContext, makeLedgerCrud, ledgerLabel, resolveLedger, REASON_MAX });
 
 // The Recycle Bin: core/routes/trash.js (step 1.3).
-require('./core/routes/trash.js').register(app, { ...coreContext, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CASH_OUT_SELECT, cashOutRow, contractRow, CONTRACTOR_PAYMENTS_SELECT, paymentRow });
+require('./core/routes/trash.js').register(api, { ...coreContext, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CASH_OUT_SELECT, cashOutRow, contractRow, CONTRACTOR_PAYMENTS_SELECT, paymentRow });
 
 // ---------------------------------------------------------------------------
 // Overview API (READ-ONLY analytics) + the optional overall budget. Logged-in
@@ -206,13 +213,13 @@ require('./core/routes/trash.js').register(app, { ...coreContext, CASH_IN_SELECT
 // ---------------------------------------------------------------------------
 
 // The overall budget: core/routes/budget.js (step 1.3).
-const { getBudgetPaise } = require('./core/routes/budget.js').register(app, coreContext);
+const { getBudgetPaise } = require('./core/routes/budget.js').register(api, coreContext);
 
 // The reminder times: core/routes/notification-times.js (step 1.3).
-require('./core/routes/notification-times.js').register(app, coreContext);
+require('./core/routes/notification-times.js').register(api, coreContext);
 
 // The Overview: core/routes/overview.js (step 1.3).
-const { computeOverview } = require('./core/routes/overview.js').register(app, { ...coreContext, ledgerLabel, CUSTOM_CODE, unitPricePaise, getBudgetPaise });
+const { computeOverview } = require('./core/routes/overview.js').register(api, { ...coreContext, ledgerLabel, CUSTOM_CODE, unitPricePaise, getBudgetPaise });
 
 // ---------------------------------------------------------------------------
 // Overview PDF export — SERVER-SIDE, rendered by Playwright (headless Chromium) to a
@@ -308,11 +315,11 @@ function releasePdfSlot() {
 
 // The route itself: core/routes/pdf.js (step 1.4 A5). It renders through host.pdf.render, which is
 // renderOverviewPdf above.
-require('./core/routes/pdf.js').register(app, { ...coreContext, readPdfQuery, overviewPdfHtml });
+require('./core/routes/pdf.js').register(api, { ...coreContext, readPdfQuery, overviewPdfHtml });
 
 // ---------------------------------------------------------------------------
 // Phase 2 — one-request health check for the windowless case. Server start time only now.
-app.get('/api/health', requireApiAuth, (req, res) => {
+api.get('/api/health', requireApiAuth, (req, res) => {
   res.json({ serverStart: SERVER_START.toISOString() });
 });
 
@@ -364,7 +371,7 @@ function vacuumSnapshotBytes() {
     for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + s); } catch { /* ignore */ } }
   }
 }
-app.post('/api/backup/export-encrypted', requireApiAuth, async (req, res) => {
+api.post('/api/backup/export-encrypted', requireApiAuth, async (req, res) => {
   const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
   if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
   if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
@@ -385,17 +392,17 @@ app.post('/api/backup/export-encrypted', requireApiAuth, async (req, res) => {
 // above, which is real design work, not a one-line port. Until that's built, the shared data-backup.html
 // button must fail with a clear, specific message instead of Express's raw 404 (which the client's
 // res.json().catch(() => ({})) swallows into a generic, misleading "Restore failed" — see Phase 11 audit).
-app.post('/api/backup/import-encrypted', requireApiAuth, (req, res) => {
+api.post('/api/backup/import-encrypted', requireApiAuth, (req, res) => {
   res.status(501).json({ error: 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.' });
 });
 
 // Phase 15 backup-overdue reminder (GET/PUT /api/backup/reminder, POST /api/backup/mark-exported):
 // core/routes/backup-reminder.js (step 1.4 A6). Its clock is host.now().
-require('./core/routes/backup-reminder.js').register(app, coreContext);
+require('./core/routes/backup-reminder.js').register(api, coreContext);
 
 // Storage meter on the Data Backup page (Phase 2, Step 3). The phone answers this from its app
 // storage limit (public/local-api.js measureStorage()); a desktop database file has no such limit.
-app.get('/api/storage', requireApiAuth, (req, res) => {
+api.get('/api/storage', requireApiAuth, (req, res) => {
   let databaseBytes = null;
   try { databaseBytes = fs.statSync(DB_PATH).size; } catch { /* reported as unknown */ }
   res.json({ mode: 'desktop', databaseBytes, usedBytes: null, limitBytes: null, fraction: null, level: 'ok' });
@@ -412,7 +419,7 @@ function writeJsonSnapshotBesideDb(backup) {
 
 // JSON export and import (REPLACE, made safe: check, safety copy, one transaction):
 // core/routes/backup.js (step 1.4 A7).
-require('./core/routes/backup.js').register(app, { ...coreContext, CUSTOM_CODE });
+require('./core/routes/backup.js').register(api, { ...coreContext, CUSTOM_CODE });
 
 // Guard the protected pages' RAW filenames BEFORE express.static, so a
 // logged-out request for /home.html or /date.html is redirected instead of
@@ -500,9 +507,9 @@ app.use((req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Global error handler (must be last; 4-arg signature). node:sqlite is
-// synchronous and Express forwards synchronous throws from handlers here, so
-// individual routes don't need try/catch. Never leak internals in production.
+// Global error handler (must be last; 4-arg signature). An error thrown by an /api
+// handler arrives here through the request queue (core/request-queue.js passes it to
+// next), so individual routes don't need try/catch. Never leak internals in production.
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   // Respect a status the error already carries (e.g. body-parser sets 400 for
@@ -582,6 +589,7 @@ function watchStopSentinel(sentinelPath, onStop, intervalMs = 1000) {
 app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: exercised by schema tests
 app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview warm Playwright; teardown closes it
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?
+app._requestQueue = requestQueue; // step 1.4 B5: tests hold it to check every /api route waits its turn
 app._accessGate = accessGate; // Phase 1 safety: LAN/Host gate, unit-tested with fake requests
 app._accessConfig = accessConfig;
 app._watchStopSentinel = watchStopSentinel; // Phase 11B: test that a sentinel file routes into the same stop callback as SIGINT

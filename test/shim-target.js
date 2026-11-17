@@ -89,13 +89,14 @@ function fakePage() {
 
 const outsideRequests = [];
 let shimFetch = null;
+let installed = null; // what installFetchShim returns: its request queue and route table (step 1.4 B5)
 async function start() {
   if (shimFetch) return;
   useRootCopiesOfSharedModules();
   fakePage();
   const repo = await import(pathToFileURL(path.join(PUB, 'repo.js')).href);
   const { installFetchShim } = await import(pathToFileURL(path.join(PUB, 'local-api.js')).href);
-  installFetchShim(repo);
+  installed = installFetchShim(repo);
   shimFetch = globalThis.window.fetch;
 }
 
@@ -127,4 +128,4 @@ async function pdfHtml({ part, theme, range }) {
   return fake.pdfRequests[fake.pdfRequests.length - 1].data;
 }
 
-module.exports = { start, request, fetchRaw, pdfHtml, outsideRequests };
+module.exports = { start, request, fetchRaw, pdfHtml, outsideRequests, wiring: () => installed };

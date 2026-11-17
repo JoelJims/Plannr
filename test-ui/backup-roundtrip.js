@@ -94,6 +94,22 @@ function sameDb(name, actual, expected) {
     check('encrypted restore succeeds on the new install', encImp.status === 200, JSON.stringify(encImp.json).slice(0, 300));
     sameDb('encrypted restore: every table, counter and the schema version match the original', await dump(), beforeEnc);
 
+    // ---- One request at a time (step 1.4 B5): a write sent while an encrypted restore is running ----
+    // The restore decrypts, replaces the database and awaits init(). Without the request queue the
+    // write ran in between, was answered "saved", and was then wiped by the restore.
+    const during = await page.evaluate(async ([pp, data]) => {
+      const order = [];
+      const post = (u, b) => fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+      const restore = post('/api/backup/import-encrypted', { passphrase: pp, dataBase64: data }).then((r) => { order.push('restore'); return r.status; });
+      const write = post('/api/cash-in', { amountRupees: '4321', txDate: '2026-11-17', byType: 'relative', byLabel: 'Queue test', reason: 'sent during a restore' })
+        .then((r) => { order.push('write'); return r.status; });
+      const [restoreStatus, writeStatus] = await Promise.all([restore, write]);
+      return { order: order.join(' then '), restoreStatus, writeStatus };
+    }, [pass, dataBase64]);
+    check('a write sent during an encrypted restore waits for it to finish', during.restoreStatus === 200 && during.writeStatus === 201 && during.order === 'restore then write', JSON.stringify(during));
+    const afterBoth = await dump();
+    check('…and is kept (the restore did not wipe it)', afterBoth.tables.cash_in.filter((r) => r.reason === 'sent during a restore').length === 1);
+
     // ---- Schema version guards (Step 2): data from a NEWER Plannr is refused, never half-read ----
     const SCHEMA_VERSION = await page.evaluate(async () => (await import('/db.js')).SCHEMA_VERSION);
     const beforeNewer = await dump();

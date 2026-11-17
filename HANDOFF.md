@@ -286,10 +286,17 @@ going over an allowance is a normal thing to happen, not an error.
   (`db.js` and `ledgers.js` exactly as at 0e7b70b). `test/migration-equivalence.test.js`
   upgrades each one with the old runner, the new `await init()` and `initSync()`, and compares
   the results: schema, user_version and a checksum of every table.
+  All three also make the same writes in the same order (step 1.4 B5).
   `test/migration-faults.test.js` makes each upgrade fail at every write and checks the data is
   unchanged, the safety snapshot is there and the next start finishes. The fixtures are made by
   `node test/fixtures/schema-history/make-fixtures.js` (by hand, from git history; see its
   header); a fixture file that changes fails the tests.
+- **One request at a time** (part of `npm test`, step 1.4 B5). `test/request-queue-wiring.test.js`
+  (both passes): every `/api` route goes through the request queue except the Overview PDF's render,
+  a request waits while the queue is held, and an error in a route still gets its usual answer.
+  `test/request-queue.test.js` covers the wiring itself and the PDF split; `test/db-init-async.test.js`
+  that `init()` really awaits its database calls. `npm run test:backup-roundtrip` sends a write
+  during an encrypted restore on the phone code: it must wait and be kept.
 - **`npm run test:slow`** — the same failure check for the user_version 1 fixtures (about 350
   failure points, half a minute), including several starts after each failure. It pins the one
   known limit of the old upgrade code (§8). `test/upgrade-retry.test.js` (in `npm test`) checks
@@ -436,6 +443,12 @@ There is deliberately **no reset button inside the app**.
 - **The category list is data, not code.** `ledgers.js` only supplies the starting values;
   the database is what everything reads, specifically so the owner can change categories over
   the life of a real project without anyone editing code.
+- **One request at a time.** Every `/api` request runs through one queue (`core/request-queue.js`,
+  step 1.4 B5), on the dev server and in the app. The database calls are becoming async, and two
+  requests running into each other can lose a write: one landing inside another's transaction and
+  rolled back with it, or a save wiped by a restore running at the same time. There is one user, so
+  waiting costs nothing that matters. The one exception is the Overview PDF: its page is built inside
+  the queue and rendered outside it, so a PDF does not hold up the next request.
 - **`server.js` and `public/local-api.js` are deliberately separate.** They answer the same
   requests as two independent files rather than sharing one, so the Android app depends on no
   Node code at all. `repo.js` is the single exception, shared and copied into `public/`,

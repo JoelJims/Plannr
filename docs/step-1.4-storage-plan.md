@@ -744,3 +744,81 @@ Before it: the branch was saved as a git bundle in `D:\Backups\plannr\`.
   Timing: `npm test` went from about 15 s to about 27 s, all of it the new equivalence and fault
   tests (they start up to 8 processes); the UI suites take the same time as before.
 - **Stopped before B5** (switching the queue on), as asked. Nothing pushed.
+
+**B5 (2026-11-17, after your OK): the request queue is switched on, and the first part of `db.js`
+is awaited.** Before it: B4 and its fix were already saved as
+`D:\Backups\plannr\plannr-phase2-2026-11-17-d5f68a9.bundle` (verified; the older ones kept).
+
+- **The queue is on, on both sides.** `core/request-queue.js` gained `queuedRoutes(app, queue)`:
+  a route registered through it runs its handler (the last function) inside the queue; anything
+  before it (`auth`) runs as before.
+  - `server.js` makes one queue and registers every `/api` route through `api` (the core route
+    files and its own four `/api` routes); pages and static files stay on `app`.
+  - `public/local-api.js` does the same: every route goes through `localApp`, now queued.
+  - An error thrown in a route still gets the same answer: on the dev server it is passed to
+    Express's error handler with `next` (Express 4 does not catch a rejected promise itself), on the
+    phone the dispatcher catches it as before.
+  - **The one exception is the Overview PDF** (`outsideQueue()`): its page is built from the
+    database inside the queue (`ctx.exclusive`), and the render (Playwright, or the phone's print
+    adapter; seconds, no database) runs outside it, so a PDF does not hold up the next request. The
+    dev server's own limit of 2 renders at once is unchanged.
+  - **Found while writing the test:** the phone's encrypted restore decrypts first (scrypt, which is
+    async), so even before B5 a write sent during a restore could run in between, be answered
+    "saved", and then be wiped by the restore. With the queue it waits and is kept.
+- **`db.js`: `legacyInit()` is a generator.** Each converted database call is
+  `yield q.get(sql, params)` (or `all`, `run`, `exec`) and gets its answer (or its error) back.
+  - `init()` runs it with `runAwaited`: every call is awaited through the async interface, as the
+    capacitor-sqlite adapter will need in stage C.
+  - `initSync()` runs it with `runNow`: the same calls at once, through the adapter's transition
+    methods, so `server.js`, `reset-db.js` and `seed-demo.js` still start synchronously until B17.
+  - Why a generator: `initSync()` must stay synchronous until B17 (`server.js` and `repo.js`
+    prepare statements as they load, and every test loads `server.js` synchronously), and an async
+    function cannot be run synchronously. One generator with two runners keeps one copy of the
+    frozen baseline instead of two. At B17, `yield q.x(` becomes `await tx.x(`.
+  - **Converted in B5: 40 of the file's 180 direct calls**, everything from the top of
+    `legacyInit()` to the end of the `cash_out` phase/subpart step (the owner row, the old
+    `contract_services` check, the table creation, the category seed, the column additions and the
+    phase/subpart rebuild). A marker line shows where B6 starts. The other 140 are B6–B9.
+- **Tests (new):**
+  - `test/request-queue.test.js` (+6): routes through `queuedRoutes` run one at a time and keep
+    `auth`; errors reach Express (`next`) or the phone (a rejection); the PDF page waits for a request
+    ahead of it, and a request is answered while a PDF renders. Known positives in the file: a
+    do-nothing queue interleaves; a PDF route queued as a whole holds the next request until the
+    render ends.
+  - `test/request-queue-wiring.test.js` (3, both passes): every `/api` route of the code under test
+    is queued except `GET /api/overview/pdf`; a request waits while the queue is held and is answered
+    when it is released (on the dev server a page is answered meanwhile); an error in a queued route
+    still answers "Something went wrong.".
+  - `test/db-init-async.test.js` (2): `init()` lets other code run between its calls (at least 40
+    times on a new database) while `initSync()` does not; both build the same database; a failing
+    call rejects with its error, the category seed is rolled back, and the next start finishes.
+  - `test/migration-equivalence.test.js`: every write is now recorded. For all 16 fixture runs, the
+    old runner (0e7b70b), `await init()` and `initSync()` make exactly the same writes in the same
+    order (the safety snapshot aside, which is checked separately).
+  - `test/upgrade-retry.test.js` (+1, 1d): the two old `contract_services` shapes (no fixture has
+    them) give the same writes and the same database through `initSync()` and `await init()`.
+  - `test-ui/backup-roundtrip.js` (+2, phone code in Chromium): a write sent during an encrypted
+    restore is answered after it and kept.
+  - Guards updated: `test/core-routes.test.js` (route files register on `api`), `test/core-host.test.js`
+    (the PDF page is built inside the queue).
+- **Known positives (each part undone on purpose, the tests run, then put back):** no queue at all
+  (4 test files fail, including the phone's write being wiped in Chromium); `init()` not awaiting;
+  the seed's rollback removed; the awaited runner swallowing a failed call; the immediate runner
+  answering no row (all calls, or only the old-shape checks); the awaited runner giving back a stale
+  answer. All 7 were caught. (The narrow "old-shape checks only" one was missed at first, because
+  no fixture has the old table; test 1d was added for it.)
+- **Full suite:** all passes. `npm test` 456 tests (444 before; the 12 new ones), 0 failures, the
+  same 3 skipped; the phone pass is 185 of 202 (the 3 new wiring tests pass there too), the same 17
+  known differences. All 13 UI suites pass. `npm run test:slow` passes.
+- **Timing: no slowdown.** Measured against the code before B5 (d5f68a9) on this machine, in turn,
+  at least twice each (old, then B5):
+  - a new database's start: `init()` 220/228 ms, then 213/229 ms; `initSync()` 199/281 ms, then
+    223/274 ms;
+  - through `server.js`: 400 saves one after another 11.4/11.1 s, then 8.9/10.6 s; 400 Overviews
+    7.5/6.6 s, then 6.4/7.0 s; 4 × 100 requests at once 5.3/5.6 s, then 5.7/5.7 s;
+  - `npm test` (the server pass) 19.4/24.1 s, then 21.7/22.9 s, with the 12 new tests;
+  - `npm run test:slow` varied from 49 to 220 s on the same code within the hour (old code 52-166
+    s, B5 49-220 s; B5 was the faster one in 2 of 3 pairs): the machine's load, not B5.
+- **Not done in B5:** no emulator check (the phone code ran in Node and in Chromium only); the
+  other 140 calls (B6–B9).
+- **Stopped after B5**, as asked. Nothing pushed.

@@ -5,17 +5,25 @@
 // (core/host.js): Playwright on the dev server, the print-adapter plugin on the phone. A refusal
 // the user should see (busy, needs the Android app, ...) arrives as a hostError and is passed on
 // with its own status and message; anything else is a 500.
+//
+// Step 1.4 B5: the one route outside the request queue (core/request-queue.js). Its page is built
+// from the database inside the queue (ctx.exclusive); the render, which takes seconds and needs no
+// database, runs outside it, so a PDF does not hold up the next request.
+
+import { outsideQueue } from '../request-queue.js';
 
 export function register(app, ctx) {
-  const { auth, host, istDateStamp, logError, readPdfQuery, overviewPdfHtml } = ctx;
+  const { auth, host, exclusive, istDateStamp, logError, readPdfQuery, overviewPdfHtml } = ctx;
+  if (typeof exclusive !== 'function') throw new TypeError('core/routes/pdf.js: ctx.exclusive (the request queue) is missing.');
 
-  app.get('/api/overview/pdf', auth, async (req, res) => {
+  app.get('/api/overview/pdf', auth, outsideQueue(async (req, res) => {
     const q = readPdfQuery(req.query);
     if (q.error) return res.status(400).json({ error: q.error });
     const { part, theme, range } = q;
     // Checked BEFORE the render, so bad requests never take one of the server's render slots.
     try {
-      const pdf = await host.pdf.render(overviewPdfHtml({ part, theme, range }), { part });
+      const html = await exclusive(() => overviewPdfHtml({ part, theme, range }));
+      const pdf = await host.pdf.render(html, { part });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${istDateStamp()}.pdf"`); // IST date, not UTC
       res.send(pdf);
@@ -23,5 +31,5 @@ export function register(app, ctx) {
       if (!err.status || err.cause) logError('PDF generation failed:', err.cause || err); // a plain refusal ("busy") is not logged
       res.status(err.status || 500).json({ error: err.userMessage || 'Could not generate the PDF: ' + (err && err.message ? err.message : String(err)) });
     }
-  });
+  }));
 }

@@ -104,6 +104,22 @@ test('1c. an empty old contract_services is dropped and recreated, as before', a
   assert.deepStrictEqual(all(db, 'PRAGMA table_info(contract_services)').map((c) => c.name), ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at']);
 });
 
+test('1d. both old shapes give the same database and the same writes through initSync() as through await init() (step 1.4 B5)', async () => {
+  // No schema-history fixture has the old table, so the equivalence test never takes these paths.
+  for (const rows of [2, 0]) {
+    const a = h.fresh(V1, `old-shape-${rows}-init`);
+    const b = h.fresh(V1, `old-shape-${rows}-initSync`);
+    withOldShapeServices(a, rows);
+    withOldShapeServices(b, rows);
+    const [[ra], [rb]] = await h.runGroups([[{ db: a, run: 'init', approve: true, fault: { record: true } }], [{ db: b, run: 'initSync', approve: true, fault: { record: true } }]]);
+    assert.ok(ra.ok && rb.ok, `${rows} row(s): ${ra.error || ''} ${rb.error || ''}`);
+    const writes = (r) => r.log.filter((w) => !/^VACUUM INTO /.test(w)); // the snapshot's file name differs
+    assert.ok(writes(ra).some((w) => /contract_services/.test(w)), `${rows} row(s): the old-shape step ran`);
+    assert.deepStrictEqual(writes(rb), writes(ra), `${rows} row(s): the same writes, in the same order`);
+    assert.deepStrictEqual(L.fingerprintFile(b, { mask: MASK }), L.fingerprintFile(a, { mask: MASK }), `${rows} row(s): the same database`);
+  }
+});
+
 test('2a. an upgrade that keeps failing: the snapshot from before it survives every failed start, never more than 3; when one finishes it rotates out as usual', async () => {
   const db = h.fresh(CURRENT, 'retry');
   const base = L.fingerprintFile(db);

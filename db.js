@@ -107,11 +107,11 @@ export const SCHEMA_VERSION = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length -
 
 export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').get().user_version;
 
-// Step 1.4 B4: the async database interface (core/db-adapter.js) over a synchronous handle. Until
-// stage B5 the rest of this file still uses `db` directly; both share the one connection. Only
-// get/all/run/exec/transaction work here: exporting, replacing and closing the database stay with
-// each platform until the adapters take over the whole database (stage B5 onwards).
-const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter yet (stage B5).`); };
+// Step 1.4 B4: the async database interface (core/db-adapter.js) over a synchronous handle. Since
+// B5, legacyInit() goes through it (below); the parts B6-B9 have not converted yet still use `db`
+// directly, on the same connection. Only get/all/run/exec/transaction work here: exporting, replacing
+// and closing the database stay with each platform until the adapters take over the whole database.
+const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter yet (step 1.4, stage B/C).`); };
 function adapterOver(handle) {
   return createSyncEngineAdapter({
     engine: isNode ? 'node-sqlite' : 'wasm-kvvfs',
@@ -266,7 +266,7 @@ function beforeUpgrade(plan, snapshot) {
 export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
   if (migrations !== MIGRATIONS) assertMigrationList(migrations);
   beforeUpgrade(migrationPlan(db, migrations), snapshot);
-  legacyInit();
+  await runAwaited(legacyInit(), dbAdapter());
   await runMigrations(dbAdapter(), migrations);
   finishUpgrade();
 }
@@ -285,12 +285,72 @@ export function initSync({ snapshot = true } = {}) {
     }
   }
   beforeUpgrade(plan, snapshot);
-  legacyInit();
+  runNow(legacyInit(), dbAdapter());
   finishUpgrade();
 }
 
-function legacyInit() {
-  db.exec(`
+// ---- legacyInit()'s database calls (step 1.4 B5–B9) ---------------------------------------------------
+//
+// legacyInit() is a generator: each database call it makes is `yield q.get(sql, params)` (or all, run,
+// exec), which hands the call to whoever runs it and gets the answer back (a row, the rows,
+// { changes, lastInsertRowid }, or the error thrown at that point). Two runners, on the one connection:
+//   - runAwaited (init(): the phone, and every caller from B17 on) awaits each call through the async
+//     interface, the same calls the capacitor-sqlite adapter will answer in stage C;
+//   - runNow (initSync(): server.js, reset-db.js and seed-demo.js until B17) makes each call at once
+//     through the adapter's transition methods, so their start stays synchronous.
+// Same calls, same order, same answers, same errors either way; test/migration-equivalence.test.js
+// compares the two write by write. Calls not converted yet still use `db` directly (B6–B9 convert
+// the rest), which is safe on the same connection. Once every call is converted and initSync() is gone
+// (B17), `yield q.x(` becomes `await tx.x(`.
+const q = {
+  get: (sql, params) => ({ op: 'get', sql, params }),
+  all: (sql, params) => ({ op: 'all', sql, params }),
+  run: (sql, params) => ({ op: 'run', sql, params }),
+  exec: (sql) => ({ op: 'exec', sql }),
+};
+const OPS = new Set(Object.keys(q));
+function checkOp(o) {
+  if (!o || !OPS.has(o.op) || typeof o.sql !== 'string') throw new TypeError(`legacyInit yielded something that is not a database call (${JSON.stringify(o)}); use yield q.get/all/run/exec(...) or yield* for a helper.`);
+  if (o.params !== undefined && !Array.isArray(o.params)) throw new TypeError(`legacyInit: params must be an array (${o.sql}).`);
+  return o;
+}
+async function runAwaited(gen, adapter) {
+  let step = gen.next();
+  while (!step.done) {
+    const o = checkOp(step.value);
+    let value, error, failed = false;
+    try {
+      value = o.op === 'exec' ? await adapter.exec(o.sql) : await adapter[o.op](o.sql, o.params);
+    } catch (e) { failed = true; error = e; }
+    step = failed ? gen.throw(error) : gen.next(value);
+  }
+  return step.value;
+}
+function runNow(gen, adapter) {
+  const statements = new Map(); // prepared once per SQL text, as the async interface does
+  const statement = (sql) => { let s = statements.get(sql); if (!s) { s = adapter.prepare(sql); statements.set(sql, s); } return s; };
+  let step = gen.next();
+  while (!step.done) {
+    const o = checkOp(step.value);
+    let value, error, failed = false;
+    try {
+      if (o.op === 'exec') adapter.execSync(o.sql);
+      else if (o.op === 'run') {
+        const r = statement(o.sql).run(...(o.params || []));
+        value = { changes: Number(r.changes), lastInsertRowid: Number(r.lastInsertRowid) };
+      } else value = statement(o.sql)[o.op](...(o.params || []));
+    } catch (e) { failed = true; error = e; }
+    step = failed ? gen.throw(error) : gen.next(value);
+  }
+  return step.value;
+}
+// rollbackQuietly() (below) for legacyInit(): the same rule, as database calls it yields.
+function* rollbackQuietlyCalls() {
+  try { yield q.exec('ROLLBACK'); } catch (e) { if (!/no transaction is active/i.test(String(e && e.message))) throw e; }
+}
+
+function* legacyInit() {
+  yield q.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       username      TEXT    NOT NULL COLLATE NOCASE UNIQUE,
@@ -305,9 +365,8 @@ function legacyInit() {
   // deployment has had one since some now-removed registration step, long before this check existed,
   // so this is a no-op there. A brand-new Capacitor install has no such history, so seed exactly one
   // default owner the first time the table is empty.
-  if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
-    db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)')
-      .run('owner', 'Owner', 'local-single-user-no-auth');
+  if (!(yield q.get('SELECT 1 FROM users LIMIT 1'))) {
+    yield q.run('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)', ['owner', 'Owner', 'local-single-user-no-auth']);
   }
 
   // Services phase — contract_services RETURNS (dropped in Phase 5C). If a PRE-Phase-5 database still
@@ -334,27 +393,27 @@ function legacyInit() {
   // never dropped: it is renamed aside (contract_services_pre_phase5) with its rows, and a new empty
   // contract_services is created below as before.
   {
-    const userVersion0 = db.prepare('PRAGMA user_version').get().user_version;
-    const cs = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'").get();
+    const userVersion0 = (yield q.get('PRAGMA user_version')).user_version;
+    const cs = yield q.get("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'");
     if (cs && userVersion0 < 2) {
-      const cols = db.prepare('PRAGMA table_info(contract_services)').all().map((c) => c.name);
+      const cols = (yield q.all('PRAGMA table_info(contract_services)')).map((c) => c.name);
       const servicesPhaseShape = ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at'].every((c) => cols.includes(c));
       if (!cols.includes('tenant_id') && !servicesPhaseShape) {
-        const rows = db.prepare('SELECT COUNT(*) AS n FROM contract_services').get().n;
-        db.exec('PRAGMA foreign_keys = OFF');
-        db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+        const rows = (yield q.get('SELECT COUNT(*) AS n FROM contract_services')).n;
+        yield q.exec('PRAGMA foreign_keys = OFF');
+        yield q.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
         if (rows === 0) {
-          db.exec('DROP TABLE contract_services');
+          yield q.exec('DROP TABLE contract_services');
         } else {
           let aside = 'contract_services_pre_phase5';
-          for (let n = 2; db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(aside); n++) aside = `contract_services_pre_phase5_${n}`;
+          for (let n = 2; yield q.get('SELECT 1 FROM sqlite_master WHERE name = ?', [aside]); n++) aside = `contract_services_pre_phase5_${n}`;
           // legacy_alter_table: other tables' REFERENCES contract_services keep that name (the new
           // table below), instead of being rewritten to follow the old one aside.
-          db.exec('PRAGMA legacy_alter_table = ON');
-          try { db.exec(`ALTER TABLE contract_services RENAME TO ${aside}`); } finally { db.exec('PRAGMA legacy_alter_table = OFF'); }
+          yield q.exec('PRAGMA legacy_alter_table = ON');
+          try { yield q.exec(`ALTER TABLE contract_services RENAME TO ${aside}`); } finally { yield q.exec('PRAGMA legacy_alter_table = OFF'); }
           if (isNode && process.env.PLANNR_TEST !== '1') console.warn(`[db] an old contract_services table with ${rows} row(s) was kept as ${aside}; nothing in it was deleted.`);
         }
-        db.exec('PRAGMA foreign_keys = ON');
+        yield q.exec('PRAGMA foreign_keys = ON');
       }
     }
   }
@@ -371,7 +430,7 @@ function legacyInit() {
   // (NULL = live row). All statements are IF NOT EXISTS, so this is safe to run
   // against an existing database — users/sessions and their data are untouched.
   // ---------------------------------------------------------------------------
-  db.exec(`
+  yield q.exec(`
     -- 1. contract: EXACTLY ONE live contract (Phase 5D). At most one row with deleted_at IS NULL
     --    is allowed — enforced in the DATABASE by the partial unique index idx_contract_single_live
     --    (created at the end of init), not by app code. Soft-deleted rows may coexist with the one
@@ -665,23 +724,23 @@ function legacyInit() {
   // install, or an upgrade from a pre-10b database). Presence-keyed, not version-gated: once a
   // household has edited the taxonomy via CSV import, the table is never empty again, so this can
   // never re-fire and stomp an edit — it only ever runs once, on a genuinely empty table.
-  if (!db.prepare('SELECT 1 FROM ledger_mains LIMIT 1').get()) {
-    const insMain = db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)');
-    const insSub = db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)');
+  if (!(yield q.get('SELECT 1 FROM ledger_mains LIMIT 1'))) {
+    const insMain = 'INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)';
+    const insSub = 'INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)';
     // Phase 12: these ~190 inserts were each their own autocommit transaction (a journal
     // create/fsync/delete per row under DELETE journal mode) — 0.5-1.1s on a fresh install, the very
     // first thing a new user waits on. One transaction for the whole seed: same rows, same order, same
     // end state, ~7-12ms instead.
-    db.exec('BEGIN');
+    yield q.exec('BEGIN');
     try {
       let order = 0;
       for (const L of SEED_LEDGERS) {
-        insMain.run(L.code, L.name, order++);
-        for (const s of L.subLedgers) insSub.run(s.code, L.code, s.name, order++);
+        yield q.run(insMain, [L.code, L.name, order++]);
+        for (const s of L.subLedgers) yield q.run(insSub, [s.code, L.code, s.name, order++]);
       }
-      db.exec('COMMIT');
+      yield q.exec('COMMIT');
     } catch (e) {
-      rollbackQuietly(db);
+      yield* rollbackQuietlyCalls();
       throw e;
     }
   }
@@ -690,17 +749,17 @@ function legacyInit() {
   // cash_out for databases created before they existed (fresh DBs already have
   // them from the CREATE above). ALTER ADD COLUMN appends a nullable TEXT column;
   // existing rows get NULL — no data is altered.
-  const cashOutCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const cashOutCols = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   for (const col of ['ledger_custom_name', 'subledger_custom_name']) {
-    if (!cashOutCols.includes(col)) db.exec(`ALTER TABLE cash_out ADD COLUMN ${col} TEXT`);
+    if (!cashOutCols.includes(col)) yield q.exec(`ALTER TABLE cash_out ADD COLUMN ${col} TEXT`);
   }
 
   // Idempotent migration: add contract_end_date to contract for databases
   // created before it existed (fresh DBs already have it from the CREATE above).
   // Nullable TEXT; existing rows get NULL — no data is altered.
-  const contractCols = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  const contractCols = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
   if (!contractCols.includes('contract_end_date')) {
-    db.exec('ALTER TABLE contract ADD COLUMN contract_end_date TEXT');
+    yield q.exec('ALTER TABLE contract ADD COLUMN contract_end_date TEXT');
   }
 
   // Idempotent migration (Phase 2): contract becomes a multi-row list — add the new
@@ -711,13 +770,13 @@ function legacyInit() {
   // ADDITIVE-ONLY — the worst a wrong-fire can do is skip or add a NULL column; it can never drop or
   // overwrite. So, unlike the destructive cash_out rebuild, it stays safe as a pure presence key and
   // deliberately needs NO version gate (a legitimately re-absent column SHOULD be re-added).
-  const contractColsP2 = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  const contractColsP2 = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
   for (const [col, type] of [
     ['area_of_work', 'TEXT'], ['ledger_code', 'TEXT'], ['subledger_code', 'TEXT'],
     ['ledger_custom_name', 'TEXT'], ['subledger_custom_name', 'TEXT'],
     ['amount_paise', 'INTEGER'], ['date_signed', 'TEXT'], ['deleted_at', 'TEXT'],
   ]) {
-    if (!contractColsP2.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+    if (!contractColsP2.includes(col)) yield q.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
   }
 
   // Migration: cash_out phase/subpart are SIMPLE SCALARS — phase is a positive whole
@@ -737,13 +796,13 @@ function legacyInit() {
   // guard). So it is ALSO gated on the schema-version marker: the rebuild runs ONLY on a DB that
   // predates the marker (user_version 0). init() stamps user_version = SCHEMA_VERSION on success, so
   // no later re-add of the column can re-trigger it. Read the marker BEFORE any migration changes it.
-  const userVersion = db.prepare('PRAGMA user_version').get().user_version;
-  const coCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const userVersion = (yield q.get('PRAGMA user_version')).user_version;
+  const coCols = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   if (userVersion === 0 && (coCols.includes('phase_custom_name') || coCols.includes('subpart_custom_name'))) {
-    db.exec('PRAGMA foreign_keys = OFF'); // standard rebuild guard (nothing references cash_out anyway)
-    db.exec('BEGIN');
+    yield q.exec('PRAGMA foreign_keys = OFF'); // standard rebuild guard (nothing references cash_out anyway)
+    yield q.exec('BEGIN');
     try {
-      db.exec(`CREATE TABLE cash_out_rebuild (
+      yield q.exec(`CREATE TABLE cash_out_rebuild (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         amount_paise        INTEGER NOT NULL,
         by_type             TEXT    NOT NULL,
@@ -761,7 +820,7 @@ function legacyInit() {
         updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
         deleted_at          TEXT
       )`);
-      db.exec(`INSERT INTO cash_out_rebuild
+      yield q.exec(`INSERT INTO cash_out_rebuild
         (id, amount_paise, by_type, by_user_id, by_label, ledger_code, subledger_code,
          ledger_custom_name, subledger_custom_name, reason, contract_scope,
          phase, subpart, created_at, updated_at, deleted_at)
@@ -771,22 +830,24 @@ function legacyInit() {
                CASE WHEN subpart GLOB '[A-Za-z]' THEN lower(subpart) ELSE NULL END,
                created_at, updated_at, deleted_at
           FROM cash_out`);
-      db.exec('DROP TABLE cash_out');
-      db.exec('ALTER TABLE cash_out_rebuild RENAME TO cash_out');
-      db.exec('COMMIT');
+      yield q.exec('DROP TABLE cash_out');
+      yield q.exec('ALTER TABLE cash_out_rebuild RENAME TO cash_out');
+      yield q.exec('COMMIT');
     } catch (e) {
-      rollbackQuietly(db);
+      yield* rollbackQuietlyCalls();
       throw e;
     }
-    db.exec('PRAGMA foreign_keys = ON');
+    yield q.exec('PRAGMA foreign_keys = ON');
     // The old table's indexes went with it on DROP; recreate the ledger one (Phase 6C dropped the
     // useless deleted_at index — not recreated here; the tx_date partial index is made below).
-    db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code)');
+    yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code)');
   } else {
     // Fresh or already-migrated DB: just ensure the two scalar columns exist.
-    if (!coCols.includes('phase')) db.exec('ALTER TABLE cash_out ADD COLUMN phase INTEGER');
-    if (!coCols.includes('subpart')) db.exec('ALTER TABLE cash_out ADD COLUMN subpart TEXT');
+    if (!coCols.includes('phase')) yield q.exec('ALTER TABLE cash_out ADD COLUMN phase INTEGER');
+    if (!coCols.includes('subpart')) yield q.exec('ALTER TABLE cash_out ADD COLUMN subpart TEXT');
   }
+
+  // ---- step 1.4 B5 converted every call above this line; B6 starts here ----
 
   // Idempotent migration (Phase 1): cash_out gains tx_date — the user-chosen
   // transaction date, ISO 'YYYY-MM-DD'. New writes REQUIRE it. Existing rows are

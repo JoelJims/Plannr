@@ -23,6 +23,12 @@ forward. There is no server to fix it later.
 - `init()` is async (step 1.4 B4). `server.js`, `reset-db.js` and `seed-demo.js` cannot wait yet and
   call `initSync()` until step B17. `initSync()` refuses a database that still needs a numbered step
   (only `init()` runs those), so a new step makes them fail loudly until then.
+- `legacyInit()` is a generator (step 1.4 B5–B9): each database call in the converted part is
+  `yield q.get(sql, params)` (or `all`, `run`, `exec`; parameters as an array). `init()` awaits each
+  call through the async interface; `initSync()` makes the same calls at once.
+  `test/migration-equivalence.test.js` checks that both make exactly the old runner's writes, in
+  order. Yield nothing but a `q.*` call (a helper generator goes in with `yield*`). From B17, when
+  `initSync()` goes, `yield q.x(` becomes `await tx.x(`.
 - Version 2 is the baseline: everything up to it is the older, hand-gated code in `legacyInit()`.
   Do not add new schema changes there. A v2 database made by an older app can still need some of its
   one-off clean-ups (gated on settings markers); `init()` takes the snapshot before those too.
@@ -88,3 +94,8 @@ A new online feature needs its own test showing its offline message.
 - Never open, change or delete a real database (`data/plannr.db`) in tests. Tests use temporary
   files only; `test/helpers.js` sets this up.
 - Shared modules live at the project root. `public/` copies of them are generated; never edit them.
+- Every `/api` route runs through the request queue (`core/request-queue.js`, step 1.4 B5): register it
+  on `api` in `server.js` (never `app`) and on `localApp` in `public/local-api.js`. A route that skips
+  the queue fails `test/request-queue-wiring.test.js`. Only a route marked `outsideQueue()` may call
+  `ctx.exclusive(fn)`, for its database part (the Overview PDF); from a queued route it would wait for
+  the queue that route already holds, for ever.

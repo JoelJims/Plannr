@@ -31,6 +31,7 @@ import * as requestRules from './request-rules.js';
 import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
 import { createLedgerIndex } from './core/ledger-index.js';
 import { checkHost, hostError } from './core/host.js';
+import { createRequestQueue, queuedRoutes } from './core/request-queue.js';
 import * as peopleRoutes from './core/routes/people.js';
 import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import * as cashAndLoansRoutes from './core/routes/cash-and-loans.js';
@@ -103,9 +104,13 @@ export function installFetchShim(repo) {
   // requireApiAuth is a no-op here (there is no session to check in this single-user app),
   // and the body is read in window.fetch below by request-rules.js, the same rules as server.js.
   function on(method) {
-    return (routePath, ...fns) => routes.push({ method, ...compilePath(routePath), handler: fns[fns.length - 1] });
+    return (routePath, ...fns) => routes.push({ method, path: routePath, ...compilePath(routePath), handler: fns[fns.length - 1] });
   }
-  const localApp = { get: on('GET'), post: on('POST'), put: on('PUT'), delete: on('DELETE') };
+  // One request at a time (core/request-queue.js, step 1.4 B5), as on the dev server: every route is
+  // registered through queuedRoutes(), so its handler runs inside this queue. An encrypted restore
+  // awaits init() part-way through; nothing else can run in between.
+  const requestQueue = createRequestQueue();
+  const localApp = queuedRoutes({ get: on('GET'), post: on('POST'), put: on('PUT'), delete: on('DELETE') }, requestQueue);
 
   class Res {
     constructor() { this.statusCode = 200; this._body = undefined; this._kind = 'json'; }
@@ -142,6 +147,7 @@ export function installFetchShim(repo) {
     auth: requireApiAuth, // never called here: localApp runs only the last handler
     logError: (...args) => console.error(...args),
     ledgerIndex,
+    exclusive: (fn) => requestQueue.run(fn), // for the one route outside the queue (the PDF): its database part
   };
   peopleRoutes.register(localApp, coreContext);
   ledgerListRoutes.register(localApp, coreContext);
@@ -371,4 +377,7 @@ export function installFetchShim(repo) {
     }
     return toResponse(new Res().status(404).json(requestRules.notFound(method, pathname)));
   };
+
+  // For the tests (test/shim-target.js, test/request-queue-wiring.test.js); local-bootstrap.js does not use it.
+  return { requestQueue, routes };
 }

@@ -10,6 +10,10 @@
 // (success, or the same refusal) and leave the same database: the same schema, the same user_version
 // and the same checksum for every table. The numbered-step runner itself is compared the same way
 // (old runMigrations with synchronous steps, new one with async steps).
+//
+// Step 1.4 B5: every write each runner makes is recorded (test/_schema-history-child.js), and the
+// three must make the same writes in the same order: legacyInit()'s calls, awaited by init() and
+// made at once by initSync(), are the old runner's calls one for one.
 'use strict';
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -52,7 +56,7 @@ before(async () => {
         fs.mkdirSync(dir, { recursive: true });
         const db = path.join(dir, 'plannr.db');
         fs.copyFileSync(base, db);
-        jobs[r].push({ db, run: r, approve: v.approve, key: `${f.file}|${v.name}|${r}` });
+        jobs[r].push({ db, run: r, approve: v.approve, key: `${f.file}|${v.name}|${r}`, fault: { record: true } }); // record every write (none fails)
       }
     }
   }
@@ -89,6 +93,13 @@ for (const f of MAN.fixtures) {
       assert.deepStrictEqual(L.fingerprintFile(neu.db, { mask: MASK }), want, 'await init(): same schema, user_version and table checksums');
       assert.deepStrictEqual(L.fingerprintFile(sync.db, { mask: MASK }), want, 'initSync(): same schema, user_version and table checksums');
       for (const r of [old, neu, sync]) assert.deepStrictEqual(L.checks(r.db), L.checks(old.db));
+      // Step 1.4 B5: legacyInit() is run two ways, awaited (init) and at once (initSync). They make the
+      // same writes in the same order, and so did the old runner.
+      // (The safety snapshot, VACUUM INTO a file named by path and time, is checked further down.)
+      const writes = (r) => r.result.log.filter((w) => !/^VACUUM INTO /.test(w));
+      assert.ok(writes(neu).length > 0, 'writes were recorded');
+      assert.deepStrictEqual(writes(sync), writes(neu), 'initSync() makes exactly the writes await init() makes, in the same order');
+      assert.deepStrictEqual(writes(neu), writes(old), 'the same writes as the old init(), in the same order');
       if (v.approve) {
         assert.ok(old.result.ok, `with approval every past database upgrades (${old.result.error || ''})`);
         assert.strictEqual(want.userVersion, 2);

@@ -28,8 +28,9 @@ test('there is at least one moved route group', () => {
 
 for (const f of ROUTE_FILES) {
   test(`${f}: both copies register it`, () => {
-    // register(app, coreContext), or register(app, { ...coreContext, more }) when a group needs more.
-    assert.match(SERVER, new RegExp(`require\\('\\./${esc(f)}'\\)\\.register\\(app, [^\\n]*coreContext`), 'server.js');
+    // register(api, coreContext), or register(api, { ...coreContext, more }) when a group needs more.
+    // (api: server.js's route table through the request queue, step 1.4 B5.)
+    assert.match(SERVER, new RegExp(`require\\('\\./${esc(f)}'\\)\\.register\\(api, [^\\n]*coreContext`), 'server.js');
     const imp = PHONE.match(new RegExp(`import \\* as (\\w+) from '\\./${esc(f)}';`));
     assert.ok(imp, 'public/local-api.js imports it');
     assert.match(PHONE, new RegExp(`\\b${imp[1]}\\.register\\(localApp, [^\\n]*coreContext`), 'public/local-api.js registers it');
@@ -38,7 +39,7 @@ for (const f of ROUTE_FILES) {
   test(`${f}: neither copy still defines its routes`, () => {
     const moved = routesIn(read(f), 'app');
     assert.ok(moved.length > 0, 'no routes found in the core file');
-    assert.deepStrictEqual(routesIn(SERVER, 'app').filter((r) => moved.includes(r)), [], 'server.js');
+    assert.deepStrictEqual([...routesIn(SERVER, 'app'), ...routesIn(SERVER, 'api')].filter((r) => moved.includes(r)), [], 'server.js');
     assert.deepStrictEqual(routesIn(PHONE, 'localApp').filter((r) => moved.includes(r)), [], 'public/local-api.js');
   });
 }

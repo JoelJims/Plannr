@@ -65,7 +65,9 @@ for (const [file, importLine] of [
 
 test('the shared PDF route renders through host.pdf.render (step 1.4 A5)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'pdf.js'), 'utf8');
-  assert.match(src, /await host\.pdf\.render\(overviewPdfHtml\(/);
+  // Step 1.4 B5: the page is built inside the request queue, then rendered outside it.
+  assert.match(src, /const html = await exclusive\(\(\) => overviewPdfHtml\(/);
+  assert.match(src, /await host\.pdf\.render\(html, /);
 });
 
 test('the shared JSON import saves its safety copy through host.snapshot.writeJson (step 1.4 A7)', () => {

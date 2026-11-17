@@ -118,3 +118,127 @@ test('two writes at once, one failing: WITHOUT the queue, B is lost or refused (
   assert.deepStrictEqual(await whoIsSaved(db), []);
   await db.close();
 });
+
+// ---- 3. Wiring (step 1.4 B5): routes registered through queuedRoutes() -----------------------------
+//
+// A fake route table with the shape both platforms give it (method(path, ...fns)); the tests call the
+// handler a platform would call. A do-nothing queue (runs each request at once) is the known positive.
+
+function fakeApp() {
+  const routes = [];
+  const add = (method) => (p, ...fns) => { routes.push({ method, path: p, fns }); };
+  const handler = (method, p) => { const r = routes.find((x) => x.method === method && x.path === p); return r.fns[r.fns.length - 1]; };
+  return { routes, handler, get: add('GET'), post: add('POST'), put: add('PUT'), delete: add('DELETE') };
+}
+const noQueue = { run: async (fn) => fn() };
+
+async function twoSlowRequests(queue) {
+  const { queuedRoutes } = await load('core/request-queue.js');
+  const app = fakeApp();
+  const api = queuedRoutes(app, queue);
+  const log = [];
+  const slow = (name) => async () => { log.push(`${name} starts`); await tick(); await tick(); log.push(`${name} ends`); };
+  api.post('/api/a', (req, res, next) => next(), slow('a'));
+  api.get('/api/b', slow('b'));
+  await Promise.all([app.handler('POST', '/api/a')({}, {}), app.handler('GET', '/api/b')({}, {})]);
+  return { log, app };
+}
+
+test('wiring: routes registered through queuedRoutes run one at a time; earlier functions (auth) are kept', { timeout: 10000 }, async () => {
+  const { createRequestQueue, QUEUED } = await load('core/request-queue.js');
+  const { log, app } = await twoSlowRequests(createRequestQueue());
+  assert.deepStrictEqual(log, ['a starts', 'a ends', 'b starts', 'b ends']);
+  assert.strictEqual(app.routes[0].fns.length, 2, 'the auth function before the handler is still there');
+  assert.ok(app.routes.every((r) => r.fns[r.fns.length - 1][QUEUED]), 'every handler is marked as queued');
+});
+
+test('wiring: known positive - with a do-nothing queue the same two requests interleave', { timeout: 10000 }, async () => {
+  const { log } = await twoSlowRequests(noQueue);
+  assert.deepStrictEqual(log, ['a starts', 'b starts', 'a ends', 'b ends']);
+});
+
+test('wiring: an error reaches Express through next(err); without next (the phone) the promise rejects', { timeout: 10000 }, async () => {
+  const { createRequestQueue, queuedRoutes } = await load('core/request-queue.js');
+  const app = fakeApp();
+  const api = queuedRoutes(app, createRequestQueue());
+  api.get('/api/sync-throw', () => { throw new Error('sync boom'); });
+  api.get('/api/async-throw', async () => { await tick(); throw new Error('async boom'); });
+  for (const p of ['/api/sync-throw', '/api/async-throw']) {
+    let passed = null;
+    await app.handler('GET', p)({}, {}, (err) => { passed = err; });
+    assert.match(String(passed && passed.message), /boom/, `${p}: Express gets the error`);
+    await assert.rejects(app.handler('GET', p)({}, {}), /boom/, `${p}: the phone's dispatcher gets a rejection`);
+  }
+  assert.throws(() => api.get('/api/no-handler'), /has no handler/);
+  assert.throws(() => queuedRoutes(app, null), /pass the request queue/);
+});
+
+// The Overview PDF: its page is built inside the queue, the render (seconds, no database) outside.
+const fakeRes = () => ({ headers: {}, setHeader(k, v) { this.headers[k] = v; }, send(b) { this.body = b; }, status(s) { this.code = s; return this; }, json(j) { this.body = j; } });
+async function pdfWithSlowRender(queue, { wrapAnyway = false } = {}) {
+  const { queuedRoutes, queuedHandler } = await load('core/request-queue.js');
+  const pdfRoute = await load('core/routes/pdf.js');
+  const app = fakeApp();
+  const api = queuedRoutes(app, queue);
+  const log = [];
+  let finishRender;
+  const rendering = new Promise((r) => { finishRender = r; });
+  pdfRoute.register(api, {
+    auth: (req, res, next) => next(),
+    // Had the whole route been queued, its page would be built where it already holds the queue.
+    exclusive: wrapAnyway ? (fn) => fn() : (fn) => queue.run(fn),
+    istDateStamp: () => '2026-11-17',
+    logError: () => {},
+    readPdfQuery: () => ({ part: 'full', theme: 'light', range: {} }),
+    overviewPdfHtml: () => { log.push('pdf page built'); return '<html></html>'; },
+    host: { pdf: { render: async () => { log.push('render starts'); await rendering; log.push('render ends'); return new Uint8Array([37, 80, 68, 70]); } } },
+  });
+  api.get('/api/budget', () => { log.push('budget answered'); });
+  const res = fakeRes();
+  const route = app.handler('GET', '/api/overview/pdf');
+  const pdf = wrapAnyway ? queuedHandler(queue, (...a) => route(...a)) : route; // as if the route were not marked
+  const p = pdf({ query: {} }, res, () => {});
+  for (let i = 0; i < 5; i++) await tick();
+  const b = app.handler('GET', '/api/budget')({}, {}, () => {});
+  for (let i = 0; i < 5; i++) await tick();
+  const answeredDuringRender = log.includes('budget answered');
+  finishRender();
+  await Promise.all([p, b]);
+  return { log, answeredDuringRender, res };
+}
+
+test('wiring: the PDF page is built inside the queue, and a request is answered while it renders', { timeout: 10000 }, async () => {
+  const { createRequestQueue, OUTSIDE_QUEUE } = await load('core/request-queue.js');
+  const { log, answeredDuringRender, res } = await pdfWithSlowRender(createRequestQueue());
+  assert.ok(answeredDuringRender, `the budget request waited for the render: ${log.join(' > ')}`);
+  assert.deepStrictEqual(log, ['pdf page built', 'render starts', 'budget answered', 'render ends']);
+  assert.strictEqual(res.headers['Content-Type'], 'application/pdf');
+  const app = fakeApp();
+  (await load('core/routes/pdf.js')).register(app, { auth: () => {}, exclusive: () => {}, host: {} });
+  assert.ok(app.handler('GET', '/api/overview/pdf')[OUTSIDE_QUEUE], 'the PDF route is the one marked outside the queue');
+});
+
+test('wiring: known positive - had the whole PDF route been queued, the request waits for the render', { timeout: 10000 }, async () => {
+  const { createRequestQueue } = await load('core/request-queue.js');
+  const { log, answeredDuringRender } = await pdfWithSlowRender(createRequestQueue(), { wrapAnyway: true });
+  assert.strictEqual(answeredDuringRender, false);
+  assert.deepStrictEqual(log, ['pdf page built', 'render starts', 'render ends', 'budget answered']);
+});
+
+test('wiring: the PDF page waits for a request ahead of it in the queue; the route needs ctx.exclusive', { timeout: 10000 }, async () => {
+  const { createRequestQueue, queuedRoutes } = await load('core/request-queue.js');
+  const pdfRoute = await load('core/routes/pdf.js');
+  const queue = createRequestQueue();
+  const app = fakeApp();
+  const log = [];
+  pdfRoute.register(queuedRoutes(app, queue), {
+    auth: (req, res, next) => next(), exclusive: (fn) => queue.run(fn), istDateStamp: () => 'd', logError: () => {},
+    readPdfQuery: () => ({ part: 'full', theme: 'light', range: {} }),
+    overviewPdfHtml: () => { log.push('pdf page built'); return ''; },
+    host: { pdf: { render: async () => new Uint8Array(1) } },
+  });
+  const ahead = queue.run(async () => { log.push('write starts'); await tick(); await tick(); log.push('write ends'); });
+  await Promise.all([ahead, app.handler('GET', '/api/overview/pdf')({ query: {} }, fakeRes(), () => {})]);
+  assert.deepStrictEqual(log, ['write starts', 'write ends', 'pdf page built']);
+  assert.throws(() => pdfRoute.register(fakeApp(), { auth: () => {}, host: {} }), /ctx\.exclusive/);
+});
