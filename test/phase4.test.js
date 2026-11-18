@@ -25,11 +25,11 @@ test('Part C1 — owed stays NEGATIVE in computeOverview; the PDF prints "Overpa
 // ---- Part C2 — summary composition (scheduled/catch-up) vs full (manual) ----
 // The 'summary' part is not offered by the PDF route on either platform (it was for the retired
 // scheduled report), so this checks server.js's builder directly, on both test passes.
-test('Part C2 — summary PDF omits the transactions table but keeps the ledger rollup; full keeps it', () => {
+test('Part C2 — summary PDF omits the transactions table but keeps the ledger rollup; full keeps it', async () => {
   H.seedContract({ pricePaise: 2500000 });
   for (let i = 0; i < 5; i++) H.seedCashOut({ amountPaise: 100000, ledgerCode: '4.0', subledgerCode: '4.2' });
-  const summary = H.app._overviewPdfHtml({ part: 'summary', theme: 'light', range: { start: null, end: null } });
-  const full = H.app._overviewPdfHtml({ part: 'full', theme: 'light', range: { start: null, end: null } });
+  const summary = await H.app._overviewPdfHtml({ part: 'summary', theme: 'light', range: { start: null, end: null } });
+  const full = await H.app._overviewPdfHtml({ part: 'full', theme: 'light', range: { start: null, end: null } });
   assert.doesNotMatch(summary, /<h2>Transactions<\/h2>/, 'summary has NO transactions table');
   assert.match(summary, /Spending by Ledger/, 'summary keeps the ledger rollup + pie');
   assert.match(full, /<h2>Transactions<\/h2>/, 'the manual full export keeps the transactions table');

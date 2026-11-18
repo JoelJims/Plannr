@@ -57,7 +57,7 @@ export function register(app, ctx) {
       if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the import did not go through.'), snapshot });
       return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
     }
-    ledgerIndex.refresh(); // a v2 backup may have brought its own categories
+    await ledgerIndex.refresh(); // a v2 backup may have brought its own categories
 
     res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
   });

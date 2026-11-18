@@ -41,12 +41,12 @@ let server = null, base = null;
 function startApp() {
   if (shim) return shim.start().then(() => ({ base: '', server: null }));
   if (base) return Promise.resolve({ base, server });
-  return new Promise((resolve) => {
+  return app._ready.then(() => new Promise((resolve) => { // the ledger list is read first (step 1.4 B10)
     server = app.listen(0, '127.0.0.1', () => {
       base = `http://127.0.0.1:${server.address().port}`;
       resolve({ base, server });
     });
-  });
+  }));
 }
 async function stopApp() {
   // Close a Playwright PDF browser that a GET /overview may have warmed — its open handles would

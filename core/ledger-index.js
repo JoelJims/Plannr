@@ -5,18 +5,28 @@
 // The list is user-editable (CSV import on the Data Backup page) and a v2 backup restore can bring
 // its own, so it is rebuilt on demand rather than frozen once at load. Read list() and byCode() at
 // call time: refresh() replaces both after a category import or a restore.
+//
+// Step 1.4 B10: refresh() reads through the async database interface, so it returns a Promise and
+// the index starts empty. Each backend runs the first refresh() as its request queue's first job
+// (server.js, public/local-api.js), so no request can read the index before it is filled. Reading
+// it before that first refresh() finished is a start-up bug, and throws rather than answering with
+// no categories.
 
 export function createLedgerIndex(repo) {
-  let list = [];
-  let byCode = new Map();
-  function refresh() {
-    list = repo.ledgers.list();
-    byCode = new Map(list.map((l) => [l.code, l]));
+  let list = null;
+  let byCode = null;
+  const filled = (v) => {
+    if (v === null) throw new Error('ledgerIndex: read before its first refresh() finished (see core/ledger-index.js).');
+    return v;
+  };
+  async function refresh() {
+    const next = await repo.ledgers.list();
+    list = next;
+    byCode = new Map(next.map((l) => [l.code, l]));
   }
-  refresh();
   return {
-    list: () => list,     // every ledger, in display order
-    byCode: () => byCode, // Map: ledger code -> ledger
+    list: () => filled(list),     // every ledger, in display order
+    byCode: () => filled(byCode), // Map: ledger code -> ledger
     refresh,
   };
 }

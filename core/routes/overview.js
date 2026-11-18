@@ -25,7 +25,8 @@ export function register(app, ctx) {
   //   Every spend transaction counts in the ledger rollup regardless of who paid or of
   //   contract scope: cash_out AND contractor_payments both contribute; a contractor
   //   payment with no ledger tag rolls up under Custom / Uncategorized.
-  function computeOverview(range) {
+  // Async (step 1.4 B10): it reads through the async database interface.
+  async function computeOverview(range) {
     const start = (range && range.start) || null;
     const end = (range && range.end) || null;
     const bounded = !!(start || end);              // any bound set -> range mode (dateless rows drop out)
@@ -36,7 +37,7 @@ export function register(app, ctx) {
     // the cumulative 'included' scan that fed the offset (and its missing-offset check) is gone too.
 
     // Live contract (single, Phase 5D). area_of_work + headline ledger label the owed row.
-    const contractRows = repo.overview.contracts();
+    const contractRows = await repo.overview.contracts();
     const liveContractIds = new Set(contractRows.map((c) => c.id));
 
     // paid grouped by contract_id (cumulative) — ONE aggregate feeds three things: the owed balance
@@ -45,7 +46,7 @@ export function register(app, ctx) {
     const paidByContract = new Map();
     let cumulativePaid = 0;
     const orphan = { count: 0, amountPaise: 0, contractIds: [] };
-    for (const g of repo.overview.paidByContract()) {
+    for (const g of await repo.overview.paidByContract()) {
       paidByContract.set(g.contract_id, g.s);
       cumulativePaid += g.s;
       if (!liveContractIds.has(g.contract_id)) { orphan.count += g.c; orphan.amountPaise += g.s; orphan.contractIds.push(g.contract_id); }
@@ -108,8 +109,8 @@ export function register(app, ctx) {
 
     // Phase 6C — RANGE-SCOPED row fetches: the range is pushed into SQL (partial index on tx_date/
     // pay_date), so only the in-range rows are transferred. These feed C, B and the pie ONLY.
-    const outs = bounded ? repo.overview.outsRange(lo, hi) : repo.overview.outsAll();
-    const payments = bounded ? repo.overview.paymentsRange(lo, hi) : repo.overview.paymentsAll();
+    const outs = await (bounded ? repo.overview.outsRange(lo, hi) : repo.overview.outsAll());
+    const payments = await (bounded ? repo.overview.paymentsRange(lo, hi) : repo.overview.paymentsAll());
     for (const r of outs) {
       spentBySelf += r.amount_paise; // C (range)
       rollup(r.by_type, r.ledger_code, r.subledger_code, r.subledger_custom_name, r.amount_paise);
@@ -119,7 +120,7 @@ export function register(app, ctx) {
       rollup('other', p.ledger_code || CUSTOM_CODE, p.subledger_code, p.subledger_custom_name, p.amount_paise);
     }
 
-    const loanReceived = repo.overview.loansSum().s; // E (cumulative)
+    const loanReceived = (await repo.overview.loansSum()).s; // E (cumulative)
     const totalSpent = paidToContractors + spentBySelf; // D = B + C (range)
 
     const ledgers = [...ledMap.values()]
@@ -178,7 +179,7 @@ export function register(app, ctx) {
     }
 
     return {
-      budgetPaise: getBudgetPaise(),
+      budgetPaise: await getBudgetPaise(),
       ledgers,
       // Money model (A–F). A/E/F are cumulative; B/C/D reflect the selected date range.
       money: {
@@ -190,7 +191,7 @@ export function register(app, ctx) {
         owedToContractorsPaise: owedToContractors, // F = stated − Σ paid (cumulative)
       },
       contracts, // per-contract: { id, contractorName, statedPaise, paidPaise, owedPaise }
-      upcomingPayments: computeUpcomingPayments(), // Part C — scheduled dates forward + soft overdue
+      upcomingPayments: await computeUpcomingPayments(), // Part C — scheduled dates forward + soft overdue
       // Phase 4D + 5E — reconciliation status (additive, backward-compatible; the frontend may
       // surface it later). ok=false means the summary doesn't self-reconcile. Every sub-object is a
       // flag over data reported AS-IS — nothing here adjusts a figure.
@@ -214,13 +215,13 @@ export function register(app, ctx) {
     const [yb, mb, db2] = toIso.split('-').map(Number);
     return Math.round((Date.UTC(yb, mb - 1, db2) - Date.UTC(ya, ma - 1, da)) / 86400000);
   }
-  function computeUpcomingPayments() {
+  async function computeUpcomingPayments() {
     const today = istDateStamp();
     const out = [];
-    for (const c of repo.contract.list()) { // one live contract, but the loop is correct either way
-      for (const d of repo.contract.payDatesFor(c.id)) {
+    for (const c of await repo.contract.list()) { // one live contract, but the loop is correct either way
+      for (const d of await repo.contract.payDatesFor(c.id)) {
         const daysRemaining = daysBetweenIso(today, d);
-        const paidOnDate = repo.contract.paymentOnDate(c.id, d);
+        const paidOnDate = await repo.contract.paymentOnDate(c.id, d);
         out.push({ date: d, daysRemaining, paidOnDate, possiblyOverdue: daysRemaining < 0 && !paidOnDate });
       }
     }
@@ -229,13 +230,13 @@ export function register(app, ctx) {
   }
 
   // Optional inclusive date range via ?start=&end= (ISO 'YYYY-MM-DD'); blank/absent = all.
-  app.get('/api/overview', auth, (req, res) => {
+  app.get('/api/overview', auth, async (req, res) => {
     const s = parseIsoDate(req.query.start);
     if (s.error) return res.status(400).json({ error: 'Invalid start date (YYYY-MM-DD).' });
     const e = parseIsoDate(req.query.end);
     if (e.error) return res.status(400).json({ error: 'Invalid end date (YYYY-MM-DD).' });
     if (s.date && e.date && s.date > e.date) return res.status(400).json({ error: 'Start date must be on or before the end date.' });
-    res.json(computeOverview({ start: s.date, end: e.date }));
+    res.json(await computeOverview({ start: s.date, end: e.date }));
   });
 
   return { computeOverview };

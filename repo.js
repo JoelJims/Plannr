@@ -17,7 +17,15 @@
 // open, would throw the moment any statement below tries to `db.prepare(...)` against a not-yet-open
 // connection.
 
-import { db, rollbackQuietly } from './db.js';
+import { db, dbAdapter, transaction } from './db.js';
+import { statementOn } from './core/db-adapter.js';
+
+// Step 1.4 B10-B12: repo.js moves to the async database interface (core/db-adapter.js), one group of
+// statements per part. S(sql) looks like a prepared statement (get/all/run with positional params),
+// but every call returns a Promise, so every caller awaits it. The adapter prepares each SQL text on
+// first use and keeps it; it also resolves the connection at call time, so these need no open
+// database at import. Converted so far (B10): overview, ledgerCustoms, ledgers, authoredCount.
+const S = (sql) => statementOn(dbAdapter(), sql);
 
 // ── generic CRUD (used by makeLedgerCrud) ────────────────────────────────────────────────────────
 // config: { table, select, listWhere, byIdWhere, columns, alias } — alias is the table alias used in
@@ -104,20 +112,21 @@ const ov = {
   // The 'included'-debit cumulative scan that fed the Phase 5E reimbursement offset (and its
   // missing-offset reconciliation check) is gone with the offset itself — nothing reads
   // cash_out.contract_stated_paise any more, so there is no aggregate over it here.
-  contracts: db.prepare(
+  contracts: S(
     `SELECT id, contractor_name, area_of_work, ledger_code, subledger_code, ledger_custom_name, subledger_custom_name, price_of_contract_paise,
             rate_per_sqft_paise, measured_area_milli_sqft
        FROM contract WHERE deleted_at IS NULL ORDER BY id ASC`
   ),
-  paidByContract: db.prepare('SELECT contract_id, COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL GROUP BY contract_id'),
-  outsAll: db.prepare(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL`),
-  outsRange: db.prepare(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL AND tx_date >= ? AND tx_date <= ?`),
-  paymentsAll: db.prepare(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL`),
-  paymentsRange: db.prepare(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL AND pay_date >= ? AND pay_date <= ?`),
-  loansSum: db.prepare('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM loans WHERE deleted_at IS NULL'),
+  paidByContract: S('SELECT contract_id, COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL GROUP BY contract_id'),
+  outsAll: S(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL`),
+  outsRange: S(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL AND tx_date >= ? AND tx_date <= ?`),
+  paymentsAll: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL`),
+  paymentsRange: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL AND pay_date >= ? AND pay_date <= ?`),
+  loansSum: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM loans WHERE deleted_at IS NULL'),
   // Part B — cash_out logged (created) since the last report's boundary timestamp (created_at is UTC ISO).
-  outsSince: db.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
+  outsSince: S("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
 };
+// Each returns a Promise (step 1.4 B10).
 const overview = {
   contracts: () => ov.contracts.all(),
   paidByContract: () => ov.paidByContract.all(),
@@ -259,14 +268,14 @@ function updateBy(table, id, cols, vals) { return updateStmtFor(table, cols).run
 
 // ── Per-user custom ledger names ──────────────────────────────────────────────────────────────────
 const lcStmt = {
-  list: db.prepare('SELECT name FROM ledger_customs ORDER BY name COLLATE NOCASE ASC'),
-  save: db.prepare('INSERT OR IGNORE INTO ledger_customs (name) VALUES (?)'),
+  list: S('SELECT name FROM ledger_customs ORDER BY name COLLATE NOCASE ASC'),
+  save: S('INSERT OR IGNORE INTO ledger_customs (name) VALUES (?)'),
   // Part 4 (Phase 11B): prune a name from the pick-list. Denormalised — cash_out rows keep their
   // stored ledger_custom_name copy, so this only shrinks the autocomplete list, never rewrites past debits.
-  remove: db.prepare('DELETE FROM ledger_customs WHERE name = ?'),
+  remove: S('DELETE FROM ledger_customs WHERE name = ?'),
 };
-const ledgerCustoms = {
-  list: () => lcStmt.list.all().map((r) => r.name),
+const ledgerCustoms = { // each returns a Promise (step 1.4 B10)
+  list: async () => (await lcStmt.list.all()).map((r) => r.name),
   save: (name) => lcStmt.save.run(name),
   remove: (name) => lcStmt.remove.run(name),
 };
@@ -275,12 +284,8 @@ const ledgerCustoms = {
 // `code` IS the identity (no separate internal id); a rename keeps the same code so historical
 // cash_out/contract/contractor_payments rows never orphan. ────────────────────────────────────────
 const ledgerStmt = {
-  mains: db.prepare('SELECT code, name FROM ledger_mains ORDER BY sort_order ASC'),
-  allSubs: db.prepare('SELECT code, main_code AS mainCode, name FROM ledger_subs ORDER BY sort_order ASC'),
-  deleteMains: db.prepare('DELETE FROM ledger_mains'),
-  deleteSubs: db.prepare('DELETE FROM ledger_subs'),
-  insMain: db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)'),
-  insSub: db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)'),
+  mains: S('SELECT code, name FROM ledger_mains ORDER BY sort_order ASC'),
+  allSubs: S('SELECT code, main_code AS mainCode, name FROM ledger_subs ORDER BY sort_order ASC'),
 };
 
 const MAIN_CODE_RE = /^\d+\.0$/;
@@ -291,9 +296,9 @@ const LEDGER_CSV_HEADER = ['Code', 'Main ledger', 'Sub-code', 'Sub-ledger'];
 // travels with the file itself, not just the in-app copy on Data Backup.
 const LEDGER_CSV_NOTE = '# Do not edit the Code / Sub-code column — it is the permanent identity Plannr matches rows by. Only the Main ledger / Sub-ledger name text may be changed.';
 
-function ledgerList() {
-  const subs = ledgerStmt.allSubs.all();
-  return ledgerStmt.mains.all().map((m) => ({
+async function ledgerList() {
+  const subs = await ledgerStmt.allSubs.all();
+  return (await ledgerStmt.mains.all()).map((m) => ({
     code: m.code, name: m.name,
     subLedgers: subs.filter((s) => s.mainCode === m.code).map((s) => ({ code: s.code, name: s.name })),
   }));
@@ -303,31 +308,27 @@ function ledgerList() {
 // counting EVERY row, not just live ones: a soft-deleted row can be restored later, so its stored
 // code still has to resolve to something real. contract_services has no ledger_code column at all,
 // so it is not part of this check.
-function ledgerUsageCounts(codes) {
+async function ledgerUsageCounts(codes) {
   const counts = {};
   if (!codes.length) return counts;
   const placeholders = codes.map(() => '?').join(',');
   for (const table of ['cash_out', 'contract', 'contractor_payments']) {
     for (const col of ['ledger_code', 'subledger_code']) {
-      const rows = db.prepare(`SELECT ${col} AS code, COUNT(*) AS n FROM ${table} WHERE ${col} IN (${placeholders}) GROUP BY ${col}`).all(...codes);
+      const rows = await dbAdapter().all(`SELECT ${col} AS code, COUNT(*) AS n FROM ${table} WHERE ${col} IN (${placeholders}) GROUP BY ${col}`, codes);
       for (const r of rows) counts[r.code] = (counts[r.code] || 0) + r.n;
     }
   }
   return counts;
 }
 
+// One transaction (db.js transaction(): any error rolls the whole list back and is passed on).
 function ledgerReplaceAll(mains, subs) {
-  db.exec('BEGIN');
-  try {
-    ledgerStmt.deleteSubs.run();
-    ledgerStmt.deleteMains.run();
-    mains.forEach((m, i) => ledgerStmt.insMain.run(m.code, m.name, i));
-    subs.forEach((s, i) => ledgerStmt.insSub.run(s.code, s.mainCode, s.name, i));
-    db.exec('COMMIT');
-  } catch (e) {
-    rollbackQuietly(db);
-    throw e;
-  }
+  return transaction(async (tx) => {
+    await tx.run('DELETE FROM ledger_subs');
+    await tx.run('DELETE FROM ledger_mains');
+    for (const [i, m] of mains.entries()) await tx.run('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)', [m.code, m.name, i]);
+    for (const [i, s] of subs.entries()) await tx.run('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)', [s.code, s.mainCode, s.name, i]);
+  });
 }
 
 function ledgerToCsv(list) {
@@ -362,9 +363,10 @@ function parseLedgerCsv(text) {
 }
 
 // Validates a full Ledger List CSV against every rule in Phase 10b's spec and returns either
-// { ok:true, mains, subs } (ready for ledgerReplaceAll) or { ok:false, error, rowErrors }. The
-// WHOLE file is rejected on any failure — this never does a partial import.
-function validateLedgerCsv(csvText) {
+// { ok:true, mains, subs } (ready for ledgerReplaceAll) or { ok:false, error, rowErrors }, as a
+// Promise (it reads the codes in use). The WHOLE file is rejected on any failure — this never does a
+// partial import.
+async function validateLedgerCsv(csvText) {
   let rows;
   try { rows = parseLedgerCsv(csvText); } catch (e) { return { ok: false, error: 'Could not parse the file as CSV: ' + e.message, rowErrors: [] }; }
   if (!rows.length) return { ok: false, error: 'The file is empty.', rowErrors: [] };
@@ -423,10 +425,10 @@ function validateLedgerCsv(csvText) {
 
   // The critical check: a code missing from the new file must not still be in use.
   const newCodes = new Set([...mains.map((m) => m.code), ...subs.map((s) => s.code)]);
-  const oldCodes = [...ledgerStmt.mains.all().map((m) => m.code), ...ledgerStmt.allSubs.all().map((s) => s.code)];
+  const oldCodes = [...(await ledgerStmt.mains.all()).map((m) => m.code), ...(await ledgerStmt.allSubs.all()).map((s) => s.code)];
   const removedCodes = oldCodes.filter((c) => !newCodes.has(c));
   if (removedCodes.length) {
-    const counts = ledgerUsageCounts(removedCodes);
+    const counts = await ledgerUsageCounts(removedCodes);
     const stillUsed = removedCodes.filter((c) => counts[c] > 0).map((c) => ({ code: c, rows: counts[c] }));
     if (stillUsed.length) {
       return {
@@ -440,6 +442,8 @@ function validateLedgerCsv(csvText) {
   return { ok: true, mains, subs };
 }
 
+// list, usageCounts, replaceAll and validateImport return Promises (step 1.4 B10); toCsv does not
+// touch the database.
 const ledgers = {
   list: ledgerList,
   usageCounts: ledgerUsageCounts,
@@ -450,10 +454,10 @@ const ledgers = {
 
 // ── delete-account: rows the user authored ────────────────────────────────────────────────────────
 const authoredStmt = {
-  cashIn: db.prepare('SELECT COUNT(*) AS n FROM cash_in WHERE by_user_id = ?'),
-  cashOut: db.prepare('SELECT COUNT(*) AS n FROM cash_out WHERE by_user_id = ?'),
+  cashIn: S('SELECT COUNT(*) AS n FROM cash_in WHERE by_user_id = ?'),
+  cashOut: S('SELECT COUNT(*) AS n FROM cash_out WHERE by_user_id = ?'),
 };
-const authoredCount = (userId) => authoredStmt.cashIn.get(userId).n + authoredStmt.cashOut.get(userId).n;
+const authoredCount = async (userId) => (await authoredStmt.cashIn.get(userId)).n + (await authoredStmt.cashOut.get(userId)).n;
 
 // ── Backup export / teardown / insert ─────────────────────────────────────────────────────────────
 // Tables come from a fixed server-side allowlist (BACKUP_TABLES); statements are cached by table (and

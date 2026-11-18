@@ -48,7 +48,13 @@ if (mode === 'server') {
   }
   const repo = await import('./repo.js');
   const { installFetchShim } = await import('./local-api.js');
-  installFetchShim(repo);
+  const shim = installFetchShim(repo);
+  try {
+    await shim.ready; // the ledger list's first read (step 1.4 B10)
+  } catch (e) {
+    showStartupError(e);
+    throw e;
+  }
   console.log('[local-bootstrap] local-only mode: fetch shim installed, no network requests will be made for /api/*.');
 }
 

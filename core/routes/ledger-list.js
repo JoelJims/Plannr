@@ -21,33 +21,33 @@ export function register(app, ctx) {
   // encrypted backup is sequenced by the page, which must call POST /api/backup/export-encrypted and
   // have it succeed before it calls this route: a real design choice for a single-user app, not
   // enforced here.
-  app.post('/api/ledgers/csv', auth, (req, res) => {
+  app.post('/api/ledgers/csv', auth, async (req, res) => {
     const csvText = typeof req.body.csv === 'string' ? req.body.csv : '';
     if (!csvText.trim()) return res.status(400).json({ error: 'No CSV content received.' });
-    const v = repo.ledgers.validateImport(csvText);
+    const v = await repo.ledgers.validateImport(csvText);
     if (!v.ok) return res.status(400).json({ error: v.error, rowErrors: v.rowErrors });
     try {
-      repo.ledgers.replaceAll(v.mains, v.subs);
+      await repo.ledgers.replaceAll(v.mains, v.subs);
     } catch (e) {
       if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the ledger list was not saved.') });
       return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
     }
-    ledgerIndex.refresh();
+    await ledgerIndex.refresh();
     res.json({ ok: true, ledgers: ledgerIndex.list() });
   });
 
   // The saved custom LEDGER names, for the debit form's pick-list. Names are saved on first use
   // (cash_out's afterWrite). The 24 built-ins live in ledger_mains/ledger_subs, not here.
-  app.get('/api/ledger-customs', auth, (req, res) => {
-    res.json({ customs: repo.ledgerCustoms.list() });
+  app.get('/api/ledger-customs', auth, async (req, res) => {
+    res.json({ customs: await repo.ledgerCustoms.list() });
   });
   // Remove a saved custom name (a typo like "Cemnt" used to be stuck in the list forever). Name in
   // ?name= so any characters survive encoding. Removing an absent name is a no-op 200. Past debits
   // keep their stored ledger_custom_name: this prunes the pick-list only, never rewrites history.
-  app.delete('/api/ledger-customs', auth, (req, res) => {
+  app.delete('/api/ledger-customs', auth, async (req, res) => {
     const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
     if (!name) return res.status(400).json({ error: 'Which name? Pass it as ?name=…' });
-    repo.ledgerCustoms.remove(name);
-    res.json({ ok: true, customs: repo.ledgerCustoms.list() });
+    await repo.ledgerCustoms.remove(name);
+    res.json({ ok: true, customs: await repo.ledgerCustoms.list() });
   });
 }

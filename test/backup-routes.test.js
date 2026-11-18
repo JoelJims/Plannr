@@ -33,6 +33,8 @@ test('export: the dev server names the download with the export date', { skip: H
 async function coreApp({ writeJson }) {
   const core = await imp('core/routes/backup.js');
   const { createLedgerIndex } = await imp('core/ledger-index.js');
+  const ledgerIndex = createLedgerIndex(repo);
+  await ledgerIndex.refresh();
   const routes = {};
   const logged = [];
   const auth = () => {};
@@ -47,7 +49,7 @@ async function coreApp({ writeJson }) {
     auth, db: H.db, host: { snapshot: { writeJson }, now: () => new Date() },
     logError: (...args) => logged.push(args.map(String).join(' ')),
     isStorageFullError, storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
-    ledgerIndex: createLedgerIndex(repo), CUSTOM_CODE: 'CUSTOM',
+    ledgerIndex, CUSTOM_CODE: 'CUSTOM',
   });
   const call = async (key, { body, query } = {}) => {
     const res = {

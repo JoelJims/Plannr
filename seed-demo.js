@@ -13,8 +13,9 @@ const { db, initSync } = require('./db');
 initSync(); // step 1.4 B4: synchronous until B17
 // Phase 10b: the taxonomy is DB-backed now (seeded from ledgers.js on first run, but potentially
 // edited since) — read the live table, not the seed file, so a demo re-seed reflects reality.
+// Read in main() below: the list comes through the async interface (step 1.4 B10).
 const { ledgers: repoLedgers } = require('./repo');
-const LEDGERS = repoLedgers.list();
+let LEDGERS = [];
 
 // ---- deterministic RNG (LCG) — no Math.random, so seed:demo reproduces exactly ----
 let _s = 20260803;
@@ -89,6 +90,8 @@ if (!owner) owner = { id: Number(db.prepare('INSERT INTO users (username, displa
 const ownerId = owner.id;
 
 db.exec('BEGIN');
+async function main() {
+LEDGERS = await repoLedgers.list();
 try {
   // ---- contract ~₹25,00,000 ----
   const contractId = Number(db.prepare(
@@ -188,3 +191,5 @@ try {
   console.error('[seed] FAILED, rolled back —', e);
   process.exit(1);
 }
+}
+main().catch((e) => { console.error('[seed] FAILED —', e); process.exit(1); });

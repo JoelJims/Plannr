@@ -133,6 +133,10 @@ export function installFetchShim(repo) {
   // dev server runs too). coreContext is what they need from the phone's side.
   // The ledger list (categories), kept in memory and refreshed after an import or a restore.
   const ledgerIndex = createLedgerIndex(repo);
+  // Its first read is the queue's first job (step 1.4 B10), so no request runs before the list is in
+  // memory. local-bootstrap.js awaits it and shows a start-up error if it fails.
+  const ready = requestQueue.run(() => ledgerIndex.refresh());
+  ready.catch(() => {}); // reported where it is awaited
   // The platform services the core may call (core/host.js, step 1.4 A4): the phone's. The PDF goes
   // through the print-adapter plugin (renderPdfOnPhone, below); the safety copy before a JSON
   // restore goes into the app's private folder (safety-snapshots.js).
@@ -379,5 +383,5 @@ export function installFetchShim(repo) {
   };
 
   // For the tests (test/shim-target.js, test/request-queue-wiring.test.js); local-bootstrap.js does not use it.
-  return { requestQueue, routes };
+  return { requestQueue, routes, ready };
 }

@@ -97,6 +97,7 @@ async function start() {
   const repo = await import(pathToFileURL(path.join(PUB, 'repo.js')).href);
   const { installFetchShim } = await import(pathToFileURL(path.join(PUB, 'local-api.js')).href);
   installed = installFetchShim(repo);
+  await installed.ready; // the ledger list's first read, as local-bootstrap.js awaits it (step 1.4 B10)
   shimFetch = globalThis.window.fetch;
 }
 

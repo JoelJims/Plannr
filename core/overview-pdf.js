@@ -196,10 +196,10 @@ export function createOverviewPdf(ctx) {
   }
 
   // The PDF's HTML: the Overview figures for the range, and the cash-out rows dated in it.
-  function overviewPdfHtml({ part, theme, range }) {
-    const o = computeOverview(range);
+  async function overviewPdfHtml({ part, theme, range }) {
+    const o = await computeOverview(range);
     const inR = (d) => { if (!range.start && !range.end) return true; if (d == null) return false; if (range.start && d < range.start) return false; if (range.end && d > range.end) return false; return true; };
-    const rows = LEDGER_CRUDS.cash_out.list().map(cashOutRow).filter((r) => inR(r.txDate));
+    const rows = (await LEDGER_CRUDS.cash_out.list()).map(cashOutRow).filter((r) => inR(r.txDate));
     return buildOverviewPdfHtml(part, o, rows, range, theme);
   }
 

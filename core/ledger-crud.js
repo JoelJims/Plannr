@@ -20,7 +20,8 @@ export function createLedgerCrud(app, ctx) {
     // ALL SQL for this table is built by repo.crud. Handlers never touch the raw table.
     //  · finalize(values, { req, id, existing }): after validate, before the write; may change values
     //    and/or return { error, status } to reject (e.g. the one-service-one-offset 409 guard).
-    //  · afterWrite(values, { req, id }): after a successful create/edit (e.g. save a custom name).
+    //  · afterWrite(values, { req, id }): after a successful create/edit (e.g. save a custom name);
+    //    awaited (step 1.4 B10: it may write through the async interface).
     //  · auditField: when an EDIT changes this raw column (by_user_id), log old -> new.
     const rc = repo.crud({ table, select, listWhere, byIdWhere, columns, alias: alias || '', searchCols: opts.searchCols || null });
     LEDGER_CRUDS[table] = rc;
@@ -38,16 +39,16 @@ export function createLedgerCrud(app, ctx) {
       res.json({ [listKey]: rc.list().map(shape) });
     });
 
-    app.post(basePath, auth, (req, res) => {
+    app.post(basePath, auth, async (req, res) => {
       const v = validate(req);
       if (v.error) return res.status(400).json({ error: v.error });
       if (finalize) { const f = finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
       const info = rc.insert(orderedVals(v.values));
-      if (afterWrite) afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
+      if (afterWrite) await afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
       res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(info.lastInsertRowid)) });
     });
 
-    app.put(`${basePath}/:id`, auth, (req, res) => {
+    app.put(`${basePath}/:id`, auth, async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || !rc.existsLive(id)) return res.status(404).json({ error: notFoundMsg });
       // The existing row, for the audit old value and finalize's `existing`.
@@ -58,7 +59,7 @@ export function createLedgerCrud(app, ctx) {
       if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
       if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
       rc.update(id, orderedVals(v.values));
-      if (afterWrite) afterWrite(v.values, { req, id });
+      if (afterWrite) await afterWrite(v.values, { req, id });
       res.json({ ok: true, [itemKey]: shape(rc.getById(id)) });
     });
 
@@ -76,7 +77,7 @@ export function createLedgerCrud(app, ctx) {
     // attribution audit line logs per changed by_user_id, and a stored NULL by_user_id round-trips
     // through validate(oldVal).
     if (opts.batch) {
-      app.post(`${basePath}/batch`, auth, (req, res) => {
+      app.post(`${basePath}/batch`, auth, async (req, res) => {
         const rows = req.body && Array.isArray(req.body.rows) ? req.body.rows : null;
         if (!rows) return res.status(400).json({ error: 'Expected a { rows: [...] } array.' });
         if (rows.length > BATCH_MAX_ROWS) return res.status(413).json({ error: `Too many rows in one save (${rows.length}); the maximum is ${BATCH_MAX_ROWS}. Save in smaller batches.` });
@@ -111,7 +112,7 @@ export function createLedgerCrud(app, ctx) {
         // 3) Audit each attribution change and shape the saved rows.
         for (const w of toWrite) {
           if (auditField && w.oldVal !== w.values[auditField]) console.warn(`[audit] ${table} id=${w.id}: ${auditField} ${w.oldVal} -> ${w.values[auditField]} (attribution changed on edit)`);
-          if (afterWrite) afterWrite(w.values, { req, id: w.id });
+          if (afterWrite) await afterWrite(w.values, { req, id: w.id });
           results[w.i] = { id: w.id, ok: true, [itemKey]: shape(rc.getById(w.id)) };
         }
         res.json({ results, saved: toWrite.length, failed: rows.length - toWrite.length });

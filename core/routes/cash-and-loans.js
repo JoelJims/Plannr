@@ -273,9 +273,9 @@ export function register(app, ctx) {
   // Services phase (Part E) — remember a typed custom LEDGER name in the caller's per-user list, so it is
   // selectable next time. INSERT OR IGNORE keys on idx_ledger_customs_tenant_name (no duplicates). Called
   // via afterWrite only when the row actually uses a custom ledger; a built-in ledger saves nothing.
-  const saveLedgerCustom = (values) => {
+  const saveLedgerCustom = async (values) => {
     if (values.ledger_code === CUSTOM_CODE && values.ledger_custom_name && values.ledger_custom_name.trim()) {
-      repo.ledgerCustoms.save(values.ledger_custom_name.trim());
+      await repo.ledgerCustoms.save(values.ledger_custom_name.trim());
     }
   };
 

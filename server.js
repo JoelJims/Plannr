@@ -164,6 +164,10 @@ const host = checkHost({
 // and stay on `app`. The phone (public/local-api.js) does the same.
 const requestQueue = createRequestQueue();
 const api = queuedRoutes(app, requestQueue);
+// The ledger list's first read (step 1.4 B10: through the async interface) is the queue's first job,
+// so no request can run before the list is in memory. app._ready is this; the start below waits for it.
+const ledgerIndexReady = requestQueue.run(() => ledgerIndex.refresh());
+ledgerIndexReady.catch(() => {}); // reported where it is awaited (the start below, the tests)
 const coreContext = {
   db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
   host,
@@ -590,6 +594,7 @@ app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: 
 app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview warm Playwright; teardown closes it
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?
 app._requestQueue = requestQueue; // step 1.4 B5: tests hold it to check every /api route waits its turn
+app._ready = ledgerIndexReady; // step 1.4 B10: settles once the ledger list is read (the queue's first job)
 app._accessGate = accessGate; // Phase 1 safety: LAN/Host gate, unit-tested with fake requests
 app._accessConfig = accessConfig;
 app._watchStopSentinel = watchStopSentinel; // Phase 11B: test that a sentinel file routes into the same stop callback as SIGINT
@@ -636,9 +641,14 @@ if (require.main === module) {
   const lanIp = Object.values(os.networkInterfaces()).flat()
     .find((i) => i && (i.family === 'IPv4' || i.family === 4) && !i.internal)?.address;
 
-  app.listen(PORT, access.host, () => {
-    console.log('DEV MODE – not used by the phone app');
-    console.log(`Plannr desktop dev server running at http://localhost:${PORT} (the Android app keeps its own data and never talks to this server).`);
-    if (access.lan && lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}/?token=<your PLANNR_TOKEN>  (open once per device)`);
+  ledgerIndexReady.then(() => {
+    app.listen(PORT, access.host, () => {
+      console.log('DEV MODE – not used by the phone app');
+      console.log(`Plannr desktop dev server running at http://localhost:${PORT} (the Android app keeps its own data and never talks to this server).`);
+      if (access.lan && lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}/?token=<your PLANNR_TOKEN>  (open once per device)`);
+    });
+  }, (e) => {
+    console.error('[startup] could not read the ledger list:', e);
+    process.exit(1);
   });
 }

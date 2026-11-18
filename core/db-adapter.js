@@ -131,3 +131,14 @@ export function createSyncEngineAdapter(platform) {
   };
   return adapter;
 }
+
+// One SQL text on an adapter, in the shape of a prepared statement: get/all/run(...params), each
+// returning a Promise. For code written against prepare() (repo.js, step 1.4 B10-B12), so a call
+// site keeps its shape and only gains an await. The adapter prepares each SQL text once and keeps it.
+export function statementOn(adapter, sql) {
+  return {
+    get: (...params) => adapter.get(sql, params),
+    all: (...params) => adapter.all(sql, params),
+    run: (...params) => adapter.run(sql, params),
+  };
+}

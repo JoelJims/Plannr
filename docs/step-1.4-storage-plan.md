@@ -929,3 +929,28 @@ choices made on the way are in the session report's DECISIONS list.
   - **Full suite:** all passes. `npm test` 476 tests, 0 failures, the same 3 skipped; the phone pass
     187 of 204 (the 2 new tests pass there too), the same 17 known differences; 13 UI suites;
     `test:slow`.
+- **B10 (2026-11-18): `repo.js` starts on the async interface** (overview, ledger list, custom
+  ledger names, `authoredCount`).
+  - `core/db-adapter.js` gains `statementOn(adapter, sql)`: one SQL text with `get/all/run(...params)`
+    returning Promises, so `repo.js` keeps its statement objects and each caller only gains an
+    `await`. The adapter prepares each text once; it also finds the connection at call time, so
+    converted statements need no open database at import.
+  - `ledgers.replaceAll` uses `db.js` `transaction()` instead of its own `BEGIN`/`COMMIT`.
+  - **The ledger index** (`core/ledger-index.js`) now reads through the interface, so its
+    `refresh()` returns a Promise. Each backend runs the first `refresh()` as its request queue's
+    first job, so no request can read the list before it is filled. Reading it before then throws
+    instead of answering with no categories. `server.js` starts listening only after it (`app._ready`);
+    the phone's start awaits it and shows the start-up error if it fails.
+  - Callers now await: the ledger-list and custom-name routes, the backup import's refresh,
+    `computeOverview` and the upcoming payments (async), the Overview PDF's page builder,
+    `saveLedgerCustom`, and `afterWrite` in `core/ledger-crud.js`. `seed-demo.js` reads the list in
+    an async `main()` (checked on a scratch database).
+  - **Tests:** new `test/repo-async.test.js` (3): every converted function returns a Promise; a
+    `replaceAll` that fails on its last row leaves the list as it was; the index cannot be read
+    before its first refresh.
+  - **Known positives:** an un-awaited loan total in the Overview; an un-awaited custom-name list;
+    `replaceAll` without its transaction; the index starting as an empty list; the server not
+    queueing the first refresh. All 5 caught.
+  - **Full suite:** all passes. `npm test` 479 tests, 0 failures, the same 3 skipped; the phone pass
+    190 of 207 (the 3 new tests pass there too), the same 17 known differences; 13 UI suites;
+    `test:slow`.
