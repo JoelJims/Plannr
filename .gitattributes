@@ -6,3 +6,5 @@ test/fixtures/backup-kat/*.plbk binary
 # for byte as made (never convert line endings).
 test/fixtures/schema-history/*.sql -text
 test/fixtures/schema-history/runner-0e7b70b/* -text
+# Legacy-shape fixtures (step 1.4 B6): checked by sha256 too.
+test/fixtures/legacy-shapes/*.sql -text

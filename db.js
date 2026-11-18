@@ -847,17 +847,15 @@ function* legacyInit() {
     if (!coCols.includes('subpart')) yield q.exec('ALTER TABLE cash_out ADD COLUMN subpart TEXT');
   }
 
-  // ---- step 1.4 B5 converted every call above this line; B6 starts here ----
-
   // Idempotent migration (Phase 1): cash_out gains tx_date — the user-chosen
   // transaction date, ISO 'YYYY-MM-DD'. New writes REQUIRE it. Existing rows are
   // backfilled from their created_at calendar date so no live row is left dateless
   // (a valid, sensible date rather than NULL). Run LAST so a table rebuilt above
   // (old phase_custom_name shape) also picks up the column. No data is altered.
-  const coDateCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const coDateCols = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   if (!coDateCols.includes('tx_date')) {
-    db.exec('ALTER TABLE cash_out ADD COLUMN tx_date TEXT');
-    db.exec("UPDATE cash_out SET tx_date = date(created_at) WHERE tx_date IS NULL");
+    yield q.exec('ALTER TABLE cash_out ADD COLUMN tx_date TEXT');
+    yield q.exec("UPDATE cash_out SET tx_date = date(created_at) WHERE tx_date IS NULL");
   }
 
   // Idempotent migration (Phase 4C): cash_in gains tx_date — inflows were undateable before. Same
@@ -865,10 +863,10 @@ function* legacyInit() {
   // PRAGMA foreign_keys toggling is needed), then backfill existing rows from date(created_at) so no
   // live row is left dateless. Guarded on the column's absence, so it no-ops on fresh installs (whose
   // CREATE already has it) and on a second boot. New writes REQUIRE tx_date (validated in server.js).
-  const ciDateCols = db.prepare('PRAGMA table_info(cash_in)').all().map((c) => c.name);
+  const ciDateCols = (yield q.all('PRAGMA table_info(cash_in)')).map((c) => c.name);
   if (!ciDateCols.includes('tx_date')) {
-    db.exec('ALTER TABLE cash_in ADD COLUMN tx_date TEXT');
-    db.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL");
+    yield q.exec('ALTER TABLE cash_in ADD COLUMN tx_date TEXT');
+    yield q.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL");
   }
 
   // -------------------------------------------------------------------------
@@ -883,7 +881,7 @@ function* legacyInit() {
   // every reboot and DROP the new column. The unambiguous OLD-shape signal is `contract_service_id
   // present AND contract_stated_paise ABSENT` (the whole point of 5B was to ADD contract_stated_paise;
   // if it's already there, 5B has run). The new shape has BOTH columns, so this stays false for it.
-  const coColsP5 = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const coColsP5 = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   if (coColsP5.includes('contract_service_id') && !coColsP5.includes('contract_stated_paise')) {
     // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, restore AFTER
     // COMMIT, and read it back to prove enforcement is actually off (Phase 4B's trap).
@@ -892,16 +890,16 @@ function* legacyInit() {
     // current max were ever created and deleted (e.g. the live DB has seq=17 with max id 11). Left
     // unfixed, new rows would REUSE deleted ids 12..17. Capture the old high-water mark and restore
     // it after the swap so the next insert always lands strictly past the highest id ever used.
-    const oldSeqRow = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'cash_out'").get();
+    const oldSeqRow = yield q.get("SELECT seq FROM sqlite_sequence WHERE name = 'cash_out'");
     const oldSeq = oldSeqRow ? oldSeqRow.seq : null;
-    db.exec('PRAGMA foreign_keys = OFF');
-    const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+    yield q.exec('PRAGMA foreign_keys = OFF');
+    const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
     if (fkOff !== 0) throw new Error(`cash_out rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-    db.exec('BEGIN');
+    yield q.exec('BEGIN');
     try {
       // Final shape = the current base CREATE above, minus contract_service_id + units_covered,
       // plus contract_stated_paise. Same column order as the CREATE so fresh == migrated.
-      db.exec(`CREATE TABLE cash_out_p5 (
+      yield q.exec(`CREATE TABLE cash_out_p5 (
         id                    INTEGER PRIMARY KEY AUTOINCREMENT,
         amount_paise          INTEGER NOT NULL,
         tx_date               TEXT,
@@ -924,7 +922,7 @@ function* legacyInit() {
       // Explicit column lists (never SELECT *). Copy id explicitly to preserve row ids (1–11).
       // contract_service_id + units_covered are simply not selected (dropped); contract_stated_paise
       // starts NULL. phase + subpart carried through unchanged (deliberately dormant — not swept here).
-      db.exec(`INSERT INTO cash_out_p5
+      yield q.exec(`INSERT INTO cash_out_p5
         (id, amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code,
          ledger_custom_name, subledger_custom_name, reason, contract_scope, contract_stated_paise,
          phase, subpart, created_at, updated_at, deleted_at)
@@ -932,29 +930,29 @@ function* legacyInit() {
                ledger_custom_name, subledger_custom_name, reason, contract_scope, NULL,
                phase, subpart, created_at, updated_at, deleted_at
           FROM cash_out`);
-      db.exec('DROP TABLE cash_out');
-      db.exec('ALTER TABLE cash_out_p5 RENAME TO cash_out');
+      yield q.exec('DROP TABLE cash_out');
+      yield q.exec('ALTER TABLE cash_out_p5 RENAME TO cash_out');
       // Restore the AUTOINCREMENT high-water mark (see note above) so ids are never reused.
-      db.exec("DELETE FROM sqlite_sequence WHERE name = 'cash_out'");
-      if (oldSeq != null) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('cash_out', ?)").run(oldSeq);
-      db.exec('COMMIT');
+      yield q.exec("DELETE FROM sqlite_sequence WHERE name = 'cash_out'");
+      if (oldSeq != null) yield q.run("INSERT INTO sqlite_sequence (name, seq) VALUES ('cash_out', ?)", [oldSeq]);
+      yield q.exec('COMMIT');
     } catch (e) {
-      rollbackQuietly(db);
-      db.exec('PRAGMA foreign_keys = ON');
+      yield* rollbackQuietlyCalls();
+      yield q.exec('PRAGMA foreign_keys = ON');
       throw e;
     }
-    db.exec('PRAGMA foreign_keys = ON');
+    yield q.exec('PRAGMA foreign_keys = ON');
     // The dropped table took its indexes with it. Recreate the ledger one; NOT
     // idx_cash_out_contract_service_id (column gone) and NOT idx_cash_out_deleted_at (Phase 6C
     // dropped it as counter-productive). The tx_date partial index is (re)created at init end.
     // (sqlite_sequence was restored to its pre-rebuild high-water mark inside the transaction above.)
-    db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code ON cash_out(ledger_code)');
-    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code ON cash_out(ledger_code)');
+    const fkViol = yield q.all('PRAGMA foreign_key_check');
     if (fkViol.length) throw new Error('cash_out rebuild: foreign_key_check found ' + JSON.stringify(fkViol));
   } else if (!coColsP5.includes('contract_stated_paise')) {
     // Already lost the dead columns (e.g. a phase_custom_name-era DB rebuilt above) but predates
     // contract_stated_paise — just add the nullable column. No data altered.
-    db.exec('ALTER TABLE cash_out ADD COLUMN contract_stated_paise INTEGER');
+    yield q.exec('ALTER TABLE cash_out ADD COLUMN contract_stated_paise INTEGER');
   }
 
   // -------------------------------------------------------------------------
@@ -962,7 +960,9 @@ function* legacyInit() {
   // contract_services (new shape), so the unconditional drop is GONE; the conditional old-shape drop
   // moved ABOVE the ledger CREATE block (see "Services phase — contract_services RETURNS"). The old
   // child index drop is kept (harmless if it lingers on an ancient DB).
-  db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+  yield q.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+
+  // ---- step 1.4 B5-B6 converted every call above this line; B7 starts here ----
 
   // ===========================================================================
   // Tenancy Phase 2 (Part A) — add the tenant dimension. SCHEMA + BACKFILL ONLY: no read/write

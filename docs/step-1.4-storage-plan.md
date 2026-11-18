@@ -822,3 +822,51 @@ is awaited.** Before it: B4 and its fix were already saved as
 - **Not done in B5:** no emulator check (the phone code ran in Node and in Chromium only); the
   other 140 calls (B6–B9).
 - **Stopped after B5**, as asked. Nothing pushed.
+
+**Finishing step 1.4 (from 2026-11-18, working on my own, after your written go-ahead).** The
+choices made on the way are in the session report's DECISIONS list.
+
+- **Before:** the full suite at 28f4927 passed (`npm test` 456 tests, 0 failures, 3 skipped; the
+  phone pass 185 of 202, the same 17 known differences; 13 UI suites; `npm run test:slow`).
+- **1a, the B4 tests again:** `migration-equivalence`, `migration-faults`, `upgrade-retry` and
+  `db-init-async` are already permanent; run on their own: 31 of 31 pass, and `test:slow` 2 of 2.
+  No new code was needed.
+- **1b, emulator `plannr-test`, B5 over the B4 build (12a5c42, the build last on it):**
+  - the B4 build was filled with the made-up full dataset plus 373 writes through the app's own API
+    (13 tables, 590 rows); then the B5 build (28f4927) was installed over it;
+  - every row, AUTOINCREMENT counter and user_version 2 unchanged; no upgrade snapshot; every
+    Overview figure the same;
+  - save, edit, delete, Recycle Bin and restore work; an encrypted export, then a restore with a
+    cash-in sent during it: the restore ran first, the cash-in after it, and the cash-in was kept;
+    still there after a restart; all 9 pages open;
+  - the only console message is Capacitor's own "Error injecting safe area CSS", when a script
+    switches pages very fast (its SystemBars plugin; not Plannr code).
+- **B6 (2026-11-18): 25 more calls awaited**, from the `tx_date` columns to the Phase 5B
+  `cash_out` rebuild (the counter restore, the foreign-key check, `contract_stated_paise`) and the
+  old services index. The marker line moved down. 65 of 180 done.
+  - **A gap found first.** Undoing two of these calls on purpose (the `cash_in` `tx_date` backfill;
+    the `cash_out` counter restore) failed no test: the 8 schema-history fixtures all start at
+    user_version 1 or 2, so they never reach the parts of `legacyInit()` written for older
+    databases. A coverage run listed them: the `tx_date` backfills, the phase/subpart and Phase 5B
+    rebuilds, adding `tenant_id` (by ALTER and by rebuild), the settings rebuild, the custom-name
+    backfill, the owner row on an old database, and the approvals read from settings.
+  - **New fixtures, `test/fixtures/legacy-shapes/`:** three made-up databases at user_version 0,
+    built by `make-legacy-shapes.js` from schema-history fixture 01 (stored as SQL with a checksum;
+    the dump is checked to load back to the same database):
+    - `L1-pre-tenancy.sql`: before tenancy, `tx_date` and Phase 5B (`cash_out` keeps
+      `contract_service_id` and `units_covered`); loans empty; old settings shape; the taxonomy move
+      already done;
+    - `L2-phase-custom.sql`: the old text phase/subpart design with the custom names; the service
+      price drop approved in settings;
+    - `L3-no-users.sql`: L1 with no users, before the taxonomy move, both approvals in settings (so
+      the `cash_out` wipe runs).
+  - With them, every pre-v1 branch runs except the "cannot happen" throws.
+  - **`test/migration-legacy-shapes.test.js`** (`npm test`, 12 tests, about 20 s): each shape,
+    with and without the approvals, through the old runner (0e7b70b), `await init()` and
+    `initSync()`: the same outcome, the same writes in the same order, the same database, the
+    snapshot is the database before. What each branch did is read back from the result (dates
+    backfilled, every `cash_out` row, id and counter kept, the phase/subpart mapping, the owner row,
+    the approved wipe, the refusal leaving the version unstamped). Then every COMMIT of each
+    approved upgrade is made to fail in turn: the three runners give the same error, writes and
+    database, and the file is sound.
+  - **Known positives:** the two undone calls above now fail 6 tests each.

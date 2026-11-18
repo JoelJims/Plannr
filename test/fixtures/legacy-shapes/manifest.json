@@ -1,0 +1,74 @@
+{
+  "note": "Made by make-legacy-shapes.js. sha256 is of each file's exact bytes. Made-up shapes from before user_version 1; see the script.",
+  "shapes": [
+    {
+      "file": "L1-pre-tenancy.sql",
+      "from": "01-7cfcf89.sql",
+      "userVersion": 0,
+      "approvedInSettings": false,
+      "what": "user_version 0, before tenancy, before Phase 1 and 4C (no tx_date), before Phase 5B (cash_out keeps the old contract_service_id and units_covered, no contract_stated_paise); loans empty, every other tenant table has rows; settings rows; an empty Services-era ledger_customs",
+      "sha256": "b72d6826e7a29e55e96895e5a415f646eb7df0411dac3f2292a364e992a790a7",
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "edit_locks": 1,
+        "ledger_customs": 0,
+        "loans": 0,
+        "sessions": 1,
+        "settings": 3,
+        "sqlite_sequence": 9,
+        "users": 2
+      }
+    },
+    {
+      "file": "L2-phase-custom.sql",
+      "from": "01-7cfcf89.sql",
+      "userVersion": 0,
+      "approvedInSettings": true,
+      "what": "user_version 0, before tenancy, cash_out in the old phase/subpart design (text values, 'CUSTOM' sentinels, phase_custom_name / subpart_custom_name), without the services link; cash_in already dated; taxonomy already moved and the service price drop approved in settings",
+      "sha256": "cd8487bebd818f1f7111143f64c1e06d36720a689f27752dab1f0c3729bbaa68",
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 3,
+        "contractor_payments": 4,
+        "edit_locks": 1,
+        "ledger_customs": 0,
+        "loans": 2,
+        "sessions": 1,
+        "settings": 4,
+        "sqlite_sequence": 9,
+        "users": 2
+      }
+    },
+    {
+      "file": "L3-no-users.sql",
+      "from": "01-7cfcf89.sql",
+      "userVersion": 0,
+      "approvedInSettings": true,
+      "what": "L1 with no users, sessions or edit locks (by_user_id cleared): the owner row is added to an old database before the tenant backfill; before the taxonomy move, with both one-off approvals stored as settings (so the cash_out wipe runs)",
+      "sha256": "1b45eb00e3a027e26af1628bdd4189c9a82b4fc1b6e5c61541972ebf569fe301",
+      "tables": {
+        "cash_in": 6,
+        "cash_out": 10,
+        "contract": 2,
+        "contract_payment_dates": 3,
+        "contract_services": 0,
+        "contractor_payments": 4,
+        "edit_locks": 0,
+        "ledger_customs": 0,
+        "loans": 0,
+        "sessions": 0,
+        "settings": 4,
+        "sqlite_sequence": 9,
+        "users": 0
+      }
+    }
+  ]
+}
