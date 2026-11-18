@@ -1,8 +1,10 @@
-// Step 1.4 B6: test databases in the shapes from BEFORE user_version 1, which legacyInit() still
+// Step 1.4 B6 (L4 added in B8): test databases in the shapes from BEFORE user_version 1, which legacyInit() still
 // upgrades but which no db.js in this repository's history ever built (the schema-history fixtures
 // start at user_version 1). Without them, legacyInit()'s oldest branches (the tx_date backfills, the
 // Phase 5B and phase/subpart rebuilds, the tenant_id additions, the settings rebuild, the custom-name
-// backfill, the owner row on an old database) are never run by any test.
+// backfill, the owner row on an old database) are never run by any test. L4 is fixture 01 itself
+// with a second household's rows, so the Step 2a collapse has rows to remove (none of the
+// schema-history fixtures has any).
 //
 // These shapes are MADE UP from the oldest schema-history fixture (01-7cfcf89.sql): each table is
 // rebuilt in the older form that legacyInit() checks for, keeping every row, id and AUTOINCREMENT
@@ -102,7 +104,48 @@ const SHAPES = [
       d.exec("INSERT INTO settings (key, value) VALUES ('_taxonomy_wipe_approved', '1'), ('_service_price_drop_approved', '1')");
     },
   },
+  {
+    file: 'L4-two-households.sql',
+    userVersion: 1,
+    approvedInSettings: false,
+    what: "user_version 1 with tenant_id everywhere (fixture 01 as it is) plus a second household: the second user owns a copy of one row in each tenant table except contract_payment_dates (its own live contract) and two settings rows, one under a key the first household also has. The Step 2a collapse keeps only the first household's rows",
+    make(d) { twoHouseholds(d, { paymentDate: false }); },
+  },
+  {
+    file: 'L5-two-households-cascade.sql',
+    userVersion: 1,
+    approvedInSettings: false,
+    refusesFirstStart: 'contract_payment_dates',
+    what: "L4, and the second household's contract has a payment date. Removing that contract removes the date too (ON DELETE CASCADE), which Step 2a's row-count guard does not count: the first start refuses before stamping the version, and the next start finishes",
+    make(d) { twoHouseholds(d, { paymentDate: true }); },
+  },
 ];
+
+// L4 and L5: fixture 01 plus a second household's rows.
+function twoHouseholds(d, { paymentDate }) {
+  const [u1, u2] = d.prepare('SELECT id FROM users ORDER BY id').all().map((u) => u.id);
+  if (u2 == null) throw new Error('the source fixture needs two users');
+  // Copy the first household's first row of `table` to the second household; `set` overrides
+  // columns with SQL expressions. Rows that point elsewhere keep pointing at the first household's
+  // rows, so removing the second household's rows breaks no reference.
+  const copy = (table, set = {}) => {
+    const cols = d.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name).filter((c) => c !== 'id');
+    const sel = cols.map((c) => (c === 'tenant_id' ? String(u2) : c in set ? set[c] : c)).join(', ');
+    const r = d.prepare(`INSERT INTO ${table} (${cols.join(', ')}) SELECT ${sel} FROM ${table} WHERE tenant_id = ${u1} ORDER BY id LIMIT 1`).run();
+    if (!r.changes) throw new Error(`${table}: no first-household row to copy`);
+    return Number(r.lastInsertRowid);
+  };
+  const c2 = copy('contract', { deleted_at: 'NULL' });
+  if (paymentDate) copy('contract_payment_dates', { contract_id: String(c2) }); // goes with its contract (ON DELETE CASCADE)
+  copy('contractor_payments');
+  copy('contract_services');
+  copy('cash_in'); copy('cash_in');
+  copy('cash_out', { contract_service_id: 'NULL' }); // a service can back only one live debit
+  copy('loans');
+  copy('ledger_customs', { name: "'Second household custom'" });
+  d.exec(`INSERT INTO settings (tenant_id, key, value) SELECT ${u2}, key, 'second household' FROM settings WHERE tenant_id = ${u1} ORDER BY key LIMIT 1`);
+  d.exec(`INSERT INTO settings (tenant_id, key, value) VALUES (${u2}, 'second_household_only', '1')`);
+}
 
 function build() {
   const entries = [];
@@ -113,7 +156,7 @@ function build() {
     d.exec('PRAGMA legacy_alter_table = ON'); // a rename must not rewrite other tables' references to it
     d.exec('BEGIN');
     s.make(d);
-    d.exec('PRAGMA user_version = 0');
+    d.exec(`PRAGMA user_version = ${s.userVersion ?? 0}`);
     d.exec('COMMIT');
     const fk = d.prepare('PRAGMA foreign_key_check').all();
     if (fk.length) throw new Error(`${s.file}: foreign key problems ${JSON.stringify(fk)}`);
@@ -130,10 +173,10 @@ function build() {
     const tables = Object.fromEntries(d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()
       .map((r) => [r.name, d.prepare(`SELECT COUNT(*) AS n FROM "${r.name}"`).get().n]));
     fs.writeFileSync(path.join(OUT, s.file), sql);
-    entries.push({ file: s.file, from: SOURCE.file, userVersion: 0, approvedInSettings: s.approvedInSettings, what: s.what, sha256: L.sha256(Buffer.from(sql)), tables });
+    entries.push({ file: s.file, from: SOURCE.file, userVersion: s.userVersion ?? 0, approvedInSettings: s.approvedInSettings, ...(s.refusesFirstStart ? { refusesFirstStart: s.refusesFirstStart } : {}), what: s.what, sha256: L.sha256(Buffer.from(sql)), tables });
     d.close(); back.close();
   }
-  fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify({ note: 'Made by make-legacy-shapes.js. sha256 is of each file\'s exact bytes. Made-up shapes from before user_version 1; see the script.', shapes: entries }, null, 2) + '\n');
+  fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify({ note: 'Made by make-legacy-shapes.js. sha256 is of each file\'s exact bytes. Made-up shapes from before user_version 1, and one at 1 with a second household; see the script.', shapes: entries }, null, 2) + '\n');
   for (const e of entries) console.log(`${e.file}: ${Object.entries(e.tables).map(([t, n]) => `${t} ${n}`).join(', ')}`);
 }
 

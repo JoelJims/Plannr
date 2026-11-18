@@ -879,3 +879,31 @@ choices made on the way are in the session report's DECISIONS list.
   - **Known positives** (against `migration-legacy-shapes`): running `addTenantId` without `yield*`
     (10 of 12 fail), dropping the counter restore in the tenant rebuild (8 fail), backfilling custom
     names to the wrong owner (9 fail).
+- **B8 (2026-11-18): 38 more calls awaited**, the Tenancy Step 2a collapse (the purge of other
+  households' rows, the settings and per-table rebuilds dropping `tenant_id`, the index swap, the
+  row-count guard and the foreign-key check). `rebuildDroppingTenant` is a generator run with
+  `yield*`. 156 of 180 done.
+  - **Another gap, closed the same way.** Making the purge count nothing (`deliberatelyRemoved += 0`)
+    failed no test: no fixture had a second household's rows. Two more legacy shapes, built from
+    fixture 01 as it is (user_version 1, `tenant_id` everywhere):
+    - `L4-two-households.sql`: a second user owns a copy of one row in each tenant table and two
+      settings rows (one under a key the first household also has). After the upgrade: exactly the
+      first household's rows, its value for the shared key, and the other key kept.
+    - `L5-two-households-cascade.sql`: L4, and the second household's contract has a payment date.
+  - **Found with L5, not changed (the baseline is frozen):** the purge deletes that contract first,
+    `ON DELETE CASCADE` takes its payment date with it, and the row-count guard does not count the
+    cascade, so the first start refuses ("row-count guard failed for contract_payment_dates")
+    before stamping the version. Nothing beyond the intended removal is lost and the snapshot is
+    kept; the next start finishes. The old runner (0e7b70b) cannot finish that second start: it is
+    the B4 bug (it drops the rebuilt `contract_services`), which the new runners do not have. Only
+    test databases ever had a second household; phone installs were made at v2. The test pins all
+    of this.
+  - `migration-legacy-shapes` is now 18 tests (5 shapes).
+  - **Known positives:** `rebuildDroppingTenant('cash_in')` without `yield*` (12 of 18 fail), the
+    purge counting nothing (4 fail), the counter restore dropped (12 fail), the settings dedupe
+    counted as 0 (2 fail).
+  - **Full suite:** the first run had one failure, a flaky cleanup in `test/runtime-mode.test.js`
+    (Windows refused to delete the test's temp database 300 ms after the spawned server was killed;
+    the test passed alone 3 times out of 3). The cleanup now waits for the process to exit and
+    retries the delete. `npm test` again: 474 tests, 0 failures, the same 3 skipped; phone pass
+    185 of 202, the same 17 known differences. The 13 UI suites and `test:slow` passed in that run.

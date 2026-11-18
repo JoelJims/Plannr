@@ -4,8 +4,9 @@
 // The schema-history fixtures start at user_version 1, so they never reach the parts of legacyInit()
 // written for databases older than that: the tx_date backfills, the Phase 5B and phase/subpart
 // rebuilds, adding tenant_id (by ALTER on an empty table, by rebuild on a full one), the settings
-// rebuild, the custom-name backfill, the owner row on an old database. test/fixtures/legacy-shapes/
-// holds made-up databases in those older shapes (make-legacy-shapes.js). Each is upgraded three ways,
+// rebuild, the custom-name backfill, the owner row on an old database; and no fixture has a second
+// household's rows for the Step 2a collapse to remove (L4, L5). test/fixtures/legacy-shapes/ holds made-up
+// databases in those shapes (make-legacy-shapes.js). Each is upgraded three ways,
 // with and without the approvals, and the three must agree write for write. Then every COMMIT of the
 // upgrade is made to fail in turn (the rollback paths), and the three must still agree: the same
 // error, the same writes, the same database.
@@ -88,16 +89,28 @@ before(async () => {
   }
   await runAll(failJobs);
   for (const j of failJobs) j.c.runs[j.run] = { result: j.out, db: j.db };
+
+  // 3. A shape whose first approved start refuses: start each runner's result again (a copy of its
+  //    folder, so the first start's files stay as they were for the tests above).
+  const againJobs = [];
+  for (const s of SHAPES.filter((x) => x.refusesFirstStart)) for (const r of RUNNERS) {
+    const first = res[`${s.file}|approved|${r}`].db;
+    const dir = path.join(h.tmp, s.file, 'second-start', r);
+    fs.cpSync(path.dirname(first), dir, { recursive: true });
+    againJobs.push({ db: path.join(dir, 'plannr.db'), run: r, approve: true, key: `${s.file}|second start|${r}`, fault: { record: true } });
+  }
+  await runAll(againJobs);
+  for (const j of againJobs) res[j.key] = { result: j.out, db: j.db };
 });
 after(() => h && h.cleanup());
 
-test('the legacy shapes are the files make-legacy-shapes.js wrote, all from before user_version 1', () => {
-  assert.ok(SHAPES.length >= 3);
+test('the legacy shapes are the files make-legacy-shapes.js wrote, all from before user_version 2', () => {
+  assert.ok(SHAPES.length >= 4);
   for (const s of SHAPES) {
     shapeSql(s);
-    assert.strictEqual(s.userVersion, 0);
+    assert.ok(s.userVersion < 2, s.file);
     const d = new DatabaseSync(base(s), { readOnly: true });
-    try { assert.strictEqual(d.prepare('PRAGMA user_version').get().user_version, 0); } finally { d.close(); }
+    try { assert.strictEqual(d.prepare('PRAGMA user_version').get().user_version, s.userVersion); } finally { d.close(); }
   }
 });
 
@@ -114,10 +127,14 @@ for (const s of SHAPES) {
       assert.ok(writes(neu.result).length > 50, `the upgrade wrote (${writes(neu.result).length} writes)`);
       assert.deepStrictEqual(writes(sync.result), writes(neu.result), 'initSync() makes exactly the writes await init() makes');
       assert.deepStrictEqual(writes(neu.result), writes(old.result), 'the same writes as the old init(), in the same order');
-      if (v.approve || s.approvedInSettings) { // L2 and L3 store the approvals they need as settings
+      if ((v.approve || s.approvedInSettings) && !s.refusesFirstStart) { // L2 and L3 store the approvals they need as settings
         assert.ok(old.result.ok, old.result.error);
         assert.strictEqual(want.userVersion, 2);
         assert.deepStrictEqual(L.checks(old.db), { integrity: 'ok', foreignKeyViolations: 0 });
+      }
+      if (v.approve && s.refusesFirstStart) {
+        assert.ok(!old.result.ok && new RegExp(`row-count guard failed for ${s.refusesFirstStart}`).test(old.result.error), old.result.error);
+        assert.strictEqual(want.userVersion, s.userVersion, 'the version is not stamped');
       }
       for (const r of [neu, sync]) for (const snap of H.snapshotsBeside(r.db)) assert.deepStrictEqual(L.fingerprintFile(snap), L.fingerprintFile(base(s)), 'the snapshot is the database before the upgrade');
       assert.strictEqual(H.snapshotsBeside(neu.db).length, 1, 'a snapshot was taken before the upgrade');
@@ -185,6 +202,53 @@ test('L1 without approval: the service price drop is refused, the version is not
       assert.strictEqual(d.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n, b.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n, `${t}: every row kept`);
     }
   } finally { d.close(); b.close(); }
+});
+
+// After the Step 2a collapse: exactly the first household's rows; its setting wins a shared key.
+function firstHouseholdOnly(s, file) {
+  const b = new DatabaseSync(base(s), { readOnly: true });
+  const d = new DatabaseSync(file, { readOnly: true });
+  try {
+    const u1 = b.prepare('SELECT MIN(id) AS id FROM users').get().id;
+    const wiped = !b.prepare("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'").get(); // the approved wipe empties cash_out
+    const tables = ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'loans', 'ledger_customs', ...(wiped ? [] : ['cash_out'])];
+    let removed = 0;
+    for (const t of tables) {
+      const want = b.prepare(`SELECT id FROM ${t} WHERE tenant_id = ? ORDER BY id`).all(u1).map((r) => r.id);
+      removed += b.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE tenant_id <> ?`).get(u1).n;
+      assert.deepStrictEqual(d.prepare(`SELECT id FROM ${t} ORDER BY id`).all().map((r) => r.id), want, `${t}: exactly the first household's rows`);
+    }
+    assert.ok(removed >= tables.length - 1, `the fixture had second-household rows to remove (${removed})`);
+    const shared = b.prepare("SELECT key FROM settings WHERE tenant_id <> ? AND key <> 'second_household_only'").get(u1).key;
+    assert.deepStrictEqual({ ...d.prepare('SELECT value FROM settings WHERE key = ?').get(shared) }, { ...b.prepare('SELECT value FROM settings WHERE key = ? AND tenant_id = ?').get(shared, u1) }, `${shared}: the first household's value`);
+    assert.deepStrictEqual({ ...d.prepare("SELECT value FROM settings WHERE key = 'second_household_only'").get() }, { value: '1' }, 'a key only the second household had is kept');
+    assert.ok(!cols(d, 'settings').includes('tenant_id'));
+  } finally { d.close(); b.close(); }
+}
+
+test("L4: the Step 2a collapse keeps exactly the first household's rows; its setting wins a shared key", () => {
+  firstHouseholdOnly(SHAPES.find((x) => x.file.startsWith('L4')), res[`${shapeFile('L4')}|approved|init`].db);
+});
+
+// The old runner is no reference for the second start: before the B4 fix it took the already
+// rebuilt contract_services for the pre-Services one and dropped it (docs/step-1.4-storage-plan.md,
+// B4 "Found by the failure tests"), which then fails the cash_out foreign-key check.
+test('L5: the cascade is not counted, so the first start refuses; the next start finishes, the same in await init() and initSync()', () => {
+  const s = SHAPES.find((x) => x.file.startsWith('L5'));
+  const [old, neu, sync] = RUNNERS.map((r) => res[`${s.file}|second start|${r}`]);
+  assert.ok(!old.result.ok && /cash_out tenant rebuild: foreign_key_check found .*contract_services/.test(old.result.error), `the old runner's known pre-B4 failure (${old.result.error})`);
+  for (const r of [neu, sync]) assert.ok(r.result.ok, r.result.error);
+  assert.ok(writes(neu.result).length > 50, `the second start wrote (${writes(neu.result).length} writes)`);
+  assert.deepStrictEqual(writes(sync.result), writes(neu.result), 'initSync() makes exactly the writes await init() makes');
+  const want = L.fingerprintFile(neu.db, { mask: MASK });
+  assert.strictEqual(want.userVersion, 2);
+  assert.deepStrictEqual(L.fingerprintFile(sync.db, { mask: MASK }), want, 'the same database');
+  assert.deepStrictEqual(L.checks(neu.db), { integrity: 'ok', foreignKeyViolations: 0 });
+  firstHouseholdOnly(s, neu.db);
+  const before = JSON.stringify(L.fingerprintFile(base(s)));
+  for (const r of [neu, sync]) {
+    assert.ok(H.snapshotsBeside(r.db).some((f) => JSON.stringify(L.fingerprintFile(f)) === before), 'the snapshot from before the first start is still there');
+  }
 });
 
 test('every COMMIT of each old upgrade, made to fail: the three runners report the same error, make the same writes and leave the same database', () => {

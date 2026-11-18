@@ -87,8 +87,11 @@ test('starting server.js prints the DEV MODE banner', async () => {
     const out = await waitFor(proc, /running at/);
     assert.match(out, /^DEV MODE – not used by the phone app$/m);
   } finally {
-    proc.removeAllListeners('exit'); proc.kill();
-    await new Promise((r) => setTimeout(r, 300));
-    for (const s of ['', '-wal', '-shm', '-journal']) fs.rmSync(dbPath + s, { force: true });
+    proc.removeAllListeners('exit');
+    const exited = proc.exitCode !== null || proc.signalCode !== null ? Promise.resolve() : new Promise((r) => proc.once('exit', r));
+    proc.kill();
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+    // Windows can keep the file locked for a moment after the process ends (EPERM/EBUSY): retry.
+    for (const s of ['', '-wal', '-shm', '-journal']) fs.rmSync(dbPath + s, { force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

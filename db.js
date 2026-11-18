@@ -1162,8 +1162,6 @@ function* legacyInit() {
   // cash_out rebuilds above can't drop it and contract_service_id is guaranteed to exist by now.
   yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
 
-  // ---- step 1.4 B5-B7 converted every call above this line; B8 starts here ----
-
   // ===========================================================================
   // Tenancy Phase 2, Step 2a — SCHEMA-ONLY collapse back to a single tenant. The app is becoming a
   // single-user offline Android install: exactly one users row will ever exist, so tenant_id (added
@@ -1186,7 +1184,7 @@ function* legacyInit() {
     const GUARD_TABLES = ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs', 'settings'];
     const countsBefore = {};
     const deliberatelyRemoved = {};
-    for (const t of GUARD_TABLES) { countsBefore[t] = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n; deliberatelyRemoved[t] = 0; }
+    for (const t of GUARD_TABLES) { countsBefore[t] = (yield q.get(`SELECT COUNT(*) AS n FROM ${t}`)).n; deliberatelyRemoved[t] = 0; }
 
     // The one real tenant: the lowest users.id (same "household head" convention Tenancy Phase 2
     // used above; `chosenTenant` is that same computed value, still in scope). Any OTHER tenant_id
@@ -1198,9 +1196,9 @@ function* legacyInit() {
       // nothing retrofits tenant_id onto them if it's already absent; skip a table here if it
       // doesn't currently have the column, rather than assume every gated table always does.
       for (const t of ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs']) {
-        const hasTenantCol = db.prepare(`PRAGMA table_info(${t})`).all().some((c) => c.name === 'tenant_id');
+        const hasTenantCol = (yield q.all(`PRAGMA table_info(${t})`)).some((c) => c.name === 'tenant_id');
         if (!hasTenantCol) continue;
-        const info = db.prepare(`DELETE FROM ${t} WHERE tenant_id <> ?`).run(chosenTenant);
+        const info = yield q.run(`DELETE FROM ${t} WHERE tenant_id <> ?`, [chosenTenant]);
         deliberatelyRemoved[t] += info.changes;
       }
     }
@@ -1209,34 +1207,34 @@ function* legacyInit() {
     // still exists under more than one tenant (shouldn't happen after the delete above unless a row
     // for that key never belonged to chosenTenant to begin with), keep the lowest tenant_id's row.
     {
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`settings de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
-        db.exec('CREATE TABLE settings__detenant_rebuild (key TEXT NOT NULL PRIMARY KEY, value TEXT)');
-        const insInfo = db.prepare(`
+        yield q.exec('CREATE TABLE settings__detenant_rebuild (key TEXT NOT NULL PRIMARY KEY, value TEXT)');
+        const insInfo = yield q.run(`
           INSERT INTO settings__detenant_rebuild (key, value)
           SELECT s.key, s.value FROM settings s
           WHERE s.tenant_id = (SELECT MIN(tenant_id) FROM settings WHERE key = s.key)
-        `).run();
+        `);
         deliberatelyRemoved.settings = countsBefore.settings - insInfo.changes;
-        db.exec('DROP TABLE settings');
-        db.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
-        db.exec('COMMIT');
+        yield q.exec('DROP TABLE settings');
+        yield q.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
+        yield q.exec('COMMIT');
       } catch (e) {
-        rollbackQuietly(db);
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
+      yield q.exec('PRAGMA foreign_keys = ON');
     }
 
     // Part 2 — contract: collapse the per-tenant single-live invariant to a database-wide one. If
     // more than one live contract still exists across tenants (shouldn't happen after the delete
     // above, since idx_contract_single_live_tenant already capped each tenant at one), keep the
     // lowest users.id's and soft-delete the rest — never a silent hard-delete of a live row.
-    db.exec(`
+    yield q.exec(`
       UPDATE contract SET deleted_at = datetime('now')
       WHERE deleted_at IS NULL
         AND tenant_id <> (SELECT MIN(tenant_id) FROM contract WHERE deleted_at IS NULL)
@@ -1246,7 +1244,7 @@ function* legacyInit() {
     // tenant_id — this becomes a flat pick-list once the tenant dimension is gone, so ties break on
     // row age, not on ownership).
     {
-      const dedupInfo = db.prepare('DELETE FROM ledger_customs WHERE id NOT IN (SELECT MIN(id) FROM ledger_customs GROUP BY name)').run();
+      const dedupInfo = yield q.run('DELETE FROM ledger_customs WHERE id NOT IN (SELECT MIN(id) FROM ledger_customs GROUP BY name)');
       deliberatelyRemoved.ledger_customs += dedupInfo.changes;
     }
 
@@ -1255,34 +1253,35 @@ function* legacyInit() {
     // reused), and replaying each table's OWN indexes afterward — skipping any that reference
     // tenant_id (the two that do, idx_contract_single_live_tenant and idx_ledger_customs_tenant_name,
     // are replaced with their tenant-free equivalents in Part 5, not replayed here).
-    const rebuildDroppingTenant = (table, bodySql, keptCols) => {
-      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+    // A generator (run with yield*), so its database calls go through the same runner.
+    const rebuildDroppingTenant = function* (table, bodySql, keptCols) {
+      const seqRow = yield q.get('SELECT seq FROM sqlite_sequence WHERE name = ?', [table]);
       const oldSeq = seqRow ? seqRow.seq : null;
-      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table);
+      const idxDdls = yield q.all("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL", [table]);
       const tmp = `${table}__detenant_rebuild`;
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`${table} de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
-        db.exec(`CREATE TABLE ${tmp} (${bodySql})`);
+        yield q.exec(`CREATE TABLE ${tmp} (${bodySql})`);
         const colList = keptCols.join(', ');
-        db.exec(`INSERT INTO ${tmp} (${colList}) SELECT ${colList} FROM ${table}`);
-        db.exec(`DROP TABLE ${table}`);
-        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
-        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
-        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
-        db.exec('COMMIT');
+        yield q.exec(`INSERT INTO ${tmp} (${colList}) SELECT ${colList} FROM ${table}`);
+        yield q.exec(`DROP TABLE ${table}`);
+        yield q.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        yield q.run('DELETE FROM sqlite_sequence WHERE name = ?', [table]);
+        if (oldSeq != null) yield q.run('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)', [table, oldSeq]);
+        yield q.exec('COMMIT');
       } catch (e) {
-        rollbackQuietly(db);
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
-      for (const idx of idxDdls) { if (!/tenant_id/i.test(idx.sql)) db.exec(idx.sql); }
+      yield q.exec('PRAGMA foreign_keys = ON');
+      for (const idx of idxDdls) { if (!/tenant_id/i.test(idx.sql)) yield q.exec(idx.sql); }
     };
 
-    rebuildDroppingTenant('contract', `
+    yield* rebuildDroppingTenant('contract', `
       id                      INTEGER PRIMARY KEY AUTOINCREMENT,
       contractor_name         TEXT,
       area_of_work            TEXT,
@@ -1302,14 +1301,14 @@ function* legacyInit() {
         'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date',
         'date_signed', 'created_at', 'updated_at', 'deleted_at', 'company']);
 
-    rebuildDroppingTenant('contract_payment_dates', `
+    yield* rebuildDroppingTenant('contract_payment_dates', `
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
       pay_date    TEXT    NOT NULL,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     `, ['id', 'contract_id', 'pay_date', 'created_at']);
 
-    rebuildDroppingTenant('contractor_payments', `
+    yield* rebuildDroppingTenant('contractor_payments', `
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id           INTEGER NOT NULL REFERENCES contract(id),
       pay_date              TEXT    NOT NULL,
@@ -1334,8 +1333,8 @@ function* legacyInit() {
     // fresh install (the CREATE above has no such column), or a silent loss of the old prices before
     // A3 gets the chance to archive them. So: copy the column when it is there, skip it when it is
     // not. Either way A3 removes it a few hundred lines below, with its own data-loss guard.
-    const csHasPrice = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'price_paise');
-    rebuildDroppingTenant('contract_services', `
+    const csHasPrice = (yield q.all('PRAGMA table_info(contract_services)')).some((c) => c.name === 'price_paise');
+    yield* rebuildDroppingTenant('contract_services', `
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
       name        TEXT    NOT NULL,${csHasPrice ? '\n      price_paise INTEGER,' : ''}
@@ -1344,7 +1343,7 @@ function* legacyInit() {
       deleted_at  TEXT
     `, ['id', 'contract_id', 'name', ...(csHasPrice ? ['price_paise'] : []), 'created_at', 'updated_at', 'deleted_at']);
 
-    rebuildDroppingTenant('cash_in', `
+    yield* rebuildDroppingTenant('cash_in', `
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise INTEGER NOT NULL,
       tx_date      TEXT,
@@ -1358,7 +1357,7 @@ function* legacyInit() {
     `, ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason',
         'created_at', 'updated_at', 'deleted_at']);
 
-    rebuildDroppingTenant('cash_out', `
+    yield* rebuildDroppingTenant('cash_out', `
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise          INTEGER NOT NULL,
       tx_date               TEXT,
@@ -1383,7 +1382,7 @@ function* legacyInit() {
         'contract_stated_paise', 'phase', 'subpart', 'created_at', 'updated_at', 'deleted_at',
         'contract_service_id']);
 
-    rebuildDroppingTenant('loans', `
+    yield* rebuildDroppingTenant('loans', `
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise  INTEGER,
       bank_name     TEXT,
@@ -1394,7 +1393,7 @@ function* legacyInit() {
       deleted_at    TEXT
     `, ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at']);
 
-    rebuildDroppingTenant('ledger_customs', `
+    yield* rebuildDroppingTenant('ledger_customs', `
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       name       TEXT    NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1407,9 +1406,9 @@ function* legacyInit() {
     // replaced, by a plain unique index on name. (The table rebuilds above already dropped both
     // along with their tables via DROP TABLE; the explicit DROP INDEX here is just defensive in case
     // either survives on an unusual DB.)
-    db.exec('DROP INDEX IF EXISTS idx_contract_single_live_tenant');
-    db.exec('DROP INDEX IF EXISTS idx_ledger_customs_tenant_name');
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_name ON ledger_customs(name)');
+    yield q.exec('DROP INDEX IF EXISTS idx_contract_single_live_tenant');
+    yield q.exec('DROP INDEX IF EXISTS idx_ledger_customs_tenant_name');
+    yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_name ON ledger_customs(name)');
 
     // Part 6 — row-count guard. A create-copy-swap that silently drops (or duplicates) a row is the
     // failure mode this migration most needs to catch. `deliberatelyRemoved` tracks, per table, only
@@ -1419,7 +1418,7 @@ function* legacyInit() {
     // stricter than "no more than expected", so it also catches an unexpected UNDER-removal, not
     // only silent loss during the rebuilds.
     for (const t of GUARD_TABLES) {
-      const after = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+      const after = (yield q.get(`SELECT COUNT(*) AS n FROM ${t}`)).n;
       const expected = countsBefore[t] - deliberatelyRemoved[t];
       if (after !== expected) {
         throw new Error(`Tenancy collapse (Step 2a): row-count guard failed for ${t} — before=${countsBefore[t]}, deliberately removed=${deliberatelyRemoved[t]}, expected after=${expected}, found ${after}. Refusing to stamp the migration as complete.`);
@@ -1429,9 +1428,11 @@ function* legacyInit() {
     // Part 7 — integrity check before this migration is allowed to be marked done (user_version is
     // stamped unconditionally at the end of init(), so a throw here leaves it at 0 and the whole
     // chain retries next boot).
-    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    const fkViol = yield q.all('PRAGMA foreign_key_check');
     if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
   }
+
+  // ---- step 1.4 B5-B8 converted every call above this line; B9 starts here ----
 
   // ===========================================================================================
   // Contract Phase A — the contract becomes a fixed unit-rate lump sum.
