@@ -23,11 +23,14 @@ forward. There is no server to fix it later.
 - `init()` is async (step 1.4 B4). `server.js`, `reset-db.js` and `seed-demo.js` cannot wait yet and
   call `initSync()` until step B17. `initSync()` refuses a database that still needs a numbered step
   (only `init()` runs those), so a new step makes them fail loudly until then.
-- `legacyInit()` is a generator (step 1.4 B5–B9): each database call in the converted part is
+- `legacyInit()` is a generator (step 1.4 B5–B9): each of its database calls is
   `yield q.get(sql, params)` (or `all`, `run`, `exec`; parameters as an array). `init()` awaits each
-  call through the async interface; `initSync()` makes the same calls at once.
-  `test/migration-equivalence.test.js` checks that both make exactly the old runner's writes, in
-  order. Yield nothing but a `q.*` call (a helper generator goes in with `yield*`). From B17, when
+  call through the async interface; `initSync()` makes the same calls at once. The upgrade plan is
+  made the same way: `planMigrations()` (awaited: `init()` and the phone's start) and
+  `migrationPlan()` (at once: `initSync()` and tests) run one generator.
+  `test/migration-equivalence.test.js` and `test/migration-legacy-shapes.test.js` check that both
+  make exactly the old runner's writes, in order. Yield nothing but a `q.*` call (a helper generator
+  goes in with `yield*`; a callback such as `.filter()` cannot yield, so use a loop). From B17, when
   `initSync()` goes, `yield q.x(` becomes `await tx.x(`.
 - Version 2 is the baseline: everything up to it is the older, hand-gated code in `legacyInit()`.
   Do not add new schema changes there. A v2 database made by an older app can still need some of its

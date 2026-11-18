@@ -108,8 +108,8 @@ export const SCHEMA_VERSION = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length -
 export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').get().user_version;
 
 // Step 1.4 B4: the async database interface (core/db-adapter.js) over a synchronous handle. Since
-// B5, legacyInit() goes through it (below); the parts B6-B9 have not converted yet still use `db`
-// directly, on the same connection. Only get/all/run/exec/transaction work here: exporting, replacing
+// B9, every database call legacyInit() and the upgrade plan make goes through it (below); only the
+// desktop's safety snapshot (VACUUM INTO, Node only) still uses `db` directly. Only get/all/run/exec/transaction work here: exporting, replacing
 // and closing the database stay with each platform until the adapters take over the whole database.
 const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter yet (step 1.4, stage B/C).`); };
 function adapterOver(handle) {
@@ -138,9 +138,10 @@ export function transaction(fn) {
 // data once approved (the taxonomy wipe, the service-price drop). Step 1.4 B4 found that such a
 // database got no safety snapshot first; a missing marker now counts as baseline work.
 const LEGACY_MARKERS = ['_migrated_service_price_removed_v1', '_migrated_ledger_taxonomy_v1', '_migrated_generic_ledger_names_v1'];
-function legacyMarkerMissing(dbh) {
+function* legacyMarkerMissingCalls() {
   try {
-    return LEGACY_MARKERS.some((key) => !dbh.prepare('SELECT 1 FROM settings WHERE key = ?').get(key));
+    for (const key of LEGACY_MARKERS) if (!(yield q.get('SELECT 1 FROM settings WHERE key = ?', [key]))) return true;
+    return false;
   } catch {
     return false; // no settings table: not a Plannr database at v2 (an older one is caught by its version)
   }
@@ -148,15 +149,25 @@ function legacyMarkerMissing(dbh) {
 
 // What init() would do to this database, without changing anything. needsSnapshot: there is existing
 // data and at least one step will run (a brand-new, empty database needs no snapshot).
-export function migrationPlan(dbh = db, list = MIGRATIONS) {
-  const from = schemaVersionOf(dbh);
+// A generator of database calls like legacyInit() (step 1.4 B9), so one copy serves both:
+// planMigrations() awaits them (init(), the phone's start), migrationPlan() makes them at once
+// (initSync() and the tests, until B17).
+function* planCalls(list) {
+  const from = (yield q.get('PRAGMA user_version')).user_version;
   const to = list.length ? list[list.length - 1].version : BASELINE_VERSION;
-  const hasTables = !!dbh.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get();
+  const hasTables = !!(yield q.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"));
   const steps = [];
   if (from < BASELINE_VERSION) steps.push({ version: BASELINE_VERSION, name: 'baseline: historic migrations up to schema v2' });
-  else if (from === BASELINE_VERSION && hasTables && legacyMarkerMissing(dbh)) steps.push({ version: BASELINE_VERSION, name: 'baseline: one-off clean-ups this database has not had yet' });
+  else if (from === BASELINE_VERSION && hasTables && (yield* legacyMarkerMissingCalls())) steps.push({ version: BASELINE_VERSION, name: 'baseline: one-off clean-ups this database has not had yet' });
   for (const m of list) if (m.version > from) steps.push({ version: m.version, name: m.name });
   return { from, to, steps, tooNew: from > to, needsSnapshot: hasTables && steps.length > 0 };
+}
+export function planMigrations(adapter = dbAdapter(), list = MIGRATIONS) {
+  return runAwaited(planCalls(list), adapter);
+}
+// TRANSITION ONLY (removed in B17 with initSync()): the same answer at once, on a synchronous handle.
+export function migrationPlan(dbh = db, list = MIGRATIONS) {
+  return runNow(planCalls(list), dbAdapter(dbh));
 }
 
 // Apply every migration newer than the database's user_version, oldest first, through the async
@@ -265,7 +276,7 @@ function beforeUpgrade(plan, snapshot) {
 // step list (tests only). A refusal or a failed step rejects.
 export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
   if (migrations !== MIGRATIONS) assertMigrationList(migrations);
-  beforeUpgrade(migrationPlan(db, migrations), snapshot);
+  beforeUpgrade(await planMigrations(dbAdapter(), migrations), snapshot);
   await runAwaited(legacyInit(), dbAdapter());
   await runMigrations(dbAdapter(), migrations);
   finishUpgrade();
@@ -1432,8 +1443,6 @@ function* legacyInit() {
     if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
   }
 
-  // ---- step 1.4 B5-B8 converted every call above this line; B9 starts here ----
-
   // ===========================================================================================
   // Contract Phase A — the contract becomes a fixed unit-rate lump sum.
   //
@@ -1450,22 +1459,22 @@ function* legacyInit() {
   // nullable column is always correct and can never drop or overwrite anything. Existing rows get
   // NULL, which is the right value — every one of these fields is optional, and a NULL rate/area
   // just means the contract keeps whatever stated price was typed.
-  const contractColsPA = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  const contractColsPA = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
   for (const [col, type] of [
     ['rate_per_sqft_paise', 'INTEGER'], ['measured_area_milli_sqft', 'INTEGER'],
     ['completion_period_months', 'INTEGER'], ['supervision_rate_pct', 'REAL'],
     ['specified_brands', 'TEXT'], ['excluded_scope', 'TEXT'], ['owner_obligations', 'TEXT'],
   ]) {
-    if (!contractColsPA.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+    if (!contractColsPA.includes(col)) yield q.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
   }
 
   // --- A2. ADDITIVE: the allowance link on cash_out, and its rollup index --------------------
-  const cashOutColsAllow = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
-  if (!cashOutColsAllow.includes('contract_allowance_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_allowance_id INTEGER REFERENCES contract_allowances(id)');
+  const cashOutColsAllow = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
+  if (!cashOutColsAllow.includes('contract_allowance_id')) yield q.exec('ALTER TABLE cash_out ADD COLUMN contract_allowance_id INTEGER REFERENCES contract_allowances(id)');
   // NOT unique, unlike idx_cash_out_service_live. A service is claimed by at most one live debit;
   // an allowance is a CAP that many debits draw against, so uniqueness here would break the
   // feature rather than protect it. Partial + non-null, so an ordinary unlinked debit costs nothing.
-  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
 
   // --- A3. DESTRUCTIVE: drop contract_services.price_paise ------------------------------------
   // A fixed unit-rate lump sum contract prices nothing per service: the schedule of work lists scope items
@@ -1490,12 +1499,12 @@ function* legacyInit() {
   // export, so the figures survive in every future backup even though the column does not — the
   // guard's "export a backup first" advice would otherwise be hollow, since the export's column
   // list no longer mentions price_paise.
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_service_price_removed_v1'").get()) {
-    const svcCols = db.prepare('PRAGMA table_info(contract_services)').all().map((c) => c.name);
+  if (!(yield q.get("SELECT 1 FROM settings WHERE key = '_migrated_service_price_removed_v1'"))) {
+    const svcCols = (yield q.all('PRAGMA table_info(contract_services)')).map((c) => c.name);
     if (svcCols.includes('price_paise')) {
-      const priced = db.prepare('SELECT id, name, price_paise FROM contract_services WHERE price_paise IS NOT NULL ORDER BY id ASC').all();
+      const priced = yield q.all('SELECT id, name, price_paise FROM contract_services WHERE price_paise IS NOT NULL ORDER BY id ASC');
       const approved = (isNode && process.env.PLANNR_ALLOW_SERVICE_PRICE_DROP === '1')
-        || !!db.prepare("SELECT 1 FROM settings WHERE key = '_service_price_drop_approved' AND value = '1'").get();
+        || !!(yield q.get("SELECT 1 FROM settings WHERE key = '_service_price_drop_approved' AND value = '1'"));
       if (priced.length > 0 && !approved) {
         const shown = priced.slice(0, 20).map((r) => `  · ${r.name}: ₹${(r.price_paise / 100).toFixed(2)}`).join('\n');
         const more = priced.length > 20 ? `\n  … and ${priced.length - 20} more` : '';
@@ -1515,14 +1524,13 @@ function* legacyInit() {
         );
       }
       if (priced.length > 0) {
-        db.prepare("INSERT INTO settings (key, value) VALUES ('_archived_service_prices_v1', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-          .run(JSON.stringify(priced));
+        yield q.run("INSERT INTO settings (key, value) VALUES ('_archived_service_prices_v1', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(priced)]);
       }
       // price_paise is in no index and no constraint, so a plain DROP COLUMN is enough — no
       // create-copy-swap rebuild, and nothing else about the table changes.
-      db.exec('ALTER TABLE contract_services DROP COLUMN price_paise');
+      yield q.exec('ALTER TABLE contract_services DROP COLUMN price_paise');
     }
-    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_service_price_removed_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    yield q.exec("INSERT INTO settings (key, value) VALUES ('_migrated_service_price_removed_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Phase 10a — the 23-category ledger taxonomy (public/ledgers.js) was replaced with a fresh
@@ -1549,7 +1557,7 @@ function* legacyInit() {
   // shared "< N" gate would re-fire this one every time they do that, wiping cash_out rows those
   // tests insert for unrelated reasons and need to survive. This migration only cares "has THIS
   // cleanup run yet", independent of whatever the version counter is otherwise made to say.
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'").get()) {
+  if (!(yield q.get("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'"))) {
     // ---- DATA-LOSS GUARD (added after this block silently wiped a real ledger) -------------------
     // The DELETE below removes EVERY cash_out row, and this block is MARKER-gated, not version-gated
     // (see the note above for why). So `user_version` is no warning at all: a database already
@@ -1570,9 +1578,9 @@ function* legacyInit() {
     //
     // Throwing here leaves the marker UNSET, so the refusal is stable and repeats on every boot
     // rather than being a one-shot the user can miss.
-    const doomed = db.prepare('SELECT COUNT(*) n FROM cash_out').get().n;
+    const doomed = (yield q.get('SELECT COUNT(*) n FROM cash_out')).n;
     const approved = (isNode && process.env.PLANNR_ALLOW_TAXONOMY_WIPE === '1')
-      || !!db.prepare("SELECT 1 FROM settings WHERE key = '_taxonomy_wipe_approved' AND value = '1'").get();
+      || !!(yield q.get("SELECT 1 FROM settings WHERE key = '_taxonomy_wipe_approved' AND value = '1'"));
     if (doomed > 0 && !approved) {
       throw new Error(
         `Plannr stopped to protect your data.\n\n`
@@ -1589,10 +1597,10 @@ function* legacyInit() {
       );
     }
     // ---- end guard -------------------------------------------------------------------------------
-    db.exec('DELETE FROM cash_out');
-    db.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
-    db.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
-    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    yield q.exec('DELETE FROM cash_out');
+    yield q.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    yield q.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    yield q.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Generic-taxonomy rename — five seeded sub-ledger LABELS were copied out of one construction
@@ -1612,16 +1620,15 @@ function* legacyInit() {
   // these via the Ledger List CSV round trip is never stomped: a row that no longer reads exactly as
   // seeded is left exactly as the owner left it. Marker-gated, so a later deliberate rename BACK to one
   // of these is not undone on the next boot.
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_generic_ledger_names_v1'").get()) {
-    const rename = db.prepare('UPDATE ledger_subs SET name = ? WHERE code = ? AND name = ?');
+  if (!(yield q.get("SELECT 1 FROM settings WHERE key = '_migrated_generic_ledger_names_v1'"))) {
     for (const [code, from, to] of [
       ['20.1', 'Electricity connection (KSEB)', 'Electricity connection'],
       ['21.1', 'Equipment rental — mixer, JCB', 'Equipment rental — mixer, excavator'],
       ['23.4', 'Plastic waste — Harithakarmasena', 'Plastic waste handover'],
       ['24.2', 'Foundation depth beyond 2.5 ft', 'Additional foundation work'],
       ['24.3', 'Plinth height beyond 1.5 ft', 'Additional plinth work'],
-    ]) rename.run(to, code, from);
-    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_generic_ledger_names_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    ]) yield q.run('UPDATE ledger_subs SET name = ? WHERE code = ? AND name = ?', [to, code, from]);
+    yield q.exec("INSERT INTO settings (key, value) VALUES ('_migrated_generic_ledger_names_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Schema-version marker (Phase 11B) — stamped ONLY here, after every migration above has succeeded,
@@ -1631,7 +1638,7 @@ function* legacyInit() {
   // presence-keyed on purpose — adding an absent column is always correct, so they need no version gate.
   // Phase 2: only ever RAISE the version here — a database already past the baseline (stamped by a
   // later MIGRATIONS step) must never be pulled back to 2, or that step would re-run on every start.
-  if (db.prepare('PRAGMA user_version').get().user_version < BASELINE_VERSION) db.exec(`PRAGMA user_version = ${BASELINE_VERSION}`);
+  if ((yield q.get('PRAGMA user_version')).user_version < BASELINE_VERSION) yield q.exec(`PRAGMA user_version = ${BASELINE_VERSION}`);
 }
 
 // Phase 4a/4c (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which

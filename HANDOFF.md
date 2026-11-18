@@ -287,6 +287,9 @@ going over an allowance is a normal thing to happen, not an error.
   upgrades each one with the old runner, the new `await init()` and `initSync()`, and compares
   the results: schema, user_version and a checksum of every table.
   All three also make the same writes in the same order (step 1.4 B5).
+  `test/migration-legacy-shapes.test.js` does the same for made-up databases in shapes older than
+  any in git history (user_version 0, and 1 with a second household; `test/fixtures/legacy-shapes/`,
+  made by `make-legacy-shapes.js`), which reach the oldest parts of `legacyInit()` (step 1.4 B6, B8).
   `test/migration-faults.test.js` makes each upgrade fail at every write and checks the data is
   unchanged, the safety snapshot is there and the next start finishes. The fixtures are made by
   `node test/fixtures/schema-history/make-fixtures.js` (by hand, from git history; see its

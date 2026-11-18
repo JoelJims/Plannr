@@ -907,3 +907,25 @@ choices made on the way are in the session report's DECISIONS list.
     the test passed alone 3 times out of 3). The cleanup now waits for the process to exit and
     retries the delete. `npm test` again: 474 tests, 0 failures, the same 3 skipped; phone pass
     185 of 202, the same 17 known differences. The 13 UI suites and `test:slow` passed in that run.
+- **B9 (2026-11-18): the rest of `legacyInit()` is awaited** (24 calls: Contract Phase A, the
+  service-price drop, the taxonomy wipe and its guard, the generic-name renames, the version stamp).
+  The `rename` statement prepared once and run five times became five `yield q.run` of the same SQL
+  (both runners still prepare it once). **Every database call in `legacyInit()` is now awaited by
+  `init()`.**
+  - **The upgrade plan too.** `migrationPlan()` read the database directly, and the phone's start
+    called it before `init()`. It is now a generator like `legacyInit()`: `planMigrations(adapter)`
+    awaits it (used by `init()` and by `public/local-bootstrap.js`), and `migrationPlan(handle)`
+    runs it at once (`initSync()` and tests, until B17). So `init()` and the phone's start make no
+    synchronous database call any more, except the desktop's own safety snapshot (`VACUUM INTO`,
+    Node only; it moves to the adapter's `exportBytes` at D1).
+  - **Tests:** `test/migrations.test.js` (+2): `planMigrations` gives `migrationPlan`'s answer for 8
+    kinds of database (new, v1, v2 with and without settings and markers, current, newer), through
+    an adapter that has only the async methods, each answering a tick later; `init()` and the
+    phone's start plan through it.
+  - **Known positives:** `planMigrations` run at once; the marker check never finding a missing
+    marker; `init()` planning at once; the phone planning at once (also fails
+    `npm run test:runtime-mode` in Chromium); the renames' parameters swapped (14 of 38 fail in
+    the two equivalence files). All 5 caught.
+  - **Full suite:** all passes. `npm test` 476 tests, 0 failures, the same 3 skipped; the phone pass
+    187 of 204 (the 2 new tests pass there too), the same 17 known differences; 13 UI suites;
+    `test:slow`.

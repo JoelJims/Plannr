@@ -26,13 +26,13 @@ window.__plannrMode = mode; // read by test-ui/runtime-mode.js
 if (mode === 'server') {
   console.log('[local-bootstrap] desktop dev server (server.js) detected — leaving fetch alone (not local-only mode).');
 } else {
-  const { ready, init, migrationPlan } = await import('./db.js');
+  const { ready, init, planMigrations } = await import('./db.js');
   await ready();
   // Phase 2 (Step 2): before a schema upgrade touches existing data, copy the whole database into the
   // app's private folder (safety-snapshots.js). If that copy cannot be written and verified, stop
   // here: the data stays exactly as it is, at its old version. init() itself refuses a database from
   // a newer app version (an older APK installed over newer data) without changing anything.
-  const plan = migrationPlan();
+  const plan = await planMigrations(); // through the async interface, like init() (step 1.4 B9)
   try {
     let snapshots = null;
     if (plan.needsSnapshot && !plan.tooNew) {
