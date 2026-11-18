@@ -870,3 +870,12 @@ choices made on the way are in the session report's DECISIONS list.
     approved upgrade is made to fail in turn: the three runners give the same error, writes and
     database, and the file is sound.
   - **Known positives:** the two undone calls above now fail 6 tests each.
+- **B7 (2026-11-18): 53 more calls awaited**, the Tenancy Phase 2 block (adding `tenant_id`: the
+  per-table check, the ADD COLUMN or rebuild, the settings rebuild, the per-tenant contract index),
+  the Services-phase columns, the Part E custom-name backfill and the Phase 6C indexes. The two
+  helpers (`rebuildAddingTenant`, `addTenantId`) are generators run with `yield*`; the
+  `TENANT_TABLES.filter(...)` callback became a loop (a callback cannot yield), with the same calls
+  in the same order. 118 of 180 done.
+  - **Known positives** (against `migration-legacy-shapes`): running `addTenantId` without `yield*`
+    (10 of 12 fail), dropping the counter restore in the tenant rebuild (8 fail), backfilling custom
+    names to the wrong owner (9 fail).

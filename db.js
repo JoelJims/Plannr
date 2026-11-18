@@ -962,7 +962,6 @@ function* legacyInit() {
   // child index drop is kept (harmless if it lingers on an ancient DB).
   yield q.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
 
-  // ---- step 1.4 B5-B6 converted every call above this line; B7 starts here ----
 
   // ===========================================================================
   // Tenancy Phase 2 (Part A) — add the tenant dimension. SCHEMA + BACKFILL ONLY: no read/write
@@ -982,7 +981,7 @@ function* legacyInit() {
   // ---------------------------------------------------------------------------
   // Part D — the tenant every existing row would be assigned to, IF this migration runs at all.
   // Computed unconditionally (cheap, read-only) because Step 2a further below also needs it.
-  const tenantUsers = db.prepare('SELECT id FROM users ORDER BY id ASC').all().map((u) => u.id);
+  const tenantUsers = (yield q.all('SELECT id FROM users ORDER BY id ASC')).map((u) => u.id);
   const chosenTenant = tenantUsers.length ? tenantUsers[0] : null;
 
   // BUG FIX: this whole block (Parts A/B/C — add tenant_id, the per-tenant settings PK, the
@@ -997,10 +996,11 @@ function* legacyInit() {
   // and nothing tries to build an index against a column that no longer exists.
   if (userVersion < 2) {
     const TENANT_TABLES = ['cash_out', 'cash_in', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments'];
-    const rowsNeedingTenant = TENANT_TABLES.filter((t) => {
-      const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
-      return !cols.includes('tenant_id') && db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n > 0;
-    });
+    const rowsNeedingTenant = []; // a loop, not .filter(): a callback cannot yield
+    for (const t of TENANT_TABLES) {
+      const cols = (yield q.all(`PRAGMA table_info(${t})`)).map((c) => c.name);
+      if (!cols.includes('tenant_id') && (yield q.get(`SELECT COUNT(*) AS n FROM ${t}`)).n > 0) rowsNeedingTenant.push(t);
+    }
     if (rowsNeedingTenant.length && chosenTenant == null) {
       throw new Error(`Tenancy Phase 2: tables [${rowsNeedingTenant.join(', ')}] hold rows but there are NO users to own them — refusing to backfill tenant_id to a non-existent user (the FK would fail). Register the household user first, then reboot.`);
     }
@@ -1011,53 +1011,54 @@ function* legacyInit() {
     // create-copy-swap: rebuild `table` with a trailing NOT NULL tenant_id, backfilling every row to
     // `tenant`. Preserves ids, sqlite_sequence, the table's own indexes, and FK integrity. Reuses the
     // table's CURRENT DDL (comments stripped) so there is no second copy of each schema to drift.
-    const rebuildAddingTenant = (table, oldCols, tenant) => {
-      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+    // Generators (run with yield*), so their database calls go through the same runner.
+    const rebuildAddingTenant = function* (table, oldCols, tenant) {
+      const seqRow = yield q.get('SELECT seq FROM sqlite_sequence WHERE name = ?', [table]);
       const oldSeq = seqRow ? seqRow.seq : null;                        // AUTOINCREMENT high-water mark
-      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table); // DROP TABLE takes indexes with it
-      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(table).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
+      const idxDdls = yield q.all("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL", [table]); // DROP TABLE takes indexes with it
+      const ddl = (yield q.get("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table])).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
       const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
       const tmp = `${table}__tenant_rebuild`;
       // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, read it back to
       // PROVE enforcement is off (this project's twice-hit trap), restore AFTER COMMIT.
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`${table} tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
-        db.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
+        yield q.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
         const colList = oldCols.join(', ');
-        db.prepare(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`).run(tenant);
-        db.exec(`DROP TABLE ${table}`);
-        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        yield q.run(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`, [tenant]);
+        yield q.exec(`DROP TABLE ${table}`);
+        yield q.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
         // RENAME set sqlite_sequence for the table to the copied max id; restore the true high-water
         // mark so the next insert lands strictly PAST the highest id ever used (never reuses 12..17).
-        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
-        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
-        db.exec('COMMIT');
+        yield q.run('DELETE FROM sqlite_sequence WHERE name = ?', [table]);
+        if (oldSeq != null) yield q.run('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)', [table, oldSeq]);
+        yield q.exec('COMMIT');
       } catch (e) {
-        rollbackQuietly(db);
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
+      yield q.exec('PRAGMA foreign_keys = ON');
       // Replay the table's own indexes (DROP TABLE removed them). Skip the old database-wide
       // single-live-contract index — the per-tenant block below creates the correct replacement.
-      for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') db.exec(idx.sql); }
-      const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+      for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') yield q.exec(idx.sql); }
+      const fkViol = yield q.all('PRAGMA foreign_key_check');
       if (fkViol.length) throw new Error(`${table} tenant rebuild: foreign_key_check found ${JSON.stringify(fkViol)}`);
     };
 
     // Add tenant_id to one table: no-op if present (idempotent / fresh install), ADD COLUMN if empty,
     // forced rebuild if it holds rows.
-    const addTenantId = (table) => {
-      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+    const addTenantId = function* (table) {
+      const cols = (yield q.all(`PRAGMA table_info(${table})`)).map((c) => c.name);
       if (cols.includes('tenant_id')) return;
-      const n = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
-      if (n === 0) { db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
-      rebuildAddingTenant(table, cols, chosenTenant);
+      const n = (yield q.get(`SELECT COUNT(*) AS n FROM ${table}`)).n;
+      if (n === 0) { yield q.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
+      yield* rebuildAddingTenant(table, cols, chosenTenant);
     };
-    for (const t of TENANT_TABLES) addTenantId(t);
+    for (const t of TENANT_TABLES) yield* addTenantId(t);
 
     // Part C — settings becomes PER-TENANT via a composite (tenant_id, key) primary key. The PK change
     // forces a create-copy-swap rebuild (SQLite can't add a column to a PK in place). Backfill every
@@ -1065,41 +1066,41 @@ function* legacyInit() {
     // schedule times, and the last-success/attempt/alert bookkeeping are all per-household. (The one
     // genuinely-global piece of state, the shared WhatsApp client session, lives in .wwebjs_auth on
     // disk, not here; a future infra key would use the reserved tenant_id = 0.)
-    const settingsCols = db.prepare('PRAGMA table_info(settings)').all().map((c) => c.name);
+    const settingsCols = (yield q.all('PRAGMA table_info(settings)')).map((c) => c.name);
     if (!settingsCols.includes('tenant_id')) {
-      const settingsRows = db.prepare('SELECT COUNT(*) AS n FROM settings').get().n;
+      const settingsRows = (yield q.get('SELECT COUNT(*) AS n FROM settings')).n;
       if (settingsRows > 0 && chosenTenant == null) {
         throw new Error('Tenancy Phase 2: settings holds rows but there are NO users to own them — register the household user first, then reboot.');
       }
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`settings tenant rebuild: foreign_keys still ${fkOff} after OFF.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
         // No FK on tenant_id (see the CREATE note). backfill = chosenTenant for every existing row.
-        db.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
-        db.prepare('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings').run(chosenTenant);
-        db.exec('DROP TABLE settings');
-        db.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
-        db.exec('COMMIT');
+        yield q.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
+        yield q.run('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings', [chosenTenant]);
+        yield q.exec('DROP TABLE settings');
+        yield q.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
+        yield q.exec('COMMIT');
       } catch (e) {
-        rollbackQuietly(db);
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
+      yield q.exec('PRAGMA foreign_keys = ON');
     }
 
     // Part B — the single-live-contract invariant becomes PER-TENANT. The old database-wide
     // idx_contract_single_live made a SECOND user unable to create ANY contract (the INSERT
     // failed); replace it so each tenant gets exactly one live contract. Fail LOUDLY first if any
     // tenant already holds more than one live contract — never silently pick a winner.
-    const dupLiveTenants = db.prepare('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1').all();
+    const dupLiveTenants = yield q.all('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1');
     if (dupLiveTenants.length) {
       throw new Error(`Tenancy Phase 2 (Part B): tenant(s) ${dupLiveTenants.map((d) => `${d.tenant_id} (${d.n} live)`).join(', ')} already hold more than one live contract; the per-tenant invariant allows one each. Soft-delete the extras, then reboot — refusing to pick a winner automatically.`);
     }
-    db.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
+    yield q.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
+    yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
   }
 
   // ===========================================================================
@@ -1109,10 +1110,10 @@ function* legacyInit() {
   //  · contract.company (Part F) — optional, nullable.
   //  · cash_out.contract_service_id (Part C/D) — nullable FK to contract_services. Runs AFTER the
   //    Phase 2 cash_out tenant-rebuild (so it isn't dropped) and after contract_services exists.
-  const contractColsSvc = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
-  if (!contractColsSvc.includes('company')) db.exec('ALTER TABLE contract ADD COLUMN company TEXT');
-  const cashOutColsSvc = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
-  if (!cashOutColsSvc.includes('contract_service_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_service_id INTEGER REFERENCES contract_services(id)');
+  const contractColsSvc = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
+  if (!contractColsSvc.includes('company')) yield q.exec('ALTER TABLE contract ADD COLUMN company TEXT');
+  const cashOutColsSvc = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
+  if (!cashOutColsSvc.includes('contract_service_id')) yield q.exec('ALTER TABLE cash_out ADD COLUMN contract_service_id INTEGER REFERENCES contract_services(id)');
 
   // Part E — one-time backfill of the per-user custom list so existing free-text ledger names are not
   // orphaned: they still display from their own cash_out.ledger_custom_name (unchanged), AND become
@@ -1126,12 +1127,13 @@ function* legacyInit() {
   // the schema being reset to match) must not attempt this INSERT.
   // Phase 12: check the cheap userVersion gate FIRST — short-circuits the PRAGMA call below (and
   // everything after it) on every already-migrated boot, same as every other userVersion < 2 gate here.
-  if (userVersion < 2 && db.prepare('PRAGMA table_info(ledger_customs)').all().map((c) => c.name).includes('tenant_id') && chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
-    db.prepare(
+  if (userVersion < 2 && (yield q.all('PRAGMA table_info(ledger_customs)')).map((c) => c.name).includes('tenant_id') && chosenTenant != null && (yield q.get('SELECT COUNT(*) AS n FROM ledger_customs')).n === 0) {
+    yield q.run(
       "INSERT OR IGNORE INTO ledger_customs (tenant_id, name) " +
       "SELECT DISTINCT ?, ledger_custom_name FROM cash_out " +
-      "WHERE ledger_code = 'CUSTOM' AND ledger_custom_name IS NOT NULL AND trim(ledger_custom_name) <> '' AND deleted_at IS NULL"
-    ).run(chosenTenant);
+      "WHERE ledger_code = 'CUSTOM' AND ledger_custom_name IS NOT NULL AND trim(ledger_custom_name) <> '' AND deleted_at IS NULL",
+      [chosenTenant]
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1143,22 +1145,24 @@ function* legacyInit() {
   //  · CREATE the PARTIAL date indexes that the Overview range queries actually use — keyed on the
   //    date, restricted to live rows, so `WHERE deleted_at IS NULL AND <date> BETWEEN ?..?` is an
   //    index range scan.
-  db.exec('DROP INDEX IF EXISTS idx_cash_out_deleted_at');
-  db.exec('DROP INDEX IF EXISTS idx_cash_in_deleted_at');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_txdate_live ON cash_out(tx_date) WHERE deleted_at IS NULL');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_contractor_payments_paydate_live ON contractor_payments(pay_date) WHERE deleted_at IS NULL');
+  yield q.exec('DROP INDEX IF EXISTS idx_cash_out_deleted_at');
+  yield q.exec('DROP INDEX IF EXISTS idx_cash_in_deleted_at');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_txdate_live ON cash_out(tx_date) WHERE deleted_at IS NULL');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_contractor_payments_paydate_live ON contractor_payments(pay_date) WHERE deleted_at IS NULL');
   // Part A — the amount-range filter on the outflow search is a range predicate, so it gets the SAME
   // partial-index-on-live-rows treatment as tx_date above: `WHERE deleted_at IS NULL AND amount_paise
   // BETWEEN ?..?` becomes an index range scan instead of a full table scan. (EXPLAIN-verified: turns the
   // amount-only search from a SCAN into SEARCH … USING idx_cash_out_amount_live.)
-  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_amount_live ON cash_out(amount_paise) WHERE deleted_at IS NULL');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_amount_live ON cash_out(amount_paise) WHERE deleted_at IS NULL');
 
   // Services phase (Part D) — the ONE-SERVICE-ONE-OFFSET invariant, enforced in the DATABASE (mirrors
   // idx_contract_single_live_tenant): at most one LIVE debit may link any given service, so a single
   // substitution can never offset the contractor's dues twice. Partial + restricted to non-null
   // service ids (a NULL link — the common case — is unconstrained). Created here at init end so the
   // cash_out rebuilds above can't drop it and contract_service_id is guaranteed to exist by now.
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
+  yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
+
+  // ---- step 1.4 B5-B7 converted every call above this line; B8 starts here ----
 
   // ===========================================================================
   // Tenancy Phase 2, Step 2a — SCHEMA-ONLY collapse back to a single tenant. The app is becoming a
