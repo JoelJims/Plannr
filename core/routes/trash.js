@@ -28,10 +28,12 @@ export function register(app, ctx) {
 
   // GET /api/trash — soft-deleted rows for all five tables, each shaped like the live list plus
   // deletedAt, newest-deleted first.
-  app.get('/api/trash', auth, (req, res) => {
+  app.get('/api/trash', auth, async (req, res) => {
     const trash = {};
     for (const t of TRASH_TABLES) {
-      trash[t] = TRASH_REPO[t].listDeleted().map((r) => ({ ...TRASH_SHAPERS[t](r), deletedAt: r.deleted_at }));
+      trash[t] = [];
+      // One row at a time: a contract's shaper reads its children (step 1.4 B11).
+      for (const r of TRASH_REPO[t].listDeleted()) trash[t].push({ ...(await TRASH_SHAPERS[t](r)), deletedAt: r.deleted_at });
     }
     res.json({ trash });
   });
@@ -40,7 +42,7 @@ export function register(app, ctx) {
   function trashTable(req) { return TRASH_TABLES.includes(req.params.table) ? req.params.table : null; }
 
   // POST /api/trash/:table/:id/restore — un-delete (deleted_at = NULL, bump updated_at).
-  app.post('/api/trash/:table/:id/restore', auth, (req, res) => {
+  app.post('/api/trash/:table/:id/restore', auth, async (req, res) => {
     const table = trashTable(req);
     if (!table) return res.status(400).json({ error: 'Unknown table.' });
     const id = Number(req.params.id);
@@ -49,8 +51,8 @@ export function register(app, ctx) {
     // live payment sits under a deleted contract, inflating Overview spend while the contract's
     // value stays out of the totals. Require the contract to be restored first.
     if (table === 'contractor_payments') {
-      const row = repo.contract.paymentContractId(id);
-      const parent = repo.contract.deletedAt(row.contract_id);
+      const row = await repo.contract.paymentContractId(id);
+      const parent = await repo.contract.deletedAt(row.contract_id);
       if (!parent || parent.deleted_at !== null) {
         return res.status(409).json({ error: 'Restore the parent contract first — this payment belongs to a contract that is still in the Recycle Bin.' });
       }
@@ -58,7 +60,7 @@ export function register(app, ctx) {
     // Phase 5H — the single-live-contract invariant (idx_contract_single_live). Guard explicitly:
     // refuse restoring a contract while another is already live. Message style matches the two
     // guards above and /api/delete-account.
-    if (table === 'contract' && repo.contract.liveCount() > 0) {
+    if (table === 'contract' && (await repo.contract.liveCount()) > 0) {
       return res.status(409).json({ error: 'Another contract is already live — Plannr tracks a single contract. Delete the current one before restoring this from the Recycle Bin.' });
     }
     // Services phase (Part D) — a soft-deleted debit RELEASED its service (the partial-unique index only
@@ -66,9 +68,9 @@ export function register(app, ctx) {
     // make two live debits offset a single substitution — the DB index would raise a raw 500. Guard
     // explicitly with the same 409 shape: refuse, naming the claimant.
     if (table === 'cash_out') {
-      const row = repo.contract.cashOutServiceId(id);
+      const row = await repo.contract.cashOutServiceId(id);
       if (row && row.contract_service_id != null) {
-        const other = repo.contract.serviceClaimedByOther(row.contract_service_id, id);
+        const other = await repo.contract.serviceClaimedByOther(row.contract_service_id, id);
         if (other) {
           return res.status(409).json({ error: `Can’t restore — its contract service is now linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can offset only one debit. Unlink it there first, then restore.` });
         }
@@ -79,7 +81,7 @@ export function register(app, ctx) {
   });
 
   // DELETE /api/trash/:table/:id — permanent hard delete.
-  app.delete('/api/trash/:table/:id', auth, (req, res) => {
+  app.delete('/api/trash/:table/:id', auth, async (req, res) => {
     const table = trashTable(req);
     if (!table) return res.status(400).json({ error: 'Unknown table.' });
     const id = Number(req.params.id);
@@ -89,20 +91,20 @@ export function register(app, ctx) {
     // any payment — live OR soft-deleted — still references would orphan/violate the FK, so
     // refuse and say so (modelled on the /api/delete-account guard).
     if (table === 'contract') {
-      const n = repo.contract.paymentsForAny(id);
+      const n = await repo.contract.paymentsForAny(id);
       if (n > 0) {
         return res.status(409).json({ error: `This contract still has ${n} contractor payment${n === 1 ? '' : 's'} referencing it (live or in the Recycle Bin). Permanently deleting it would orphan ${n === 1 ? 'that payment' : 'those payments'} — delete or restore ${n === 1 ? 'it' : 'them'} first.` });
       }
       // cash_out.contract_service_id has no ON DELETE action, so a contract_services row cascading out
       // from this delete would otherwise throw a raw FK error if any cash-out entry (live or in the
       // Recycle Bin) still references one of this contract's services.
-      const m = repo.contract.cashOutReferencingServices(id);
+      const m = await repo.contract.cashOutReferencingServices(id);
       if (m > 0) {
         return res.status(409).json({ error: `This contract still has ${m} cash-out entr${m === 1 ? 'y' : 'ies'} linked to one of its services (live or in the Recycle Bin). Permanently deleting it would orphan ${m === 1 ? 'that entry' : 'those entries'} — unlink or restore ${m === 1 ? 'it' : 'them'} first.` });
       }
       // Contract Phase A: contract_allowances CASCADEs the same way, and cash_out.contract_allowance_id
       // has no ON DELETE action either — same crash, same pre-flight count.
-      const k = repo.contract.cashOutReferencingAllowances(id);
+      const k = await repo.contract.cashOutReferencingAllowances(id);
       if (k > 0) {
         return res.status(409).json({ error: `This contract still has ${k} cash-out entr${k === 1 ? 'y' : 'ies'} drawing against one of its allowances (live or in the Recycle Bin). Permanently deleting it would orphan ${k === 1 ? 'that entry' : 'those entries'} — unlink or restore ${k === 1 ? 'it' : 'them'} first.` });
       }

@@ -954,3 +954,22 @@ choices made on the way are in the session report's DECISIONS list.
   - **Full suite:** all passes. `npm test` 479 tests, 0 failures, the same 3 skipped; the phone pass
     190 of 207 (the 3 new tests pass there too), the same 17 known differences; 13 UI suites;
     `test:slow`.
+- **B11 (2026-11-18): `repo.contract.*` is on the async interface** (34 statements).
+  - Every function returns a Promise. The contract's column-list `INSERT`/`UPDATE` now build SQL
+    text only (the adapter prepares each text once), so `configure()` no longer prepares them.
+    `writePayDates` is still not one transaction, as before; the request queue keeps other requests
+    out in between.
+  - Callers now await: every contract, service and allowance route; `contractRow` is async (it reads
+    the contract's dates, services and allowances), and so are the Recycle Bin's list (one row at a
+    time) and its restore and delete guards; the contractor-payment `validate` and the cash-out
+    `finalize` (service and allowance links). `core/ledger-crud.js` awaits `validate` and
+    `finalize` everywhere, the Save All loop included.
+  - **Tests:** `test/repo-async.test.js` (+1): all 35 `repo.contract` functions return Promises, and
+    what they wrote is read back. `test/contract.test.js` (+2) closes two gaps the known positives
+    found: no test read a contract's payment dates, services and allowances back from the API, and
+    none sent a payment for a contract that is deleted or does not exist.
+  - **Known positives:** the payment dates not awaited (caught only after the new test); the
+    payment's contract check not awaited (likewise); `finalize` not awaited on create; the Recycle
+    Bin's single-contract guard not awaited; `liveCount` left synchronous. All 5 caught.
+  - **Full suite:** all passes. `npm test` 482 tests, 0 failures, the same 3 skipped; the phone pass
+    193 of 210, the same 17 known differences; 13 UI suites; `test:slow`.

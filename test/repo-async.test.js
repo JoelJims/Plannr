@@ -62,3 +62,63 @@ test('B10: the ledger index cannot be read before its first refresh(); refresh()
   assert.deepStrictEqual(index.list(), list);
   assert.deepStrictEqual([...index.byCode().keys()], list.map((l) => l.code));
 });
+
+test('B11: every repo.contract function answers with a Promise', async () => {
+  H.clearLedger();
+  const cid = H.seedContract();
+  const allowance = { name: 'B11 cap', cap_kind: 'lump', cap_paise: 100000, cap_rate_per_sqft_paise: null, area_milli_sqft: null, sort_order: 0 };
+  let sid = null;
+  let aid = null;
+  // The two inserts keep their row id for the calls after them; the Promise itself is what is checked.
+  const keepId = (answer, set) => { answer.then((r) => set(r.lastInsertRowid), () => {}); return answer; };
+  const calls = {
+    list: () => repo.contract.list(),
+    getLive: () => repo.contract.getLive(cid),
+    existsLive: () => repo.contract.existsLive(cid),
+    liveCount: () => repo.contract.liveCount(),
+    deletedAt: () => repo.contract.deletedAt(cid),
+    update: () => repo.contract.update(cid, ['area_of_work'], ['B11 area']),
+    payDatesFor: () => repo.contract.payDatesFor(cid),
+    writePayDates: () => repo.contract.writePayDates(cid, ['2026-08-01', '2026-09-01']),
+    servicesFor: () => repo.contract.servicesFor(cid),
+    insertService: () => keepId(repo.contract.insertService(cid, 'B11 service'), (id) => { sid = id; }),
+    serviceLive: () => repo.contract.serviceLive(sid),
+    serviceForContract: () => repo.contract.serviceForContract(cid, sid),
+    updateService: () => repo.contract.updateService(sid, 'B11 service renamed'),
+    serviceLinkable: () => repo.contract.serviceLinkable(sid),
+    serviceClaimedByOther: () => repo.contract.serviceClaimedByOther(sid, -1),
+    softDeleteService: () => repo.contract.softDeleteService(sid),
+    livePaymentsFor: () => repo.contract.livePaymentsFor(cid),
+    paymentOnDate: () => repo.contract.paymentOnDate(cid, '2026-08-01'),
+    paymentsForAny: () => repo.contract.paymentsForAny(cid),
+    paymentContractId: () => repo.contract.paymentContractId(1),
+    cashOutReferencingServices: () => repo.contract.cashOutReferencingServices(cid),
+    cashOutServiceId: () => repo.contract.cashOutServiceId(1),
+    nextAllowanceOrder: () => repo.contract.nextAllowanceOrder(cid),
+    insertAllowance: () => keepId(repo.contract.insertAllowance(cid, allowance), (id) => { aid = id; }),
+    allowancesFor: () => repo.contract.allowancesFor(cid),
+    allowanceLive: () => repo.contract.allowanceLive(aid),
+    allowanceLinkable: () => repo.contract.allowanceLinkable(aid),
+    allowanceForContract: () => repo.contract.allowanceForContract(cid, aid),
+    allowanceCount: () => repo.contract.allowanceCount(cid),
+    allowanceSpendFor: () => repo.contract.allowanceSpendFor(cid),
+    updateAllowance: () => repo.contract.updateAllowance(aid, { ...allowance, cap_paise: 200000 }),
+    softDeleteAllowance: () => repo.contract.softDeleteAllowance(aid),
+    cashOutReferencingAllowances: () => repo.contract.cashOutReferencingAllowances(cid),
+    softDelete: () => repo.contract.softDelete(cid),
+    insert: () => repo.contract.insert(['contractor_name', 'area_of_work', 'ledger_code'], ['B11', 'B11 area', '5.0']),
+  };
+  assert.deepStrictEqual(Object.keys(calls).sort(), Object.keys(repo.contract).sort(), 'every function is checked');
+  for (const [name, call] of Object.entries(calls)) {
+    const answer = call();
+    assert.ok(answer instanceof Promise, `contract.${name} returns a Promise`);
+    await answer;
+  }
+  assert.ok(Number.isInteger(sid) && Number.isInteger(aid), 'the inserts answered with their row ids');
+  // What the calls did, read back directly: they ran, in order, on this file's database.
+  assert.deepStrictEqual(H.db.prepare('SELECT pay_date FROM contract_payment_dates WHERE contract_id = ? ORDER BY pay_date').all(cid).map((r) => r.pay_date), ['2026-08-01', '2026-09-01']);
+  assert.strictEqual(H.db.prepare('SELECT name FROM contract_services WHERE id = ?').get(sid).name, 'B11 service renamed');
+  assert.strictEqual(H.db.prepare('SELECT cap_paise FROM contract_allowances WHERE id = ?').get(aid).cap_paise, 200000);
+  assert.strictEqual(H.db.prepare('SELECT COUNT(*) AS n FROM contract WHERE deleted_at IS NULL').get().n, 1, 'the first contract soft-deleted, the second inserted');
+  H.clearLedger();
+});

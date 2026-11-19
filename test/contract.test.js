@@ -82,3 +82,35 @@ test('a contract WITH a price is unchanged: A and owed behave exactly as before'
   assert.strictEqual(m.totalContractPaise, 10000000);
   assert.strictEqual(m.owedToContractorsPaise, 6000000, 'owed = 1,00,000 − 40,000');
 });
+
+// Step 1.4 B11: the contract's children are read through the async interface. No test read them back
+// from the API before, so an un-awaited read (a Promise sent as {}) went unnoticed.
+test('the contract answer carries its payment dates, services and allowances, on create, edit and list', async () => {
+  const body = { ...C('A'), paymentDates: ['2026-09-01', '2026-08-01'] };
+  const made = await H.post('/api/contracts', body, { cookie });
+  assert.strictEqual(made.status, 201);
+  const id = made.json.contract.id;
+  assert.deepStrictEqual(made.json.contract.paymentDates, ['2026-08-01', '2026-09-01'], 'create: the dates, in date order');
+  assert.strictEqual((await H.post(`/api/contracts/${id}/services`, { name: 'Plastering' }, { cookie })).status, 201);
+  assert.strictEqual((await H.post(`/api/contracts/${id}/allowances`, { name: 'Tiles', capKind: 'lump', capRupees: '50000' }, { cookie })).status, 201);
+  const edited = await H.put(`/api/contracts/${id}`, { ...body, paymentDates: ['2026-10-01'] }, { cookie });
+  assert.strictEqual(edited.status, 200);
+  for (const [what, c] of [['edit', edited.json.contract], ['list', (await H.get('/api/contracts', { cookie })).json.contracts[0]]]) {
+    assert.deepStrictEqual(c.paymentDates, ['2026-10-01'], `${what}: the dates replaced`);
+    assert.deepStrictEqual(c.services.map((s) => s.name), ['Plastering'], `${what}: the services`);
+    assert.deepStrictEqual(c.allowances.map((a) => [a.name, a.capPaise, a.spentPaise]), [['Tiles', 5000000, 0]], `${what}: the allowances`);
+  }
+});
+
+test('a contractor payment needs a live contract: a missing or deleted one is refused', async () => {
+  const id = (await create('A')).json.contract.id;
+  const pay = (contractId) => H.post('/api/contractor-payments', { contractId, payDate: '2026-08-01', amountRupees: '1000' }, { cookie });
+  assert.strictEqual((await pay(id)).status, 201, 'the live contract is accepted');
+  assert.strictEqual((await del(id)).status, 409, 'a contract with a live payment cannot be deleted');
+  H.db.prepare('UPDATE contract SET deleted_at = datetime(\'now\') WHERE id = ?').run(id);
+  for (const bad of [id, id + 1000]) {
+    const r = await pay(bad);
+    assert.strictEqual(r.status, 400, `contract ${bad === id ? 'in the Recycle Bin' : 'that does not exist'}`);
+    assert.strictEqual(r.json.error, 'Select a valid contract.');
+  }
+});

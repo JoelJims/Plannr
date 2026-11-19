@@ -20,6 +20,7 @@ export function createLedgerCrud(app, ctx) {
     // ALL SQL for this table is built by repo.crud. Handlers never touch the raw table.
     //  · finalize(values, { req, id, existing }): after validate, before the write; may change values
     //    and/or return { error, status } to reject (e.g. the one-service-one-offset 409 guard).
+    //  · validate and finalize may be async; both are awaited (step 1.4 B11).
     //  · afterWrite(values, { req, id }): after a successful create/edit (e.g. save a custom name);
     //    awaited (step 1.4 B10: it may write through the async interface).
     //  · auditField: when an EDIT changes this raw column (by_user_id), log old -> new.
@@ -40,9 +41,9 @@ export function createLedgerCrud(app, ctx) {
     });
 
     app.post(basePath, auth, async (req, res) => {
-      const v = validate(req);
+      const v = await validate(req);
       if (v.error) return res.status(400).json({ error: v.error });
-      if (finalize) { const f = finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
+      if (finalize) { const f = await finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
       const info = rc.insert(orderedVals(v.values));
       if (afterWrite) await afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
       res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(info.lastInsertRowid)) });
@@ -54,9 +55,9 @@ export function createLedgerCrud(app, ctx) {
       // The existing row, for the audit old value and finalize's `existing`.
       const existing = (finalize || afterWrite || auditField) ? rc.fullRow(id) : null;
       const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
-      const v = validate(req, oldVal);
+      const v = await validate(req, oldVal);
       if (v.error) return res.status(400).json({ error: v.error });
-      if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
+      if (finalize) { const f = await finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
       if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
       rc.update(id, orderedVals(v.values));
       if (afterWrite) await afterWrite(v.values, { req, id });
@@ -91,9 +92,9 @@ export function createLedgerCrud(app, ctx) {
           if (!Number.isInteger(id) || !rc.existsLive(id)) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
           const existing = (finalize || auditField) ? rc.fullRow(id) : null;
           const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
-          const v = validate({ body: row }, oldVal);
+          const v = await validate({ body: row }, oldVal);
           if (v.error) { results[i] = { id, ok: false, error: v.error }; continue; }
-          if (finalize) { const f = finalize(v.values, { req, id, existing }); if (f && f.error) { results[i] = { id, ok: false, error: f.error }; continue; } }
+          if (finalize) { const f = await finalize(v.values, { req, id, existing }); if (f && f.error) { results[i] = { id, ok: false, error: f.error }; continue; } }
           toWrite.push({ i, id, values: v.values, oldVal });
         }
 

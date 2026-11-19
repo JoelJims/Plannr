@@ -139,7 +139,7 @@ export function register(app, ctx) {
     };
   };
 
-  // Shape a contract row for the API.
+  // Shape a contract row for the API. Async (step 1.4 B11): it reads the contract's children.
   //
   // Contract Phase A changed two things here:
   //   · servicesPricedTotalPaise / remainderPaise are GONE. The remainder was "stated total − Σ priced
@@ -150,8 +150,8 @@ export function register(app, ctx) {
   //     stated price is their product and price_of_contract_paise is rewritten to match on every
   //     contract write; `pricingMode` says which it is, so the UI never presents a computed figure as
   //     something the owner typed. Dues maths is untouched: owed still reads the one stored column.
-  const contractRow = (r) => {
-    const spend = repo.contract.allowanceSpendFor(r.id);
+  const contractRow = async (r) => {
+    const spend = await repo.contract.allowanceSpendFor(r.id);
     const computedPricePaise = unitPricePaise(r.rate_per_sqft_paise, r.measured_area_milli_sqft);
     return {
       id: r.id,
@@ -183,9 +183,9 @@ export function register(app, ctx) {
       specifiedBrands: r.specified_brands || '',
       excludedScope: r.excluded_scope || '',
       ownerObligations: r.owner_obligations || '',
-      paymentDates: repo.contract.payDatesFor(r.id),
-      services: repo.contract.servicesFor(r.id).map(serviceRow), // scope list: names only
-      allowances: repo.contract.allowancesFor(r.id).map((a) => allowanceRow(a, spend.get(a.id))),
+      paymentDates: await repo.contract.payDatesFor(r.id),
+      services: (await repo.contract.servicesFor(r.id)).map(serviceRow), // scope list: names only
+      allowances: (await repo.contract.allowancesFor(r.id)).map((a) => allowanceRow(a, spend.get(a.id))),
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -303,31 +303,33 @@ export function register(app, ctx) {
   // frontend fetch doesn't churn — it is simply always an array of 0 or 1. paymentDatesFor() is
   // called once per returned row (contractRow); with the invariant that N+1 is now bounded at one
   // contract, so it needs no batching/restructuring.
-  app.get('/api/contracts', auth, (req, res) => {
-    res.json({ contracts: repo.contract.list().map(contractRow) });
+  app.get('/api/contracts', auth, async (req, res) => {
+    const contracts = [];
+    for (const r of await repo.contract.list()) contracts.push(await contractRow(r));
+    res.json({ contracts });
   });
 
-  app.post('/api/contracts', auth, (req, res) => {
+  app.post('/api/contracts', auth, async (req, res) => {
     const v = readContractBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
     // Phase 5D: the single-contract guard — a second contract is a clean 409, never a silent overwrite.
     // (idx_contract_single_live backstops it in the database.)
-    if (repo.contract.liveCount() > 0) {
+    if ((await repo.contract.liveCount()) > 0) {
       return res.status(409).json({ error: 'A contract already exists — Plannr tracks a single contract. Edit the existing one instead of adding another (or delete it first).' });
     }
-    const info = repo.contract.insert(CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
-    writePaymentDates(info.lastInsertRowid, v.paymentDates);
-    res.status(201).json({ ok: true, contract: contractRow(getContractRow(info.lastInsertRowid)) });
+    const info = await repo.contract.insert(CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
+    await writePaymentDates(info.lastInsertRowid, v.paymentDates);
+    res.status(201).json({ ok: true, contract: await contractRow(await getContractRow(info.lastInsertRowid)) });
   });
 
-  app.put('/api/contracts/:id', auth, (req, res) => {
+  app.put('/api/contracts/:id', auth, async (req, res) => {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !getContractRow(id)) return res.status(404).json({ error: 'Contract not found.' });
+    if (!Number.isInteger(id) || !(await getContractRow(id))) return res.status(404).json({ error: 'Contract not found.' });
     const v = readContractBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    repo.contract.update(id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
-    writePaymentDates(id, v.paymentDates);
-    res.json({ ok: true, contract: contractRow(getContractRow(id)) });
+    await repo.contract.update(id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
+    await writePaymentDates(id, v.paymentDates);
+    res.json({ ok: true, contract: await contractRow(await getContractRow(id)) });
   });
 
   // ---------------------------------------------------------------------------
@@ -349,30 +351,30 @@ export function register(app, ctx) {
     return { values: { name } };
   }
 
-  app.post('/api/contracts/:id/services', auth, (req, res) => {
+  app.post('/api/contracts/:id/services', auth, async (req, res) => {
     const cid = Number(req.params.id);
-    if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
+    if (!Number.isInteger(cid) || !(await getContractRow(cid))) return res.status(404).json({ error: 'Contract not found.' });
     const v = readServiceBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    const info = repo.contract.insertService(cid, v.values.name);
-    res.status(201).json({ ok: true, service: serviceRow(getServiceRow(info.lastInsertRowid)) });
+    const info = await repo.contract.insertService(cid, v.values.name);
+    res.status(201).json({ ok: true, service: serviceRow(await getServiceRow(info.lastInsertRowid)) });
   });
 
-  app.put('/api/contracts/:id/services/:sid', auth, (req, res) => {
+  app.put('/api/contracts/:id/services/:sid', auth, async (req, res) => {
     const cid = Number(req.params.id), sid = Number(req.params.sid);
-    if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
+    if (!Number.isInteger(cid) || !Number.isInteger(sid) || !(await getLiveServiceForContract(cid, sid))) return res.status(404).json({ error: 'Service not found.' });
     const v = readServiceBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    repo.contract.updateService(sid, v.values.name);
-    res.json({ ok: true, service: serviceRow(getServiceRow(sid)) });
+    await repo.contract.updateService(sid, v.values.name);
+    res.json({ ok: true, service: serviceRow(await getServiceRow(sid)) });
   });
 
-  app.delete('/api/contracts/:id/services/:sid', auth, (req, res) => {
+  app.delete('/api/contracts/:id/services/:sid', auth, async (req, res) => {
     const cid = Number(req.params.id), sid = Number(req.params.sid);
-    if (!Number.isInteger(cid) || !Number.isInteger(sid) || !getLiveServiceForContract(cid, sid)) return res.status(404).json({ error: 'Service not found.' });
+    if (!Number.isInteger(cid) || !Number.isInteger(sid) || !(await getLiveServiceForContract(cid, sid))) return res.status(404).json({ error: 'Service not found.' });
     // Soft-delete. A LIVE debit may still reference this now-deleted service (keeping the provenance
     // link); it simply stops being offered by the picker. No block — services are informational.
-    repo.contract.softDeleteService(sid);
+    await repo.contract.softDeleteService(sid);
     res.json({ ok: true });
   });
 
@@ -418,53 +420,53 @@ export function register(app, ctx) {
   }
 
   // Re-shape one allowance for a single-row response (the list comes back via contractRow).
-  const allowanceById = (cid, aid) => {
-    const row = repo.contract.allowanceForContract(cid, aid);
-    return row ? allowanceRow(row, repo.contract.allowanceSpendFor(cid).get(aid)) : null;
+  const allowanceById = async (cid, aid) => {
+    const row = await repo.contract.allowanceForContract(cid, aid);
+    return row ? allowanceRow(row, (await repo.contract.allowanceSpendFor(cid)).get(aid)) : null;
   };
 
-  app.post('/api/contracts/:id/allowances', auth, (req, res) => {
+  app.post('/api/contracts/:id/allowances', auth, async (req, res) => {
     const cid = Number(req.params.id);
-    if (!Number.isInteger(cid) || !getContractRow(cid)) return res.status(404).json({ error: 'Contract not found.' });
+    if (!Number.isInteger(cid) || !(await getContractRow(cid))) return res.status(404).json({ error: 'Contract not found.' });
     const v = readAllowanceBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    const info = repo.contract.insertAllowance(cid, { ...v.values, sort_order: repo.contract.nextAllowanceOrder(cid) });
-    res.status(201).json({ ok: true, allowance: allowanceById(cid, Number(info.lastInsertRowid)) });
+    const info = await repo.contract.insertAllowance(cid, { ...v.values, sort_order: await repo.contract.nextAllowanceOrder(cid) });
+    res.status(201).json({ ok: true, allowance: await allowanceById(cid, Number(info.lastInsertRowid)) });
   });
 
-  app.put('/api/contracts/:id/allowances/:aid', auth, (req, res) => {
+  app.put('/api/contracts/:id/allowances/:aid', auth, async (req, res) => {
     const cid = Number(req.params.id), aid = Number(req.params.aid);
-    if (!Number.isInteger(cid) || !Number.isInteger(aid) || !getLiveAllowanceForContract(cid, aid)) return res.status(404).json({ error: 'Allowance not found.' });
+    if (!Number.isInteger(cid) || !Number.isInteger(aid) || !(await getLiveAllowanceForContract(cid, aid))) return res.status(404).json({ error: 'Allowance not found.' });
     const v = readAllowanceBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    repo.contract.updateAllowance(aid, v.values);
-    res.json({ ok: true, allowance: allowanceById(cid, aid) });
+    await repo.contract.updateAllowance(aid, v.values);
+    res.json({ ok: true, allowance: await allowanceById(cid, aid) });
   });
 
-  app.delete('/api/contracts/:id/allowances/:aid', auth, (req, res) => {
+  app.delete('/api/contracts/:id/allowances/:aid', auth, async (req, res) => {
     const cid = Number(req.params.id), aid = Number(req.params.aid);
-    if (!Number.isInteger(cid) || !Number.isInteger(aid) || !getLiveAllowanceForContract(cid, aid)) return res.status(404).json({ error: 'Allowance not found.' });
+    if (!Number.isInteger(cid) || !Number.isInteger(aid) || !(await getLiveAllowanceForContract(cid, aid))) return res.status(404).json({ error: 'Allowance not found.' });
     // Soft-delete, same as a service. Debits already drawn against it keep their link (the spend is
     // still real spend, and it still counts in every Overview figure — only the cap stops being
     // reported); the allowance simply stops being offered on the debit form.
-    repo.contract.softDeleteAllowance(aid);
+    await repo.contract.softDeleteAllowance(aid);
     res.json({ ok: true });
   });
 
   // Soft-delete a contract. Scheduled payment-date children are left in place (only
   // surfaced via the contract).
-  app.delete('/api/contracts/:id', auth, (req, res) => {
+  app.delete('/api/contracts/:id', auth, async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid contract id.' });
     // Guard (Phase 4D): refuse while any LIVE contractor payment references this contract. Otherwise
     // A/F (which iterate live contracts) drop the contract while B/D/pie (which iterate live payments)
     // keep its ₹ — you end up having paid toward a contract totalling ₹0, and the Overview stops
     // reconciling. Same shape as the two Recycle-Bin guards and /api/delete-account.
-    const live = repo.contract.livePaymentsFor(id);
+    const live = await repo.contract.livePaymentsFor(id);
     if (live > 0) {
       return res.status(409).json({ error: `This contract has ${live} live contractor payment${live === 1 ? '' : 's'} recorded against it. Deleting it would leave ${live === 1 ? 'that payment' : 'those payments'} attributed to a contract that is gone (and unbalance the Overview), so it's blocked — delete or reassign ${live === 1 ? 'that payment' : 'those payments'} first, then delete the contract.` });
     }
-    const info = repo.contract.softDelete(id);
+    const info = await repo.contract.softDelete(id);
     if (info.changes === 0) return res.status(404).json({ error: 'Contract not found.' });
     res.json({ ok: true });
   });

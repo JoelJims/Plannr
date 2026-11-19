@@ -291,7 +291,8 @@ export function register(app, ctx) {
   //   · ALLOWANCE — many debits per allowance, by design. An allowance is a CAP with a RUNNING spend;
   //     a uniqueness rule here would break the feature. It moves no figure either: the cap position is
   //     displayed, and the contract's settlement of an overrun/underrun stays the owner's to make.
-  function cashOutContractLinksFinalize(values, { existing }) {
+  // Async (step 1.4 B11): it reads the contract's services and allowances.
+  async function cashOutContractLinksFinalize(values, { existing }) {
     // Only an 'included' debit may carry either link; 'extra' forces both NULL so a stale link can't
     // linger if the scope flips back.
     if (values.contract_scope !== 'included') {
@@ -306,8 +307,8 @@ export function register(app, ctx) {
     if (sid === undefined) sid = existing ? existing.contract_service_id : null;
     if (sid == null) values.contract_service_id = null;
     else {
-      if (!repo.contract.serviceLinkable(sid)) return { status: 400, error: 'That contract service was not found — pick a listed service, or leave it blank.' };
-      const other = repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
+      if (!(await repo.contract.serviceLinkable(sid))) return { status: 400, error: 'That contract service was not found — pick a listed service, or leave it blank.' };
+      const other = await repo.contract.serviceClaimedByOther(sid, existing ? existing.id : -1);
       if (other) {
         return { status: 409, error: `That service is already linked to entry #${other.id} (${fmtRs(other.amount_paise)} on ${other.tx_date}). One service can be linked to only one entry — unlink it there first, or pick another service.` };
       }
@@ -317,7 +318,7 @@ export function register(app, ctx) {
     let aid = values.contract_allowance_id;
     if (aid === undefined) aid = existing ? existing.contract_allowance_id : null;
     if (aid == null) { values.contract_allowance_id = null; return; }
-    if (!repo.contract.allowanceLinkable(aid)) return { status: 400, error: 'That allowance was not found — pick a listed allowance, or leave it blank.' };
+    if (!(await repo.contract.allowanceLinkable(aid))) return { status: 400, error: 'That allowance was not found — pick a listed allowance, or leave it blank.' };
     values.contract_allowance_id = aid;
   }
 

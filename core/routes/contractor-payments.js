@@ -56,10 +56,10 @@ export function register(app, ctx) {
     byIdWhere: 'WHERE cp.id = ?',
     shape: paymentRow,
     columns: ['contract_id', 'pay_date', 'amount_paise', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'remarks'],
-    validate: (req) => {
+    validate: async (req) => { // async: it checks the contract (step 1.4 B11)
       // Contract required + must be a live contract.
       const contractId = Number(req.body.contractId);
-      if (!Number.isInteger(contractId) || !repo.contract.existsLive(contractId)) {
+      if (!Number.isInteger(contractId) || !(await repo.contract.existsLive(contractId))) {
         return { error: 'Select a valid contract.' };
       }
       // Date of payment required (ISO). Amount required (> 0, integer paise).
