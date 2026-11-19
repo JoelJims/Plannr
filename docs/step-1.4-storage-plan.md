@@ -1055,3 +1055,28 @@ choices made on the way are in the session report's DECISIONS list.
     adapter's transition method. All 4 caught.
   - **Full suite:** all passes. `npm test` 490 tests, 0 failures, the same 3 skipped; the phone pass
     201 of 218, the same 17 known differences; 13 UI suites; `test:slow`.
+- **B17a (2026-11-19): `server.js`, `reset-db.js` and `seed-demo.js` start with the async
+  `init()`.** B17 is done in three commits: this one, the phone's encrypted restore (B17b), then the
+  removal of the synchronous methods (B17c).
+  - `server.js` starts `init()` as it loads and makes it the first start job, so the ledger list's
+    refresh, the ownership check and every request wait for it; the server listens only after all
+    of them. A failure is reported as `[startup] could not start:` and the process exits 1.
+  - `reset-db.js` counts and empties the tables once `init()` has finished; `seed-demo.js` awaits
+    it first thing in `main()`, before its wipe. A seed of 1,800 rows made by the old and the new
+    `seed-demo.js` on two new databases is identical (14 tables, `*_at` columns masked).
+  - **Tests:** new `test/server-start.test.js`: a database saved by a newer Plannr stops the start
+    with that message, nothing listens, and the file and its folder are unchanged.
+    `test/reset-db.test.js` (+1): on a file that does not exist yet, the schema is made first (at
+    the current version) and every table is reported empty. New `test/seed-demo.test.js`: a 60-row
+    seed on a new database (no test ran `seed-demo.js` before).
+  - **Tests wait for the start too.** Requiring `server.js` no longer sets the test database up, so
+    `test/helpers.js` exports `H.ready` (= `app._ready`), its seed helpers fail with a clear message
+    if called before it, and in the phone pass `startApp()` starts the phone's code only after it
+    (the first full run showed two upgrades racing on one test file: 139 new phone failures).
+    `backup-crypto.test.js` and `migrations.test.js`, which never started the app, await `H.ready`.
+  - **Known positives:** `init()` not a start job (the start races it); its failure swallowed;
+    `reset-db.js` without `init()`; `seed-demo.js` without `init()`; and for the test change:
+    `backup-crypto.test.js` without `H.ready`, the phone's code started before it,
+    `migrations.test.js` without it. All 7 caught.
+  - **Full suite:** `npm test` 493 tests (490 pass, 3 skipped); phone pass 202 of 219, exactly the
+    17 known differences; all 13 UI suites and `test:slow` pass.

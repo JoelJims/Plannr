@@ -25,6 +25,15 @@ assert.notStrictEqual(path.resolve(TEST_DB).toLowerCase(), LIVE_DB.toLowerCase()
 
 const app = require('../server'); // requires ./db (binds prepared statements to TEST_DB) with side effects gated off
 const { db } = require('../db');
+// server.js sets the test database up with the async init() as its first start job (step 1.4 B17):
+// until app._ready resolves the file may have no tables yet. startApp() waits for it; a file that
+// only seeds or reads the database awaits H.ready in its first before() hook.
+const ready = app._ready;
+let isReady = false;
+ready.then(() => { isReady = true; }, () => {});
+function assertReady() {
+  if (!isReady) throw new Error('the test database is not set up yet: await H.startApp() or H.ready in a before() hook first');
+}
 
 // Which API code the requests below reach (cross-platform plan, step 1.1):
 // 'express' (default): server.js over real HTTP. 'shim': the phone's public/local-api.js, in-process,
@@ -39,7 +48,8 @@ const SEED_HASH = 'seed-no-auth';
 // --- app lifecycle (ephemeral port; drive over real HTTP) ----------------------------------------
 let server = null, base = null;
 function startApp() {
-  if (shim) return shim.start().then(() => ({ base: '', server: null }));
+  // The phone's code opens the same test file: it starts once server.js has set it up, as before B17.
+  if (shim) return ready.then(() => shim.start()).then(() => ({ base: '', server: null }));
   if (base) return Promise.resolve({ base, server });
   return app._ready.then(() => new Promise((resolve) => { // the ledger list is read first (step 1.4 B10)
     server = app.listen(0, '127.0.0.1', () => {
@@ -99,6 +109,7 @@ let userSeq = 0;
 // picks the lowest id). Mirror that here — if a row already exists, every caller gets THAT SAME
 // row back, whatever name/opts it asked for, instead of fabricating a second identity.
 function seedUser(opts = {}) {
+  assertReady();
   const existing = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1').get();
   if (existing) return { id: existing.id, username: existing.username, displayName: existing.displayName, password: SEED_PW };
   const username = opts.username || `user${++userSeq}`;
@@ -117,6 +128,7 @@ function seedLoggedIn(opts) { const user = seedUser(opts); return { user, cookie
 
 // Phase 2 dropped tenant_id from every ledger table — these seed helpers no longer stamp one.
 function seedContract(opts = {}) {
+  assertReady();
   const info = db.prepare(
     `INSERT INTO contract (contractor_name, area_of_work, ledger_code, price_of_contract_paise, date_signed, deleted_at)
      VALUES (?, ?, ?, ?, ?, ?)`
@@ -125,11 +137,13 @@ function seedContract(opts = {}) {
   return Number(info.lastInsertRowid);
 }
 function seedPayment(opts = {}) {
+  assertReady();
   const info = db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at) VALUES (?, ?, ?, ?)')
     .run(opts.contractId, opts.payDate || '2026-07-10', opts.amountPaise == null ? 4000000 : opts.amountPaise, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 function seedCashOut(opts = {}) {
+  assertReady();
   const info = db.prepare(
     `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, contract_scope, contract_stated_paise, deleted_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -139,6 +153,7 @@ function seedCashOut(opts = {}) {
   return Number(info.lastInsertRowid);
 }
 function seedCashIn(opts = {}) {
+  assertReady();
   const info = db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.byType || 'user', opts.byUserId == null ? null : opts.byUserId,
       opts.byLabel || null, opts.reason || null, opts.deletedAt || null);
@@ -159,7 +174,7 @@ process.on('exit', () => {
 });
 
 module.exports = {
-  app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
+  app, db, ready, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
   startApp, stopApp, req, raw, pdfHtml, outsideRequests, get, post, put, del, clearLedger,
   seedUser, seedSession, seedLoggedIn, seedContract, seedPayment, seedCashOut, seedCashIn,
 };

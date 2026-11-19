@@ -44,3 +44,24 @@ test('REFUSES when PLANNR_DB is unset (the live-DB guard from the prerequisites 
   assert.notStrictEqual(r.status, 0, 'must refuse with a non-zero exit');
   assert.match((r.stderr || '') + (r.stdout || ''), /REFUSING|LIVE database/i, 'must print the live-DB refusal');
 });
+
+// Step 1.4 B17: reset-db.js brings the database up to date with the async init() before it counts and
+// empties the tables. On a file that does not exist yet, that creates the full schema first.
+test('on a database that does not exist yet: the schema is created first, then every table is reported empty', () => {
+  const target = path.join(os.tmpdir(), `plannr-reset-new-${process.pid}.db`);
+  for (const s of ['', '-journal', '-wal', '-shm']) { try { fs.unlinkSync(target + s); } catch { /* not there */ } }
+  try {
+    const r = spawnSync(process.execPath, ['reset-db.js', '--confirm'], { cwd: ROOT, env: Object.assign({}, process.env, { PLANNR_DB: target }), encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, 'STDOUT:' + r.stdout + '\nSTDERR:' + r.stderr);
+    const dbT = new DatabaseSync(target, { readOnly: true });
+    const tables = dbT.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map((t) => t.name);
+    const version = dbT.prepare('PRAGMA user_version').get().user_version;
+    dbT.close();
+    assert.ok(tables.includes('cash_out') && tables.includes('ledger_mains') && tables.length >= 10, `the full schema exists: ${tables.join(', ')}`);
+    assert.strictEqual(version, require('../db').SCHEMA_VERSION, 'brought up to the current schema version');
+    for (const t of ['cash_out', 'ledger_mains', 'users']) assert.match(r.stdout, new RegExp(`^ {2}${t} +\\d+ +0$`, 'm'), `${t} is in the report, emptied`);
+    assert.match(r.stdout, /all tables empty; schema intact/);
+  } finally {
+    for (const s of ['', '-journal', '-wal', '-shm']) { try { fs.unlinkSync(target + s); } catch { /* not there */ } }
+  }
+});

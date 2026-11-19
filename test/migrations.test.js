@@ -26,7 +26,8 @@ const tables = (d) => d.prepare("SELECT name FROM sqlite_master WHERE type = 'ta
 const addTag = { version: 3, name: 'add notes.tag', up: async (tx) => { await tx.exec("ALTER TABLE notes ADD COLUMN tag TEXT NOT NULL DEFAULT 'none'"); } };
 const addLog = { version: 4, name: 'add log table', up: async (tx) => { await tx.exec('CREATE TABLE log (id INTEGER PRIMARY KEY, at TEXT)'); } };
 
-test('the shipped migration list is valid and SCHEMA_VERSION is its last version', () => {
+test('the shipped migration list is valid and SCHEMA_VERSION is its last version', async () => {
+  await H.ready; // server.js runs init() as its first start job (step 1.4 B17)
   assert.doesNotThrow(() => assertMigrationList(MIGRATIONS));
   assert.strictEqual(SCHEMA_VERSION, MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : BASELINE);
   assert.strictEqual(schemaVersionOf(H.db), SCHEMA_VERSION, 'the test database was brought up to SCHEMA_VERSION by init()');

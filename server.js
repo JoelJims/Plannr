@@ -10,7 +10,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
-const { db, initSync, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter } = require('./db');
+const { db, init, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter } = require('./db');
 const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // the encrypted export (also the Ledger List import's safety backup)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -101,7 +101,11 @@ const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 const SERVER_START = new Date(); // Phase 2 — process start time, surfaced by GET /api/health
 
-initSync(); // step 1.4 B4: the synchronous start, until server.js awaits init() (B17)
+// The database is brought up to date by the async init() (step 1.4 B17). It is the first start job
+// (below), so the other start jobs and every request wait for it, and the server listens only after
+// all of them (app._ready). Its failure is reported there.
+const initDone = init();
+initDone.catch(() => {});
 
 // Single-user offline app: no login, no sessions. The one existing users row is the fixed
 // local owner; every request resolves to it, regardless of any cookie. There is no
@@ -165,9 +169,11 @@ const requestQueue = createRequestQueue();
 const api = queuedRoutes(app, requestQueue);
 // Start-up work that reads the database through the async interface (step 1.4 B10, B13): each is a
 // job in the request queue, ahead of any request. app._ready settles once all have finished, and the
-// start below listens only after it. The first: the ledger list, so no request can read it empty.
+// start below listens only after it. The first: init() (above); then the ledger list, so no request
+// can read it empty.
 const startJobs = [];
 const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
+atStart(() => initDone);
 atStart(() => ledgerIndex.refresh());
 // The core reaches the database only through `adapter` and `repo` (step 1.4 B16): no synchronous handle.
 const coreContext = {

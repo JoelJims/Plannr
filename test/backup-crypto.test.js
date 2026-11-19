@@ -21,7 +21,8 @@ function scratchPath(suffix) {
 
 let plainBuf; // a clean plaintext snapshot of a DB holding exactly the fixture
 
-before(() => {
+before(async () => {
+  await H.ready; // server.js sets the test database up first (step 1.4 B17)
   // Seed exactly 11 cash_out rows summing 78000000 paise (10×7,00,000 + 1×8,00,000).
   const user = H.seedUser();
   for (let i = 0; i < 10; i++) H.seedCashOut({ amountPaise: 7000000, byUserId: user.id });
