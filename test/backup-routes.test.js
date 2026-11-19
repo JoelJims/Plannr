@@ -9,7 +9,7 @@ const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { isStorageFullError } = require('../db');
+const { isStorageFullError, dbAdapter } = require('../db');
 const repo = require('../repo');
 
 before(async () => { await H.startApp(); });
@@ -45,12 +45,15 @@ async function coreApp({ writeJson }) {
       routes[`${m.toUpperCase()} ${p}`] = handler;
     };
   }
+  const starts = [];
   core.register(app, {
-    auth, db: H.db, host: { snapshot: { writeJson }, now: () => new Date() },
+    auth, adapter: dbAdapter(), atStart: (fn) => starts.push(fn()), host: { snapshot: { writeJson }, now: () => new Date() },
     logError: (...args) => logged.push(args.map(String).join(' ')),
     isStorageFullError, storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
     ledgerIndex, CUSTOM_CODE: 'CUSTOM',
   });
+  assert.strictEqual(starts.length, 1, 'the module asks for one start job: the ownership check');
+  await Promise.all(starts);
   const call = async (key, { body, query } = {}) => {
     const res = {
       code: 200, body: undefined, headers: {},

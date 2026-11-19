@@ -137,7 +137,8 @@ test('B12: every repo call in the core and both backends is awaited', () => {
     'writePaymentDates', 'allowanceById', 'computeOverview', 'computeUpcomingPayments', 'overviewPdfHtml', 'saveLedgerCustom',
     'validate', 'finalize', 'afterWrite'];
   const CALL = new RegExp(String.raw`(?:\brepo\.(?:overview|contract|ledgerCustoms|ledgers|backup)\.\w+|\brepo\.authoredCount|\brc\.\w+`
-    + String.raw`|\bTRASH_REPO\[\w+\]\.\w+|\bLEDGER_CRUDS\.\w+\.\w+|\bledgerIndex\.refresh|\b(?:${HELPERS.join('|')}))\(`, 'g');
+    + String.raw`|\bTRASH_REPO\[\w+\]\.\w+|\bLEDGER_CRUDS\.\w+\.\w+|\bledgerIndex\.refresh`
+    + String.raw`|\bbackupFormat\.(?:buildBackup|applyBackup|assertImportOwnershipComplete)|\b(?:${HELPERS.join('|')}))\(`, 'g');
   const SYNC = new Set(['repo.ledgers.toCsv']); // builds text, no database
   const bad = [];
   let seen = 0;

@@ -18,17 +18,18 @@ import * as backupFormat from '../../backup-format.js';
 import { parseIsoDate } from '../parsers.js';
 
 export function register(app, ctx) {
-  const { auth, db, host, logError, isStorageFullError, storageFull, ledgerIndex, CUSTOM_CODE } = ctx;
+  const { auth, adapter, atStart, host, logError, isStorageFullError, storageFull, ledgerIndex, CUSTOM_CODE } = ctx;
 
-  // Fails at startup if a table the import replaces is missing from the list it owns.
-  backupFormat.assertImportOwnershipComplete(db);
+  // Fails the start if a table the import replaces is missing from the list it owns (a start job:
+  // it reads the schema through the async interface, ahead of any request; step 1.4 B13).
+  atStart(() => backupFormat.assertImportOwnershipComplete(adapter));
 
   // ledgerIndex.byCode() is read at call time: ledgerIndex.refresh() replaces it after a restore.
   const check = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate });
 
-  app.get('/api/backup/export', auth, (req, res) => {
+  app.get('/api/backup/export', auth, async (req, res) => {
     const includeContacts = req.query.includeContacts === '1';
-    const backup = backupFormat.buildBackup(db, { includeContacts });
+    const backup = await backupFormat.buildBackup(adapter, { includeContacts });
     // A download name for the dev server's browser; the phone saves the file itself.
     res.setHeader('Content-Disposition', `attachment; filename="plannr-backup-${backup.exportedAt.slice(0, 10)}.json"`);
     res.json(backup);
@@ -42,7 +43,7 @@ export function register(app, ctx) {
     // 2. Safety copy of the current data first (with contacts: it stays on this device).
     let snapshot;
     try {
-      snapshot = await host.snapshot.writeJson(backupFormat.buildBackup(db, { includeContacts: true }));
+      snapshot = await host.snapshot.writeJson(await backupFormat.buildBackup(adapter, { includeContacts: true }));
     } catch (e) {
       logError('Backup snapshot failed:', e);
       return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
@@ -51,7 +52,7 @@ export function register(app, ctx) {
     // 3. Replace in one transaction. Any error rolls back: the current data is unchanged.
     let result;
     try {
-      result = backupFormat.applyBackup(db, req.body);
+      result = await backupFormat.applyBackup(adapter, req.body);
     } catch (e) {
       logError('Backup import failed, rolled back:', e);
       if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the import did not go through.'), snapshot });

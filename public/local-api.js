@@ -25,7 +25,7 @@
 // the plain-JSON ledger export/import above — a separate concern (raw database bytes, not the
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
-import { db, isStorageFullError, rollbackQuietly, transaction } from './db.js';
+import { db, isStorageFullError, rollbackQuietly, transaction, dbAdapter } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as requestRules from './request-rules.js';
 import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
@@ -133,10 +133,12 @@ export function installFetchShim(repo) {
   // dev server runs too). coreContext is what they need from the phone's side.
   // The ledger list (categories), kept in memory and refreshed after an import or a restore.
   const ledgerIndex = createLedgerIndex(repo);
-  // Its first read is the queue's first job (step 1.4 B10), so no request runs before the list is in
-  // memory. local-bootstrap.js awaits it and shows a start-up error if it fails.
-  const ready = requestQueue.run(() => ledgerIndex.refresh());
-  ready.catch(() => {}); // reported where it is awaited
+  // Start-up work that reads the database (step 1.4 B10, B13): each is a job in the request queue,
+  // ahead of any request. The first: the ledger list, so no request can read it empty.
+  // local-bootstrap.js awaits them all (`ready`, returned below) and shows a start-up error if one fails.
+  const startJobs = [];
+  const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
+  atStart(() => ledgerIndex.refresh());
   // The platform services the core may call (core/host.js, step 1.4 A4): the phone's. The PDF goes
   // through the print-adapter plugin (renderPdfOnPhone, below); the safety copy before a JSON
   // restore goes into the app's private folder (safety-snapshots.js).
@@ -146,7 +148,7 @@ export function installFetchShim(repo) {
     now: () => new Date(),
   });
   const coreContext = {
-    db, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
+    db, adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
     host,
     auth: requireApiAuth, // never called here: localApp runs only the last handler
     logError: (...args) => console.error(...args),
@@ -383,5 +385,7 @@ export function installFetchShim(repo) {
   };
 
   // For the tests (test/shim-target.js, test/request-queue-wiring.test.js); local-bootstrap.js does not use it.
+  const ready = Promise.all(startJobs);
+  ready.catch(() => {}); // reported where it is awaited
   return { requestQueue, routes, ready };
 }

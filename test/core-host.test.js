@@ -72,7 +72,7 @@ test('the shared PDF route renders through host.pdf.render (step 1.4 A5)', () =>
 
 test('the shared JSON import saves its safety copy through host.snapshot.writeJson (step 1.4 A7)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'core', 'routes', 'backup.js'), 'utf8');
-  assert.match(src, /await host\.snapshot\.writeJson\(backupFormat\.buildBackup\(db, \{ includeContacts: true \}\)\)/);
+  assert.match(src, /await host\.snapshot\.writeJson\(await backupFormat\.buildBackup\(adapter, \{ includeContacts: true \}\)\)/);
 });
 
 test('the backup reminder reads the time only through host.now (step 1.4 A6)', () => {

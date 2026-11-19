@@ -991,3 +991,20 @@ choices made on the way are in the session report's DECISIONS list.
     (guard); `existsLive` answering a Promise (caught only after the new test). All 5 caught.
   - **Full suite:** all passes. `npm test` 485 tests, 0 failures, the same 3 skipped; the phone pass
     196 of 213, the same 17 known differences; 13 UI suites; `test:slow`.
+- **B13 (2026-11-19): `backup-format.js` is on the async interface.**
+  - `buildBackup`, `applyBackup` and `assertImportOwnershipComplete` take the adapter and return
+    Promises; the module's statement cache is gone (the adapter caches). `applyBackup` runs in
+    `adapter.transaction()` with the same steps in the same order. `validateBackup` reads no
+    database and stays synchronous.
+  - The core's JSON backup routes await them and get the adapter as `ctx.adapter`. The import's
+    ownership check (a table with a foreign key into an import-owned table must be owned too) now
+    runs as a start job (`ctx.atStart`) in each backend's request queue, ahead of every request,
+    with the ledger index's first refresh.
+  - **Tests:** the ownership tests in `test/schema.test.js` await; `test/backup-routes.test.js`
+    checks that the module asks for exactly one start job and runs it; the "every call is awaited"
+    guard in `test/repo-async.test.js` now covers the three backup functions.
+  - **Known positives:** the import without its transaction; the import's call not awaited (guard);
+    the ownership check run directly instead of as a start job; the ownership check reading no
+    tables. All 4 caught.
+  - **Full suite:** all passes. `npm test` 485 tests, 0 failures, the same 3 skipped; the phone pass
+    196 of 213, the same 17 known differences; 13 UI suites; `test:slow`.

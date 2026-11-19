@@ -15,8 +15,9 @@
 // left exactly as they are on this install, and its category codes are checked against this
 // install's categories — the same behaviour as before v2 existed.
 //
-// Every function here takes the database handle as an argument (node:sqlite DatabaseSync on the
-// desktop, db-engine.js's compatible wrapper on the phone), so this module has no imports of its own.
+// Every function that touches the database takes the async database interface as its first argument
+// (core/db-adapter.js: get/all/run/exec/transaction, params as an array; step 1.4 B13) and returns a
+// Promise, so this module has no imports of its own. validateBackup() reads only the file.
 
 export const BACKUP_SCHEMA_VERSION = 2;
 export const READABLE_BACKUP_VERSIONS = [1, 2];
@@ -73,24 +74,16 @@ export const CONTACT_SETTINGS_KEYS = ['daily_report_recipients', 'daily_report_w
 // What a restored user's password_hash is set to: there is no login, so no real hash is ever needed.
 export const NO_PASSWORD = 'local-single-user-no-auth';
 
-// Cache prepared statements per database handle (the phone's wrapper never finalizes them).
-const _stmts = new WeakMap();
-function stmt(db, sql) {
-  let m = _stmts.get(db);
-  if (!m) { m = new Map(); _stmts.set(db, m); }
-  let s = m.get(sql);
-  if (!s) { s = db.prepare(sql); m.set(sql, s); }
-  return s;
-}
-const tableNames = (db) => new Set(stmt(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name));
+// (The adapter prepares each SQL text once and keeps it.)
+const tableNames = async (adapter) => new Set((await adapter.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")).map((r) => r.name));
 
 // Startup drift guard: a table with a foreign key INTO an import-owned table, but not itself owned,
-// would have its parent cleared under it by an import. Derived from the real schema.
-export function assertImportOwnershipComplete(db) {
+// would have its parent cleared under it by an import. Derived from the real schema. Rejects.
+export async function assertImportOwnershipComplete(adapter) {
   const owned = new Set(IMPORT_OWNED_TABLES);
   const offenders = [];
-  for (const t of tableNames(db)) {
-    for (const fk of db.prepare(`PRAGMA foreign_key_list(${t})`).all()) {
+  for (const t of await tableNames(adapter)) {
+    for (const fk of await adapter.all(`PRAGMA foreign_key_list(${t})`)) {
       if (owned.has(fk.table) && !owned.has(t)) offenders.push(`${t}.${fk.from} -> ${fk.table}(${fk.to})`);
     }
   }
@@ -106,17 +99,17 @@ export function assertImportOwnershipComplete(db) {
 // A full snapshot as a plain object — every table, every listed column, INCLUDING soft-deleted rows.
 // includeContacts: the user-facing export leaves the retired contact keys out unless asked; the
 // pre-import safety snapshot passes true (it is a local rollback file and must lose nothing).
-export function buildBackup(db, { includeContacts = false } = {}) {
-  const present = tableNames(db);
+export async function buildBackup(adapter, { includeContacts = false } = {}) {
+  const present = await tableNames(adapter);
   const tables = {};
   for (const t of BACKUP_TABLES) {
     if (!present.has(t)) { tables[t] = []; continue; }
-    tables[t] = stmt(db, `SELECT ${BACKUP_COLS[t].join(', ')} FROM ${t} ORDER BY ${PRIMARY_KEY[t] || 'id'}`).all().map((r) => ({ ...r }));
+    tables[t] = (await adapter.all(`SELECT ${BACKUP_COLS[t].join(', ')} FROM ${t} ORDER BY ${PRIMARY_KEY[t] || 'id'}`)).map((r) => ({ ...r }));
   }
   if (!includeContacts) tables.settings = tables.settings.filter((r) => !CONTACT_SETTINGS_KEYS.includes(r.key));
   const sequences = {};
-  if (present.has('sqlite_sequence') || stmt(db, "SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'").get()) {
-    for (const r of stmt(db, 'SELECT name, seq FROM sqlite_sequence ORDER BY name').all()) {
+  if (present.has('sqlite_sequence') || await adapter.get("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'")) {
+    for (const r of await adapter.all('SELECT name, seq FROM sqlite_sequence ORDER BY name')) {
       if (BACKUP_TABLES.includes(r.name)) sequences[r.name] = r.seq;
     }
   }
@@ -289,34 +282,35 @@ export function validateBackup(data, ctx) {
   return { ok: true };
 }
 
-// Replace the data with a VALIDATED backup, in ONE transaction: any error rolls everything back and
-// the current data is untouched (the caller turns the thrown error into a message). Returns
-// { imported, remappedUsers }. A by_user_id that matches no user (in the file for v2, on this install
-// for v1) is set to NULL and counted, so a missing person never fails a restore.
-export function applyBackup(db, data) {
+// Replace the data with a VALIDATED backup, in ONE transaction (adapter.transaction(): any error rolls
+// everything back, the current data is untouched, and the error is passed on for the caller to turn
+// into a message). Resolves to { imported, remappedUsers }. A by_user_id that matches no user (in the
+// file for v2, on this install for v1) is set to NULL and counted, so a missing person never fails a
+// restore.
+export async function applyBackup(adapter, data) {
   const T = data.tables;
   const full = data.schemaVersion >= 2;
-  const present = tableNames(db);
-  const userIds = new Set((full ? T.users : stmt(db, 'SELECT id FROM users').all()).map((u) => u.id));
+  const present = await tableNames(adapter);
+  const userIds = new Set((full ? T.users : await adapter.all('SELECT id FROM users')).map((u) => u.id));
   let remappedUsers = 0;
 
-  db.exec('BEGIN');
-  try {
+  await adapter.transaction(async (tx) => {
     for (const t of IMPORT_OWNED_TABLES) {
       if (t === 'settings' || (!full && V2_TABLES.includes(t)) || !present.has(t)) continue;
-      stmt(db, `DELETE FROM ${t}`).run();
+      await tx.run(`DELETE FROM ${t}`);
     }
     for (const t of BACKUP_TABLES) {
       if (!full && V2_TABLES.includes(t)) continue;
       if (t === 'settings') {
-        const up = stmt(db, 'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
-        for (const r of (T.settings || [])) up.run(r.key, r.value === undefined ? null : r.value);
+        for (const r of (T.settings || [])) {
+          await tx.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [r.key, r.value === undefined ? null : r.value]);
+        }
         continue;
       }
       const cols = t === 'users' ? [...BACKUP_COLS.users, 'password_hash'] : BACKUP_COLS[t];
-      const ins = stmt(db, `INSERT INTO ${t} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`);
+      const sql = `INSERT INTO ${t} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`;
       for (const r of (T[t] || [])) {
-        ins.run(...cols.map((col) => {
+        await tx.run(sql, cols.map((col) => {
           if (col === 'password_hash') return NO_PASSWORD;
           let val = r[col];
           if (col === 'by_user_id' && val != null && !userIds.has(val)) { val = null; remappedUsers++; }
@@ -329,18 +323,12 @@ export function applyBackup(db, data) {
     if (full && data.sequences) {
       for (const [name, seq] of Object.entries(data.sequences)) {
         if (!present.has(name)) continue;
-        const maxId = stmt(db, `SELECT COALESCE(MAX(id), 0) AS m FROM ${name}`).get().m;
-        stmt(db, 'DELETE FROM sqlite_sequence WHERE name = ?').run(name);
-        stmt(db, 'INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(name, Math.max(seq, maxId));
+        const maxId = (await tx.get(`SELECT COALESCE(MAX(id), 0) AS m FROM ${name}`)).m;
+        await tx.run('DELETE FROM sqlite_sequence WHERE name = ?', [name]);
+        await tx.run('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)', [name, Math.max(seq, maxId)]);
       }
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    // Same as db.js's rollbackQuietly() (this module stays import-free): after a storage-full error
-    // SQLite has already rolled back, and a second ROLLBACK must not hide the original error.
-    try { db.exec('ROLLBACK'); } catch (r) { if (!/no transaction is active/i.test(String(r && r.message))) throw r; }
-    throw e;
-  }
+  });
   const imported = {};
   for (const t of BACKUP_TABLES) if (full || !V2_TABLES.includes(t)) imported[t] = (T[t] || []).length;
   return { imported, remappedUsers };

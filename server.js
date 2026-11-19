@@ -10,7 +10,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
-const { db, initSync, DB_PATH, isStorageFullError, rollbackQuietly, transaction } = require('./db');
+const { db, initSync, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter } = require('./db');
 const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // the encrypted export (also the Ledger List import's safety backup)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -164,12 +164,14 @@ const host = checkHost({
 // and stay on `app`. The phone (public/local-api.js) does the same.
 const requestQueue = createRequestQueue();
 const api = queuedRoutes(app, requestQueue);
-// The ledger list's first read (step 1.4 B10: through the async interface) is the queue's first job,
-// so no request can run before the list is in memory. app._ready is this; the start below waits for it.
-const ledgerIndexReady = requestQueue.run(() => ledgerIndex.refresh());
-ledgerIndexReady.catch(() => {}); // reported where it is awaited (the start below, the tests)
+// Start-up work that reads the database through the async interface (step 1.4 B10, B13): each is a
+// job in the request queue, ahead of any request. app._ready settles once all have finished, and the
+// start below listens only after it. The first: the ledger list, so no request can read it empty.
+const startJobs = [];
+const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
+atStart(() => ledgerIndex.refresh());
 const coreContext = {
-  db, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
+  db, adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
   host,
   auth: requireApiAuth,
   logError: (...args) => { if (!IS_PROD) console.error(...args); },
@@ -347,7 +349,7 @@ function requireAuth(req, res, next) {
 const backupFormat = require('./backup-format');
 // The startup drift guard (see backup-format.js) runs when core/routes/backup.js registers. This copy
 // is for the schema tests (app._assertImportOwnershipComplete).
-const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(db);
+const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(dbAdapter()); // a Promise
 
 // Phase 10b — full encrypted database snapshot, added specifically so the Ledger List CSV import
 // (below) has something real to trigger as its non-negotiable pre-import restore point: server.js
@@ -594,7 +596,9 @@ app._assertImportOwnershipComplete = assertImportOwnershipComplete; // Phase 9: 
 app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview warm Playwright; teardown closes it
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?
 app._requestQueue = requestQueue; // step 1.4 B5: tests hold it to check every /api route waits its turn
-app._ready = ledgerIndexReady; // step 1.4 B10: settles once the ledger list is read (the queue's first job)
+// Step 1.4 B10, B13: settles once every start job has finished (rejects with the first failure).
+app._ready = Promise.all(startJobs);
+app._ready.catch(() => {}); // reported where it is awaited (the start below, the tests)
 app._accessGate = accessGate; // Phase 1 safety: LAN/Host gate, unit-tested with fake requests
 app._accessConfig = accessConfig;
 app._watchStopSentinel = watchStopSentinel; // Phase 11B: test that a sentinel file routes into the same stop callback as SIGINT
@@ -641,14 +645,14 @@ if (require.main === module) {
   const lanIp = Object.values(os.networkInterfaces()).flat()
     .find((i) => i && (i.family === 'IPv4' || i.family === 4) && !i.internal)?.address;
 
-  ledgerIndexReady.then(() => {
+  app._ready.then(() => {
     app.listen(PORT, access.host, () => {
       console.log('DEV MODE – not used by the phone app');
       console.log(`Plannr desktop dev server running at http://localhost:${PORT} (the Android app keeps its own data and never talks to this server).`);
       if (access.lan && lanIp) console.log(`  on your network:  http://${lanIp}:${PORT}/?token=<your PLANNR_TOKEN>  (open once per device)`);
     });
   }, (e) => {
-    console.error('[startup] could not read the ledger list:', e);
+    console.error('[startup] could not start:', e);
     process.exit(1);
   });
 }
