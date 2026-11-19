@@ -123,11 +123,10 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   // Single-user offline app: no login, no sessions — mirrors server.js exactly.
   // ---------------------------------------------------------------------------
-  const OWNER_STMT = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
-  const getOwner = () => OWNER_STMT.get();
-  const USER_EXISTS_STMT = db.prepare('SELECT 1 FROM users WHERE id = ?');
-  const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
-  function requireApiAuth(req, res, next) { req.user = getOwner(); next(); }
+  // Through the async interface (step 1.4 B15): both answer with a Promise.
+  const getOwner = () => dbAdapter().get('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
+  const userExists = async (id) => Number.isInteger(id) && !!(await dbAdapter().get('SELECT 1 FROM users WHERE id = ?', [id]));
+  async function requireApiAuth(req, res, next) { try { req.user = await getOwner(); } catch (e) { return next(e); } next(); }
 
   // Cross-platform plan, step 1.3: the route groups already moved to core/routes/ (the one copy the
   // dev server runs too). coreContext is what they need from the phone's side.

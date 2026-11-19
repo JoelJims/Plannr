@@ -15,14 +15,14 @@ export function register(app, ctx) {
   // Validate/resolve the "By" attribution from a request body. `existingByUserId` is the row's
   // stored by_user_id on EDIT (the PUT path passes it); undefined on CREATE.
   // -> { byType, byUserId, byLabel }  or  { error }.
-  function resolveBy(body, existingByUserId) {
+  async function resolveBy(body, existingByUserId) {
     const byType = str(body.byType);
     if (!CASH_IN_BY_TYPES.has(byType)) return { error: 'Select who the money is from.' };
     if (byType === 'user') {
       // "By" records who PAID, not who entered the row — a shared, multi-user ledger — so any
       // real user is valid (create AND edit). Accept any existing by_user_id; reject unknowns.
       const id = Number(body.byUserId);
-      if (Number.isInteger(id) && userExists(id)) return { byType, byUserId: id, byLabel: null };
+      if (Number.isInteger(id) && await userExists(id)) return { byType, byUserId: id, byLabel: null };
       // Edit round-trip: an already-NULL attribution (backup-import remap of an unknown user)
       // must stay editable — preserve NULL when the stored value is already NULL and this edit
       // carries no real id. Create stays strict (existingByUserId is undefined there).
@@ -69,13 +69,13 @@ export function register(app, ctx) {
     byIdWhere: 'WHERE c.id = ?',
     shape: cashInRow,
     columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason'],
-    validate: (req, existingByUserId) => {
+    validate: async (req, existingByUserId) => {
       const amountPaise = parsePaise(req.body.amountRupees);
       if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
       // Phase 4C — inflow date REQUIRED on new writes (ISO 'YYYY-MM-DD'), same rule as cash_out.tx_date.
       const txd = parseIsoDate(req.body.txDate);
       if (txd.error || !txd.date) return { error: 'Enter a valid date (YYYY-MM-DD).' };
-      const by = resolveBy(req.body, existingByUserId);
+      const by = await resolveBy(req.body, existingByUserId);
       if (by.error) return { error: by.error };
       return { values: { amount_paise: amountPaise, tx_date: txd.date, by_type: by.byType, by_user_id: by.byUserId, by_label: by.byLabel, reason: str(req.body.reason).slice(0, REASON_MAX) } };
     },
@@ -220,7 +220,7 @@ export function register(app, ctx) {
   // spending is no longer recorded as an outflow (a later phase adds a dedicated tab).
   // A NEW write with by_type='contractor' is rejected with a clear 400; existing legacy
   // 'contractor' rows are left untouched in the DB (this function never rewrites them).
-  function resolveCashOutBy(body, existingByUserId) {
+  async function resolveCashOutBy(body, existingByUserId) {
     const byType = str(body.byType);
     if (byType === 'contractor') return { error: 'Contractor spending is no longer recorded as an outflow.' };
     if (!CASH_OUT_BY_TYPES.has(byType)) return { error: 'Select who the money is from.' };
@@ -228,7 +228,7 @@ export function register(app, ctx) {
       // "By" records who PAID, not who entered the row — shared ledger, so any real user is a
       // valid attribution (create AND edit). Accept any existing by_user_id; reject unknowns.
       const id = Number(body.byUserId);
-      if (Number.isInteger(id) && userExists(id)) return { byType, byUserId: id, byLabel: null };
+      if (Number.isInteger(id) && await userExists(id)) return { byType, byUserId: id, byLabel: null };
       // Edit round-trip: preserve an already-NULL attribution (import remap of an unknown user)
       // so its other fields stay editable. Create stays strict (existingByUserId undefined there).
       if (existingByUserId === null && body.byUserId == null) return { byType, byUserId: null, byLabel: null };
@@ -340,7 +340,7 @@ export function register(app, ctx) {
     // contract_stated_paise is deliberately ABSENT from this list: new rows get NULL, and an edit of a
     // legacy row leaves its stored value untouched (the column is never in the UPDATE ... SET list).
     columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id', 'contract_allowance_id'],
-    validate: (req, existingByUserId) => {
+    validate: async (req, existingByUserId) => {
       const amountPaise = parsePaise(req.body.amountRupees);
       if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
 
@@ -350,7 +350,7 @@ export function register(app, ctx) {
       if (txd.error) return { error: txd.error };
       if (!txd.date) return { error: 'Select a date for this entry.' };
 
-      const by = resolveCashOutBy(req.body, existingByUserId);
+      const by = await resolveCashOutBy(req.body, existingByUserId);
       if (by.error) return { error: by.error };
 
       // Ledger + sub-ledger (fixed-or-CUSTOM) — shared with the standalone ledger picker.

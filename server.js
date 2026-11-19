@@ -108,8 +108,8 @@ initSync(); // step 1.4 B4: the synchronous start, until server.js awaits init()
 // registration route, so a user row must already exist (seed-demo.js or a direct INSERT).
 // Queried fresh per call (not resolved once at require-time): the test harness requires this
 // module before seeding any user, so a value captured at load time would be permanently stale.
-const OWNER_STMT = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
-const getOwner = () => OWNER_STMT.get();
+// Through the async interface (step 1.4 B15): getOwner() answers with a Promise.
+const getOwner = () => dbAdapter().get('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
 
 // The data-access layer. Required AFTER init() so it can prepare its statements against the
 // migrated schema. Every read/write touching one of the ledger tables goes through repo.*.
@@ -128,8 +128,7 @@ const { createRequestQueue, queuedRoutes } = require('./core/request-queue.js');
 // budget's in core/routes/budget.js; both are prepared after this point too.
 // Phase 2: an existence check for validating a chosen by_user_id. (The roster itself is read in
 // core/routes/people.js.)
-const USER_EXISTS_STMT = db.prepare('SELECT 1 FROM users WHERE id = ?');
-const userExists = (id) => Number.isInteger(id) && !!USER_EXISTS_STMT.get(id);
+const userExists = async (id) => Number.isInteger(id) && !!(await dbAdapter().get('SELECT 1 FROM users WHERE id = ?', [id]));
 
 // JSON body parsing, one size limit per kind of route. The limits, which route gets which, and the
 // "too large" / "Invalid request." answers live in request-rules.js, shared with the phone
@@ -191,8 +190,8 @@ require('./core/routes/ledger-list.js').register(api, coreContext);
 // Single-user offline app: no auth check. Sets req.user to the fixed local owner (kept for any
 // future per-request use; repo.js calls no longer take a tenant argument, so nothing currently
 // reads req.user outside this assignment).
-function requireApiAuth(req, res, next) {
-  req.user = getOwner();
+async function requireApiAuth(req, res, next) {
+  try { req.user = await getOwner(); } catch (e) { return next(e); }
   next();
 }
 

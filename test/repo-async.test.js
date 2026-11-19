@@ -136,7 +136,7 @@ test('B12: every repo call in the core and both backends is awaited', () => {
   const HELPERS = ['contractRow', 'getContractRow', 'getServiceRow', 'getLiveServiceForContract', 'getLiveAllowanceForContract',
     'writePaymentDates', 'allowanceById', 'computeOverview', 'computeUpcomingPayments', 'overviewPdfHtml', 'saveLedgerCustom',
     'validate', 'finalize', 'afterWrite', 'getBudgetPaise', 'getNotificationTimes', 'getLastExportAt', 'getBackupReminderDays',
-    'getBackupReminderStatus', 'setSetting'];
+    'getBackupReminderStatus', 'setSetting', 'getOwner', 'userExists', 'resolveBy', 'resolveCashOutBy'];
   const CALL = new RegExp(String.raw`(?:\brepo\.(?:overview|contract|ledgerCustoms|ledgers|backup)\.\w+|\brepo\.authoredCount|\brc\.\w+`
     + String.raw`|\bTRASH_REPO\[\w+\]\.\w+|\bLEDGER_CRUDS\.\w+\.\w+|\bledgerIndex\.refresh`
     + String.raw`|\bbackupFormat\.(?:buildBackup|applyBackup|assertImportOwnershipComplete)`

@@ -1025,3 +1025,19 @@ choices made on the way are in the session report's DECISIONS list.
     the same 17 known differences; 13 UI suites. `test:slow` failed once on the timed PDF idle test
     (its 1.5 s idle window raced the test under load; nothing B14 touches), then passed twice when
     re-run; the test is fixed in the next commit.
+- **B15 (2026-11-19): the people routes and the owner and user checks are on the async
+  interface.**
+  - `core/routes/people.js` reads the roster through `ctx.adapter`. `ctx.getOwner()` and
+    `ctx.userExists()` answer with Promises in both backends; the cash-in and cash-out "By" checks
+    (`resolveBy`, `resolveCashOutBy`) and their `validate` hooks are async.
+  - The backends' `requireApiAuth` awaits the owner and passes a failure to `next()`. Nothing reads
+    `req.user` today; the phone's shim never runs it (it runs only the last handler).
+  - **Tests:** new `test/people-routes.test.js` (2, both passes): `/api/me` is the lowest-id user;
+    `/api/users` lists only id and display name, by id (no test read it before); a "By" user that
+    does not exist is refused on cash in and cash out and nothing is saved, and a real one is
+    stored. The await guard covers the four helpers.
+  - **Known positives:** the roster not awaited; the cash-in user check not awaited (an unknown user
+    accepted); `userExists` always true on the dev server, and on the phone (phone pass); the owner
+    read as the highest id. All 5 caught.
+  - **Full suite:** all passes. `npm test` 489 tests, 0 failures, the same 3 skipped; the phone pass
+    200 of 217, the same 17 known differences; 13 UI suites; `test:slow`.
