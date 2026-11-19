@@ -1319,3 +1319,27 @@ choices made on the way are in the session report's DECISIONS list.
     accepted) each fail the file.
   - Full suite: node 590 tests (587 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C8 (2026-11-19): after the move (plan §2.4).** Three actions in `core/storage-move.js`, each
+  reached through `host` like the move:
+  - `moveBack()` ("Move data back"): needs your confirmation and the app on the file; refused when
+    the data is over 90% of the localStorage limit (2 characters per byte, with the numbers). It
+    snapshots first (the old copy as `old-copy`, the file as `pre-move-back`; both outside the
+    3-snapshot rotation), replaces the old copy with your current data, checks it with the C4
+    fingerprints, and only then writes the marker `localstorage-v1`. The file is kept. Stopped at
+    any point, the app stays on the file, which is unchanged.
+  - `useOldCopy()` (the emergency choice): only when the file is missing or fails `quick_check`,
+    and only after a confirmation that names the old copy's date ("Anything entered after that is
+    not in it"). The damaged file is set aside, never deleted. Refused once the old copy is gone.
+  - `deleteOldCopy()`: only on `native-v1`, only with an encrypted backup saved after the move
+    (`last_encrypted_export_at`, a UTC settings stamp, later than `movedAt`), then a confirmation.
+    The marker records it first, so a stop half-way finishes when done again; never the copy in use.
+  - `test/_storage-move-host.js` gains the localStorage side (`local`: limit, export, replace, clear)
+    and named snapshots.
+  - **Tests:** `test/storage-move-rules.test.js` (18): the 90% limit; a full move back; refused
+    without confirmation, off the file, or over the limit; stopped at each step; a failed write; a
+    copy that does not match; the old copy only for a missing or damaged file, after confirmation,
+    with the damaged file kept; refused after deletion; delete needs a backup since the move and a
+    confirmation; stopped after it is recorded; the settings stamp read as UTC. **Known
+    positives:** 12 mutations, each caught.
+  - Full suite: node 608 tests (605 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.

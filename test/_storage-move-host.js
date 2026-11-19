@@ -54,10 +54,10 @@ async function makeHost(dir, opts = {}) {
       await cp('backup');
       if (opts.backupFails) throw new Error('the backup was not saved');
     },
-    async snapshot(bytes) {
-      host.calls.push('snapshot');
+    async snapshot(bytes, kind = 'pre-move') {
+      host.calls.push(kind === 'pre-move' ? 'snapshot' : `snapshot:${kind}`);
       fs.mkdirSync(files.snapshots, { recursive: true });
-      const name = `plannr-pre-move-${host.calls.filter((c) => c === 'snapshot').length}.db`;
+      const name = `plannr-${kind}-${host.calls.filter((c) => c.startsWith('snapshot')).length}.db`;
       fsyncWrite(path.join(files.snapshots, name), bytes, 2, () => cpSync('snapshot-half'));
       await cp('snapshot-written');
       if (!fs.readFileSync(path.join(files.snapshots, name)).equals(Buffer.from(bytes))) throw new Error('the snapshot did not read back');
@@ -109,6 +109,31 @@ async function makeHost(dir, opts = {}) {
       async clear() { const o = ls.read(); delete o['plannr-storage-move']; ls.write(o); },
     },
     checkpoint: (name) => cp(name),
+    // C8: the old copy as something that can be replaced and deleted, and the file in use.
+    local: {
+      limitChars: opts.limitChars ?? 5 * 1024 * 1024,
+      async exists() { return fs.existsSync(files.local); },
+      async exportBytes() {
+        const a = openNodeSqliteAdapter(files.local, { readOnly: true });
+        try { return await a.exportBytes(); } finally { await a.close(); }
+      },
+      async replaceWith(bytes) {
+        host.calls.push('local.replaceWith');
+        await cp('local-replace');
+        const a = openNodeSqliteAdapter(files.local);
+        try { await a.replaceWith(bytes); } finally { await a.close(); }
+      },
+      async open() { return openNodeSqliteAdapter(files.local, { readOnly: true }); },
+      async clear() {
+        host.calls.push('local.clear');
+        await cp('local-clear');
+        for (const x of [files.local, files.local + '-journal']) fs.rmSync(x, { force: true });
+      },
+    },
+    file: null, // set by openFile()
+    async openFile() { host.file = openNodeSqliteAdapter(files.main); return host.file; },
+    lastBackupAt: opts.lastBackupAt ?? null,
+    async lastEncryptedBackupAt() { return host.lastBackupAt; },
   };
   return host;
 }

@@ -229,3 +229,167 @@ export async function decideAtStartup({ marker, candidate, main, mainOk, moveInP
     prompt: 'interrupted',
   };
 }
+
+// ---- After the move: the way back, the emergency path, deleting the old copy (plan §2.4; C8) --------
+//
+// More of host, used only here:
+//   file                     the adapter on the database file in use (after the move)
+//   local.limitChars         the localStorage limit in characters (local-api.js LOCALSTORAGE_LIMIT_CHARS)
+//   local.exists()           the old localStorage copy is there
+//   local.exportBytes()      its bytes (for the snapshot before it is replaced)
+//   local.replaceWith(bytes) replace it, all or nothing (kvvfs: one transaction)
+//   local.open()             an adapter on it (for the check)
+//   local.clear()            delete it (the kvvfs-local-* keys)
+//   main.exists(), main.quickCheckOk(), main.setAside(stamp)
+//   lastEncryptedBackupAt()  settings.last_encrypted_export_at of the data in use ('YYYY-MM-DD HH:MM:SS', UTC) or null
+
+/** kvvfs keeps a database byte as up to 2 characters of localStorage (hex; runs of zeros are shorter). */
+export const KVVFS_CHARS_PER_BYTE = 2;
+/** The way back is allowed only under 90% of the localStorage limit, because that limit applies again. */
+export const MOVE_BACK_FRACTION = 0.9;
+export const moveBackLimitBytes = (limitChars) => Math.floor((MOVE_BACK_FRACTION * Number(limitChars)) / KVVFS_CHARS_PER_BYTE);
+export const moveBackFits = (bytes, limitChars) => Number(bytes) <= moveBackLimitBytes(limitChars);
+
+const mbText = (bytes) => `${(Math.ceil((Number(bytes) / MB) * 10) / 10).toFixed(1)} MB`;
+const dayText = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? 'the move' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+};
+/** settings stamps are 'YYYY-MM-DD HH:MM:SS' in UTC; ISO strings and Dates are taken as they are. */
+export function stampTime(v) {
+  if (v instanceof Date) return v.getTime();
+  const s = String(v ?? '');
+  const t = Date.parse(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(s) ? s.replace(' ', 'T') + 'Z' : s);
+  return Number.isNaN(t) ? NaN : t;
+}
+
+async function readMarker(host) {
+  try { const m = await host.marker.read(); return m && typeof m === 'object' ? m : null; } catch { return null; }
+}
+
+async function snapshotOrStop(host, step, bytes, kind) {
+  try { return await host.snapshot(bytes, kind); } catch (e) {
+    if (isDiskFull(e)) throw new MoveError(step, `There is not enough space for the safety snapshot. ${spaceMessage(requiredFreeBytes(bytes.length), Number(await host.freeBytes().catch(() => 0)))}`, { cause: e });
+    throw new MoveError(step, `The safety snapshot could not be saved, so nothing was changed: ${e && e.message ? e.message : e}`, { cause: e });
+  }
+}
+
+/**
+ * "Move data back" (plan §2.4): copy the data in use (the file) into localStorage, replacing the old
+ * copy, check it, then set the marker to localstorage-v1. The file is kept. Allowed only when the
+ * data fits under 90% of the localStorage limit, and only after you confirm (it replaces the old copy).
+ * Snapshots of the old copy and of the data in use come first. Until the marker changes the app
+ * stays on the file, so a failure at any point leaves it working on the file.
+ */
+export async function moveBack(host, { confirmed = false, onStep } = {}) {
+  const marker = await readMarker(host);
+  if (!marker || marker.storage !== MARKER_NATIVE) throw new MoveError('state', 'Your data is not in the new storage, so there is nothing to move back.');
+  if (confirmed !== true) throw new MoveError('confirm', 'Moving your data back replaces the old copy with your current data. Confirm to go on.');
+  const say = async (name) => { await point(host, `back-${name}`); if (onStep) onStep(name); };
+
+  await say('size');
+  const bytes = await host.file.exportBytes();
+  const limit = moveBackLimitBytes(host.local.limitChars);
+  if (!moveBackFits(bytes.length, host.local.limitChars)) {
+    throw new MoveError('size', `Your data (${mbText(bytes.length)}) is too big to move back: the old storage holds at most about ${mbText(limit)}. It stays in the new storage.`, { bytes: bytes.length, limitBytes: limit });
+  }
+  const free = Number(await host.freeBytes());
+  const need = requiredFreeBytes(bytes.length);
+  if (!(free >= need)) throw new MoveError('space', spaceMessage(need, free), { needBytes: need, freeBytes: free });
+
+  await say('snapshot');
+  const snapshots = {};
+  if (await host.local.exists()) snapshots.oldCopy = await snapshotOrStop(host, 'snapshot', await host.local.exportBytes(), 'old-copy');
+  snapshots.current = await snapshotOrStop(host, 'snapshot', bytes, 'pre-move-back');
+
+  await say('write');
+  try {
+    await host.local.replaceWith(bytes);
+  } catch (e) {
+    throw new MoveError('write', `Your data could not be written back, so nothing was switched (the old copy is unchanged): ${e && e.message ? e.message : e}`, { cause: e });
+  }
+
+  await say('check');
+  let local = null;
+  let diffs;
+  let fpFile;
+  try {
+    local = await host.local.open();
+    fpFile = await fingerprint(host.file);
+    diffs = compareFingerprints(fpFile, await fingerprint(local));
+  } finally {
+    if (local) await local.close().catch(() => {});
+  }
+  if (diffs.length) {
+    throw new MoveError('check', `The copy in the old storage does not match your data, so nothing was switched; you stay on the new storage (a snapshot of the old copy was saved): ${diffs[0]}`, { diffs, snapshots });
+  }
+
+  await say('switch');
+  const summary = summarize(fpFile);
+  const at = host.now().toISOString();
+  const next = {
+    storage: MARKER_LOCAL,
+    movedBackAt: at,
+    movedAt: marker.movedAt,
+    check: { tables: summary.tables, rows: summary.rows, perTable: summary.perTable },
+    file: { kept: true, since: at },
+    snapshots,
+  };
+  await host.marker.write(next);
+  try { await host.markerKey.write({ storage: MARKER_LOCAL, movedBackAt: at }); } catch { /* the file is what counts */ }
+  return { summary, marker: next };
+}
+
+/**
+ * The emergency path (plan §2.4): only when the marker says native-v1 and the file is missing or
+ * damaged. Switches back to the old localStorage copy as it was on the day of the move, without
+ * copying anything, so entries made since then are not in it (the dialog says so; `confirmed`). The
+ * damaged file is renamed aside and kept.
+ */
+export async function useOldCopy(host, { confirmed = false } = {}) {
+  const marker = await readMarker(host);
+  if (!marker || marker.storage !== MARKER_NATIVE) throw new MoveError('state', 'The app is not using the new storage, so there is nothing to switch back from.');
+  const main = await host.main.exists();
+  if (main && (await host.main.quickCheckOk())) throw new MoveError('state', 'The database file is fine. The old copy is only for when the file is missing or damaged.');
+  const kept = !(marker.oldCopy && marker.oldCopy.kept === false) && (await host.local.exists());
+  if (!kept) throw new MoveError('missing', 'There is no old copy to go back to. Restore an encrypted backup instead.');
+  const since = (marker.oldCopy && marker.oldCopy.since) || marker.movedAt;
+  if (confirmed !== true) throw new MoveError('confirm', `The old copy is your data as it was on ${dayText(since)}. Anything entered after that is not in it. Confirm to go on.`);
+
+  const at = host.now().toISOString();
+  let setAside = null;
+  if (main) setAside = await host.main.setAside(at.replace(/[:.]/g, '-'));
+  const next = { storage: MARKER_LOCAL, emergency: true, at, oldCopyFrom: since, movedAt: marker.movedAt, file: { kept: !!setAside, setAside, reason: main ? 'damaged' : 'missing' } };
+  await host.marker.write(next);
+  try { await host.markerKey.write({ storage: MARKER_LOCAL, at, emergency: true }); } catch { /* the file is what counts */ }
+  return { marker: next, setAside };
+}
+
+/**
+ * "Delete the old copy" (plan §2.4): only after you confirm, and only with an encrypted backup saved
+ * since the move. The marker records it first, then the localStorage copy is deleted; if the delete
+ * is interrupted, doing it again finishes it. Nothing ever calls this on its own.
+ */
+export async function deleteOldCopy(host, { confirmed = false } = {}) {
+  const marker = await readMarker(host);
+  if (!marker || marker.storage !== MARKER_NATIVE) throw new MoveError('state', 'The old copy is the data in use, so it cannot be deleted.');
+  const recorded = !(marker.oldCopy && marker.oldCopy.kept === false);
+  if (!(await host.local.exists())) {
+    if (recorded) await host.marker.write({ ...marker, oldCopy: { ...(marker.oldCopy || {}), kept: false, deletedAt: host.now().toISOString() } });
+    throw new MoveError('missing', 'There is no old copy to delete.');
+  }
+  const last = await host.lastEncryptedBackupAt();
+  const lastAt = stampTime(last);
+  const movedAt = stampTime(marker.movedAt);
+  if (!(Number.isFinite(lastAt) && Number.isFinite(movedAt) && lastAt > movedAt)) {
+    throw new MoveError('backup', `Save an encrypted backup first: none has been saved since the move on ${dayText(marker.movedAt)}.`, { lastBackupAt: last || null });
+  }
+  if (confirmed !== true) throw new MoveError('confirm', 'Deleting the old copy cannot be undone. Your encrypted backup stays your safety net. Confirm to go on.');
+  const at = host.now().toISOString();
+  const bytes = (marker.oldCopy && marker.oldCopy.bytes) || null;
+  const next = { ...marker, oldCopy: { ...(marker.oldCopy || {}), kept: false, deletedAt: at } };
+  await host.marker.write(next);
+  await point(host, 'delete-recorded');
+  await host.local.clear();
+  return { marker: next, freedBytes: bytes };
+}
