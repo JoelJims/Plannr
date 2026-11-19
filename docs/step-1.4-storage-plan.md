@@ -1117,3 +1117,26 @@ choices made on the way are in the session report's DECISIONS list.
     `repo.configure()` call left in `server.js`; the transition list exported again. All 4 caught.
   - **Full suite:** `npm test` 492 tests (489 pass, 3 skipped); phone pass 203 of 220, exactly the
     17 known differences; all 13 UI suites and `test:slow` pass.
+- **B18 (2026-11-19): a full Overview on a large test fixture, before and after stage B (emulator
+  `plannr-test`).** No code change.
+  - **Data:** the full-dataset fixture plus 10,000 generated entries (10,004 cash-out, 503 cash-in
+    rows; a 1.9 MB database in `localStorage`), put into the build from before stage B (9d7fd97, the
+    same APK as the phone's, SHA-256 `7dc29db3…a2ef`). The stage B build (c8d9c2d) was then
+    installed over it with `adb install -r`, then the old one again (`-r -d`) and the new one again,
+    so each was timed twice on the same data.
+  - **The same answer:** `/api/overview` gave byte-for-byte the same JSON (SHA-256 `9ab13bff…`) on
+    every run of both builds, and no console errors.
+  - **Speed** (median of 7 calls / 5 page loads; the PC was busy with other work):
+
+    | | before stage B (9d7fd97) | after stage B (c8d9c2d) |
+    |---|---|---|
+    | `/api/overview`, ms | 199, 270 | 312, 199 |
+    | Overview page until the figures show, s | 12.7, 9.3 | 11.4, 10.1 |
+
+    So no slower in use: the differences between the two builds are smaller than between two runs of
+    the same build. The page load (about 10 s with 10,000 entries, almost all of it the page's own
+    work after the data arrives) is noted for the efficiency review.
+  - **Desktop, same machine load** (`s18/bench.js`, alternating runs, A/B): a new database's
+    `init()` 133/143 ms before (28f4927) and 181/183 ms after (+45 ms: every call is now awaited);
+    400 saves 5,756/5,731 → 5,793/5,687 ms; 400 Overviews 5,391/5,570 → 5,425/5,498 ms; 4 × 100
+    requests at once 1,439/1,602 → 1,259/1,437 ms. `npm test` 107 s (456 tests) → 121 s (492 tests).
