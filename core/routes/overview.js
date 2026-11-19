@@ -109,8 +109,8 @@ export function register(app, ctx) {
 
     // Phase 6C — RANGE-SCOPED row fetches: the range is pushed into SQL (partial index on tx_date/
     // pay_date), so only the in-range rows are transferred. These feed C, B and the pie ONLY.
-    const outs = await (bounded ? repo.overview.outsRange(lo, hi) : repo.overview.outsAll());
-    const payments = await (bounded ? repo.overview.paymentsRange(lo, hi) : repo.overview.paymentsAll());
+    const outs = bounded ? await repo.overview.outsRange(lo, hi) : await repo.overview.outsAll();
+    const payments = bounded ? await repo.overview.paymentsRange(lo, hi) : await repo.overview.paymentsAll();
     for (const r of outs) {
       spentBySelf += r.amount_paise; // C (range)
       rollup(r.by_type, r.ledger_code, r.subledger_code, r.subledger_custom_name, r.amount_paise);

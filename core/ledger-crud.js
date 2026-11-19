@@ -12,7 +12,7 @@
 export const BATCH_MAX_ROWS = 500;
 
 export function createLedgerCrud(app, ctx) {
-  const { db, repo, auth, isStorageFullError, rollbackQuietly, storageFull, logError, parseLedgerFilters } = ctx;
+  const { repo, transaction, auth, isStorageFullError, storageFull, logError, parseLedgerFilters } = ctx;
   const LEDGER_CRUDS = {}; // table -> its repo.crud runners; the PDF's cash_out rows reuse them
 
   function makeLedgerCrud(opts) {
@@ -28,46 +28,47 @@ export function createLedgerCrud(app, ctx) {
     LEDGER_CRUDS[table] = rc;
     const orderedVals = (values) => columns.map((c) => values[c]); // column values in declared order
 
-    app.get(basePath, auth, (req, res) => {
+    app.get(basePath, auth, async (req, res) => {
       // When a table opts into search (cash_out), ?q/start/end/min/max/ledger/subledger filter the list
       // in SQL. No params: all live rows, as for every other table. `total` is the unfiltered live
       // count ("N of M", and the add form's next Sl.No, which must not shrink when a filter hides rows).
       if (opts.searchCols) {
         const f = parseLedgerFilters(req);
         if (f.error) return res.status(400).json({ error: f.error });
-        return res.json({ [listKey]: rc.search(f.filters).map(shape), total: rc.liveCount(), filtered: f.active });
+        const rows = await rc.search(f.filters);
+        return res.json({ [listKey]: rows.map(shape), total: await rc.liveCount(), filtered: f.active });
       }
-      res.json({ [listKey]: rc.list().map(shape) });
+      res.json({ [listKey]: (await rc.list()).map(shape) });
     });
 
     app.post(basePath, auth, async (req, res) => {
       const v = await validate(req);
       if (v.error) return res.status(400).json({ error: v.error });
       if (finalize) { const f = await finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-      const info = rc.insert(orderedVals(v.values));
+      const info = await rc.insert(orderedVals(v.values));
       if (afterWrite) await afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
-      res.status(201).json({ ok: true, [itemKey]: shape(rc.getById(info.lastInsertRowid)) });
+      res.status(201).json({ ok: true, [itemKey]: shape(await rc.getById(info.lastInsertRowid)) });
     });
 
     app.put(`${basePath}/:id`, auth, async (req, res) => {
       const id = Number(req.params.id);
-      if (!Number.isInteger(id) || !rc.existsLive(id)) return res.status(404).json({ error: notFoundMsg });
+      if (!Number.isInteger(id) || !(await rc.existsLive(id))) return res.status(404).json({ error: notFoundMsg });
       // The existing row, for the audit old value and finalize's `existing`.
-      const existing = (finalize || afterWrite || auditField) ? rc.fullRow(id) : null;
+      const existing = (finalize || afterWrite || auditField) ? await rc.fullRow(id) : null;
       const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
       const v = await validate(req, oldVal);
       if (v.error) return res.status(400).json({ error: v.error });
       if (finalize) { const f = await finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
       if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
-      rc.update(id, orderedVals(v.values));
+      await rc.update(id, orderedVals(v.values));
       if (afterWrite) await afterWrite(v.values, { req, id });
-      res.json({ ok: true, [itemKey]: shape(rc.getById(id)) });
+      res.json({ ok: true, [itemKey]: shape(await rc.getById(id)) });
     });
 
-    app.delete(`${basePath}/:id`, auth, (req, res) => {
+    app.delete(`${basePath}/:id`, auth, async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id)) return res.status(400).json({ error: invalidIdMsg });
-      const info = rc.softDelete(id);
+      const info = await rc.softDelete(id);
       if (info.changes === 0) return res.status(404).json({ error: notFoundMsg });
       res.json({ ok: true });
     });
@@ -89,8 +90,8 @@ export function createLedgerCrud(app, ctx) {
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
           const id = Number(row && row.id);
-          if (!Number.isInteger(id) || !rc.existsLive(id)) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
-          const existing = (finalize || auditField) ? rc.fullRow(id) : null;
+          if (!Number.isInteger(id) || !(await rc.existsLive(id))) { results[i] = { id: row && row.id, ok: false, error: notFoundMsg }; continue; }
+          const existing = (finalize || auditField) ? await rc.fullRow(id) : null;
           const oldVal = auditField ? (existing ? existing[auditField] : undefined) : undefined;
           const v = await validate({ body: row }, oldVal);
           if (v.error) { results[i] = { id, ok: false, error: v.error }; continue; }
@@ -98,13 +99,13 @@ export function createLedgerCrud(app, ctx) {
           toWrite.push({ i, id, values: v.values, oldVal });
         }
 
-        // 2) Write only the valid rows, in one transaction.
-        db.exec('BEGIN');
+        // 2) Write only the valid rows, in one transaction (db.js transaction(): any error rolls back
+        //    every row and is passed on). repo's statements run on the same connection, inside it.
         try {
-          for (const w of toWrite) rc.update(w.id, orderedVals(w.values));
-          db.exec('COMMIT');
+          await transaction(async () => {
+            for (const w of toWrite) await rc.update(w.id, orderedVals(w.values));
+          });
         } catch (e) {
-          rollbackQuietly(db);
           logError(`${table} batch write failed, rolled back:`, e);
           if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('this save did not go through.') });
           return res.status(500).json({ error: 'The save failed and was rolled back — no rows were changed.' });
@@ -114,7 +115,7 @@ export function createLedgerCrud(app, ctx) {
         for (const w of toWrite) {
           if (auditField && w.oldVal !== w.values[auditField]) console.warn(`[audit] ${table} id=${w.id}: ${auditField} ${w.oldVal} -> ${w.values[auditField]} (attribution changed on edit)`);
           if (afterWrite) await afterWrite(w.values, { req, id: w.id });
-          results[w.i] = { id: w.id, ok: true, [itemKey]: shape(rc.getById(w.id)) };
+          results[w.i] = { id: w.id, ok: true, [itemKey]: shape(await rc.getById(w.id)) };
         }
         res.json({ results, saved: toWrite.length, failed: rows.length - toWrite.length });
       });

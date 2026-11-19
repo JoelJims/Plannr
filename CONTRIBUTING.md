@@ -32,6 +32,11 @@ forward. There is no server to fix it later.
   make exactly the old runner's writes, in order. Yield nothing but a `q.*` call (a helper generator
   goes in with `yield*`; a callback such as `.filter()` cannot yield, so use a loop). From B17, when
   `initSync()` goes, `yield q.x(` becomes `await tx.x(`.
+- `repo.js` reads and writes through the async interface (step 1.4 B10–B12): every function returns
+  a Promise, so every call is awaited (or returned). `test/repo-async.test.js` fails on a repo call
+  in `core/`, `server.js` or `public/local-api.js` that is not. A write of several rows goes inside
+  `transaction(async (tx) => …)` from `db.js` (the core gets it as `ctx.transaction`), never its own
+  `BEGIN`/`COMMIT`.
 - Version 2 is the baseline: everything up to it is the older, hand-gated code in `legacyInit()`.
   Do not add new schema changes there. A v2 database made by an older app can still need some of its
   one-off clean-ups (gated on settings markers); `init()` takes the snapshot before those too.

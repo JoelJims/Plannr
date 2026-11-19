@@ -10,7 +10,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
-const { db, initSync, DB_PATH, isStorageFullError, rollbackQuietly } = require('./db');
+const { db, initSync, DB_PATH, isStorageFullError, rollbackQuietly, transaction } = require('./db');
 const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // the encrypted export (also the Ledger List import's safety backup)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -169,7 +169,7 @@ const api = queuedRoutes(app, requestQueue);
 const ledgerIndexReady = requestQueue.run(() => ledgerIndex.refresh());
 ledgerIndexReady.catch(() => {}); // reported where it is awaited (the start below, the tests)
 const coreContext = {
-  db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
+  db, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
   host,
   auth: requireApiAuth,
   logError: (...args) => { if (!IS_PROD) console.error(...args); },

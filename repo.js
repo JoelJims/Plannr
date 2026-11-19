@@ -7,43 +7,40 @@
 // them took), so route handlers in server.js didn't need to change their call shape beyond
 // dropping that one argument.
 //
-// db.init() must have run before this module is required (server.js requires it right after init()).
-//
-// Phase 4c: this module is now an ES module and imports `db` directly from db.js — every statement
-// below is prepared eagerly, at THIS module's own top level, against whatever `db` is at that moment.
-// Under Node that's always already open (db.js's Node path is synchronous), so nothing here changed
-// behaviorally. A future browser entry point must `await` db.js's `ready()` and only import this
-// module afterward (e.g. via a dynamic `import('./repo.js')`) — importing it eagerly, before `db` is
-// open, would throw the moment any statement below tries to `db.prepare(...)` against a not-yet-open
-// connection.
+// Every function here reads or writes through db.js's async database interface and returns a
+// Promise (step 1.4 B10-B12). Nothing is prepared at import, so this module may be imported before
+// the database is open; init() must have run before the first call (the tables must exist).
 
-import { db, dbAdapter, transaction } from './db.js';
+import { dbAdapter, transaction } from './db.js';
 import { statementOn } from './core/db-adapter.js';
 
 // Step 1.4 B10-B12: repo.js moves to the async database interface (core/db-adapter.js), one group of
 // statements per part. S(sql) looks like a prepared statement (get/all/run with positional params),
 // but every call returns a Promise, so every caller awaits it. The adapter prepares each SQL text on
 // first use and keeps it; it also resolves the connection at call time, so these need no open
-// database at import. Converted so far: overview, ledgerCustoms, ledgers, authoredCount (B10); contract (B11).
+// database at import. Converted: overview, ledgerCustoms, ledgers, authoredCount (B10); contract (B11); crud, trash,
+// backup (B12). Nothing here prepares a statement on the synchronous handle any more.
 const S = (sql) => statementOn(dbAdapter(), sql);
 
 // ── generic CRUD (used by makeLedgerCrud) ────────────────────────────────────────────────────────
 // config: { table, select, listWhere, byIdWhere, columns, alias } — alias is the table alias used in
 // `select`/`listWhere`/`byIdWhere` ('c', 'cp', or '' for none).
+// Every runner returns a Promise (step 1.4 B12).
 function crud({ table, select, listWhere, byIdWhere, columns, alias = '', searchCols = null }) {
   const a = alias ? alias + '.' : '';
-  const listStmt = db.prepare(`${select} ${listWhere}`);
-  const byIdStmt = db.prepare(`${select} ${byIdWhere}`);
-  const existsStmt = db.prepare(`SELECT 1 FROM ${table} WHERE id = ? AND deleted_at IS NULL`);
-  const fullRowStmt = db.prepare(`SELECT * FROM ${table} WHERE id = ?`);
-  const liveCountStmt = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE deleted_at IS NULL`);
-  const insertStmt = db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`);
-  const updateStmt = db.prepare(`UPDATE ${table} SET ${columns.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`);
-  const softDeleteStmt = db.prepare(`UPDATE ${table} SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL`);
+  const listStmt = S(`${select} ${listWhere}`);
+  const byIdStmt = S(`${select} ${byIdWhere}`);
+  const existsStmt = S(`SELECT 1 FROM ${table} WHERE id = ? AND deleted_at IS NULL`);
+  const fullRowStmt = S(`SELECT * FROM ${table} WHERE id = ?`);
+  const liveCountStmt = S(`SELECT COUNT(*) AS n FROM ${table} WHERE deleted_at IS NULL`);
+  const insertStmt = S(insertSqlFor(table, columns));
+  const updateStmt = S(updateSqlFor(table, columns));
+  const softDeleteStmt = S(`UPDATE ${table} SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL`);
 
   // Part A — SQL-side filtered search (opt-in via searchCols). Builds ONLY the active predicates so
-  // the planner can use the right index per combination. Prepared statements are cached by filter
-  // SHAPE. searchCols maps filter -> column(s): { date, amount, ledger, subledger, text: [cols] }.
+  // the planner can use the right index per combination. The SQL is cached by filter SHAPE (and the
+  // adapter prepares each text once). searchCols maps filter -> column(s): { date, amount, ledger,
+  // subledger, text: [cols] }.
   let search = null;
   if (searchCols) {
     const searchCache = new Map();
@@ -54,10 +51,8 @@ function crud({ table, select, listWhere, byIdWhere, columns, alias = '', search
       if (shape.includes('l')) clauses.push(`${a}${searchCols.ledger} = ?`);
       if (shape.includes('s')) clauses.push(`${a}${searchCols.subledger} = ?`);
       if (shape.includes('q')) clauses.push('(' + searchCols.text.map((c) => `${a}${c} LIKE ?`).join(' OR ') + ')');
-      const sql = `${select} WHERE ${clauses.join(' AND ')} ORDER BY ${a}id ASC`;
-      return db.prepare(sql);
+      return S(`${select} WHERE ${clauses.join(' AND ')} ORDER BY ${a}id ASC`);
     };
-    buildSearch(''); // pre-build the base (no-filter) shape at boot
     // filters: { start, end, min, max, ledger, subledger, q } — any subset.
     search = (f = {}) => {
       const shape = [], params = [];
@@ -75,9 +70,9 @@ function crud({ table, select, listWhere, byIdWhere, columns, alias = '', search
   return {
     list: () => listStmt.all(),
     getById: (id) => byIdStmt.get(id),
-    existsLive: (id) => !!existsStmt.get(id),
+    existsLive: async (id) => !!(await existsStmt.get(id)),
     fullRow: (id) => fullRowStmt.get(id),
-    liveCount: () => liveCountStmt.get().n,
+    liveCount: async () => (await liveCountStmt.get()).n,
     insert: (vals) => insertStmt.run(...vals),
     update: (id, vals) => updateStmt.run(...vals, id),
     softDelete: (id) => softDeleteStmt.run(id),
@@ -87,16 +82,17 @@ function crud({ table, select, listWhere, byIdWhere, columns, alias = '', search
 
 // ── Recycle Bin (per-table) ──────────────────────────────────────────────────────────────────────
 // config: { table, select, alias } — `select` is the resource's live SELECT (reused so trash labels
-// match the live list). Returns runners for the deleted-only list + find/restore/hard-delete.
+// match the live list). Returns runners for the deleted-only list + find/restore/hard-delete, each
+// returning a Promise (step 1.4 B12).
 function trash({ table, select, alias = '' }) {
   const a = alias ? alias + '.' : '';
   // A `SELECT *` already carries deleted_at; otherwise expose it explicitly so the shaper + handler
   // can read it (matches the pre-Phase-3 trash selects exactly).
   const withDeleted = /^\s*SELECT\s+\*/i.test(select) ? select : select.replace(/^\s*SELECT /i, `SELECT ${a}deleted_at AS deleted_at, `);
-  const listStmt = db.prepare(`${withDeleted} WHERE ${a}deleted_at IS NOT NULL ORDER BY ${a}deleted_at DESC`);
-  const findStmt = db.prepare(`SELECT id FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
-  const restoreStmt = db.prepare(`UPDATE ${table} SET deleted_at = NULL, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NOT NULL`);
-  const hardDeleteStmt = db.prepare(`DELETE FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
+  const listStmt = S(`${withDeleted} WHERE ${a}deleted_at IS NOT NULL ORDER BY ${a}deleted_at DESC`);
+  const findStmt = S(`SELECT id FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
+  const restoreStmt = S(`UPDATE ${table} SET deleted_at = NULL, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NOT NULL`);
+  const hardDeleteStmt = S(`DELETE FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
   return {
     listDeleted: () => listStmt.all(),
     find: (id) => findStmt.get(id),
@@ -252,17 +248,9 @@ const contract = {
 
 // Column-list INSERT/UPDATE (contract) — statements built ONCE at boot via configure(); keyed by
 // table|cols. Building a same-key statement later just reuses the cached one.
-// Since step 1.4 B11 these build the SQL text only (the adapter prepares each text once); the
-// prepared-statement form stays for backup.insertRow until it converts.
+// Since step 1.4 B11 these build the SQL text only: the adapter prepares each text once.
 const insertSqlFor = (table, cols) => `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`;
 const updateSqlFor = (table, cols) => `UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`;
-const _insCache = new Map();
-function insertStmtFor(table, cols) {
-  const key = table + '|' + cols.join(',');
-  let stmt = _insCache.get(key);
-  if (!stmt) { stmt = db.prepare(insertSqlFor(table, cols)); _insCache.set(key, stmt); }
-  return stmt;
-}
 
 // ── Per-user custom ledger names ──────────────────────────────────────────────────────────────────
 const lcStmt = {
@@ -458,30 +446,19 @@ const authoredStmt = {
 const authoredCount = async (userId) => (await authoredStmt.cashIn.get(userId)).n + (await authoredStmt.cashOut.get(userId)).n;
 
 // ── Backup export / teardown / insert ─────────────────────────────────────────────────────────────
-// Tables come from a fixed server-side allowlist (BACKUP_TABLES); statements are cached by table (and
-// by cols for insert). configure() pre-builds them at boot.
-const _expCache = new Map(), _delCache = new Map();
-const settingsUpsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
-function exportStmtFor(table) { let s = _expCache.get(table); if (!s) { s = db.prepare(`SELECT * FROM ${table}`); _expCache.set(table, s); } return s; }
-function deleteStmtFor(table) { let s = _delCache.get(table); if (!s) { s = db.prepare(`DELETE FROM ${table}`); _delCache.set(table, s); } return s; }
+// Tables come from a fixed server-side allowlist (BACKUP_TABLES). Each runner returns a Promise
+// (step 1.4 B12). (backup-format.js builds and restores backups with its own statements.)
 const backup = {
-  exportTable: (table) => exportStmtFor(table).all(),
-  deleteTenantRows: (table) => deleteStmtFor(table).run(),
-  insertRow: (table, cols, vals) => insertStmtFor(table, cols).run(...vals),
-  upsertSetting: (key, value) => settingsUpsert.run(key, value), // settings PK is now a plain key
+  exportTable: (table) => S(`SELECT * FROM ${table}`).all(),
+  deleteTenantRows: (table) => S(`DELETE FROM ${table}`).run(),
+  insertRow: (table, cols, vals) => S(insertSqlFor(table, cols)).run(...vals),
+  upsertSetting: (key, value) => S('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value), // settings PK is now a plain key
 };
 
-// Pre-build every column/table-dependent statement at boot. Called by server.js once (after route
-// setup) with its fixed allowlists.
-function configure({ contractCols, backupTables, backupCols }) {
-  void contractCols; // the contract statements are prepared on first use since step 1.4 B11
-  for (const table of (backupTables || [])) {
-    if (table === 'settings') continue; // settings handled by settingsUpsert / exportStmtFor below
-    exportStmtFor(table); deleteStmtFor(table);
-    if (backupCols && backupCols[table]) insertStmtFor(table, backupCols[table]);
-  }
-  exportStmtFor('settings'); deleteStmtFor('settings');
-}
+// Used to prepare every column/table-dependent statement at boot. Since step 1.4 B12 the adapter
+// prepares each SQL text on first use, so there is nothing to do; server.js and the phone still call
+// it until B17 tidies their start.
+function configure() {}
 
 export {
   crud, trash, configure,

@@ -7,6 +7,7 @@ const H = require('./helpers');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const repo = require('../repo');
 
@@ -121,4 +122,41 @@ test('B11: every repo.contract function answers with a Promise', async () => {
   assert.strictEqual(H.db.prepare('SELECT cap_paise FROM contract_allowances WHERE id = ?').get(aid).cap_paise, 200000);
   assert.strictEqual(H.db.prepare('SELECT COUNT(*) AS n FROM contract WHERE deleted_at IS NULL').get().n, 1, 'the first contract soft-deleted, the second inserted');
   H.clearLedger();
+});
+
+// Every database call the shared core and both backends make through repo.js (and the async helpers
+// built on it) is awaited, returned, or the body of an arrow function its caller awaits. A call left
+// un-awaited answers the request before it has run, and its failure is lost (an unhandled rejection
+// instead of a 500). The node:sqlite engine runs the SQL at call time, so no route test can see a
+// missing await on a write whose answer is not read; this check can.
+test('B12: every repo call in the core and both backends is awaited', () => {
+  const ROOT = path.join(__dirname, '..');
+  const files = ['server.js', 'public/local-api.js', ...fs.readdirSync(path.join(ROOT, 'core'), { recursive: true })
+    .filter((f) => f.endsWith('.js')).map((f) => path.join('core', f))];
+  const HELPERS = ['contractRow', 'getContractRow', 'getServiceRow', 'getLiveServiceForContract', 'getLiveAllowanceForContract',
+    'writePaymentDates', 'allowanceById', 'computeOverview', 'computeUpcomingPayments', 'overviewPdfHtml', 'saveLedgerCustom',
+    'validate', 'finalize', 'afterWrite'];
+  const CALL = new RegExp(String.raw`(?:\brepo\.(?:overview|contract|ledgerCustoms|ledgers|backup)\.\w+|\brepo\.authoredCount|\brc\.\w+`
+    + String.raw`|\bTRASH_REPO\[\w+\]\.\w+|\bLEDGER_CRUDS\.\w+\.\w+|\bledgerIndex\.refresh|\b(?:${HELPERS.join('|')}))\(`, 'g');
+  const SYNC = new Set(['repo.ledgers.toCsv']); // builds text, no database
+  const bad = [];
+  let seen = 0;
+  for (const f of files) {
+    const lines = fs.readFileSync(path.join(ROOT, f), 'utf8').split(/\r?\n/);
+    lines.forEach((raw, i) => {
+      if (/^\s*(\/\/|\*)/.test(raw)) return; // a comment
+      const line = raw.replace(/\s\/\/.*$/, ''); // and a comment after the code
+      const arrowAbove = i > 0 && /=>\s*$/.test(lines[i - 1]); // `(...) =>` with its body on this line
+      for (const m of line.matchAll(CALL)) {
+        if (SYNC.has(m[0].slice(0, -1))) continue;
+        const before = line.slice(0, m.index);
+        if (/\bfunction\s+$/.test(before)) continue; // the helper's own definition
+        seen++;
+        if (arrowAbove && !before.trim()) continue;
+        if (!/(?:\bawait\s*\(?|\breturn\s+|=>\s*)$/.test(before)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  }
+  assert.ok(seen > 100, `the check found the calls (${seen})`);
+  assert.deepStrictEqual(bad, [], 'these calls are not awaited');
 });

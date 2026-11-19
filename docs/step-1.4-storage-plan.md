@@ -973,3 +973,21 @@ choices made on the way are in the session report's DECISIONS list.
     Bin's single-contract guard not awaited; `liveCount` left synchronous. All 5 caught.
   - **Full suite:** all passes. `npm test` 482 tests, 0 failures, the same 3 skipped; the phone pass
     193 of 210, the same 17 known differences; 13 UI suites; `test:slow`.
+- **B12 (2026-11-18): the rest of `repo.js`** (`crud`, `trash`, `backup`). `repo.js` now prepares
+  nothing on the synchronous handle, and nothing at import.
+  - Save All's batch write uses `db.js` `transaction()` (given to the core as `ctx.transaction`)
+    instead of its own `BEGIN`/`COMMIT`. `configure()` has nothing left to prepare and is empty; the
+    two backends still call it until B17.
+  - Callers now await: every ledger list/add/edit/delete/Save All route in `core/ledger-crud.js`, and
+    the Recycle Bin's list, restore and permanent delete.
+  - **Tests:** `test/repo-async.test.js` (+1) reads the core, `server.js` and `public/local-api.js`
+    and fails on any repo call (or async helper built on one) that is not awaited, returned or an
+    arrow body. node:sqlite runs the SQL at call time, so no route test can see an un-awaited write
+    whose answer is not read; this check can. `test/batch.test.js` (+2): a Save All whose last row
+    fails in the database (a trigger) changes no row and leaves no transaction open; editing a
+    deleted or missing row is a 404 alone and a held-back row in Save All (no test edited one).
+  - **Known positives:** Save All without its transaction; the edit's existence check not awaited
+    (caught by the guard); a service delete not awaited (guard); a Recycle Bin restore not awaited
+    (guard); `existsLive` answering a Promise (caught only after the new test). All 5 caught.
+  - **Full suite:** all passes. `npm test` 485 tests, 0 failures, the same 3 skipped; the phone pass
+    196 of 213, the same 17 known differences; 13 UI suites; `test:slow`.

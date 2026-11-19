@@ -42,3 +42,38 @@ test('an oversized body returns the clean 413 message, not a raw parser error', 
   assert.match(r.json.error, /too large to process in one go/i);
   assert.doesNotMatch(r.json.error, /Invalid request/i, 'must be the clean message, not a bare parser error');
 });
+
+// Step 1.4 B12: the write runs in db.js transaction(). A database error on the last row (a trigger
+// here, standing in for a full disk or a broken constraint) must leave every row as it was.
+test('a write that fails on its last row rolls the whole save back: no row changes', async () => {
+  const ids = [0, 1, 2].map(() => H.seedCashOut({ amountPaise: 10000, byUserId: userId }));
+  H.db.exec(`CREATE TRIGGER test_batch_fail BEFORE UPDATE ON cash_out WHEN NEW.id = ${ids[2]} BEGIN SELECT RAISE(ABORT, 'test: this row cannot be written'); END`);
+  try {
+    const r = await H.post('/api/cash-out/batch', { rows: ids.map((id) => editBody(id, '500.00')) }, { cookie });
+    assert.strictEqual(r.status, 500);
+    assert.strictEqual(r.json.error, 'The save failed and was rolled back — no rows were changed.');
+  } finally {
+    H.db.exec('DROP TRIGGER IF EXISTS test_batch_fail');
+  }
+  for (const id of ids) assert.strictEqual(amountOf(id), 10000, `row ${id} unchanged`);
+  const again = await H.post('/api/cash-out/batch', { rows: ids.map((id) => editBody(id, '500.00')) }, { cookie });
+  assert.strictEqual(again.json.saved, 3, 'the next save works: no transaction was left open');
+});
+
+// Step 1.4 B12: the "is this row live?" check is read through the async interface. An edit of a row
+// that is in the Recycle Bin, or that never existed, is a 404 (single edit) or a held-back row (Save
+// All), and changes nothing.
+test('editing a deleted or missing row: 404 on its own, held back in Save All', async () => {
+  const [live, gone] = [0, 1].map(() => H.seedCashOut({ amountPaise: 10000, byUserId: userId }));
+  assert.strictEqual((await H.del('/api/cash-out/' + gone, { cookie })).status, 200);
+  for (const id of [gone, gone + 1000]) {
+    const r = await H.put('/api/cash-out/' + id, editBody(id, '500.00'), { cookie });
+    assert.strictEqual(r.status, 404, `PUT ${id === gone ? 'a deleted row' : 'a missing row'}`);
+    assert.strictEqual(r.json.error, 'Entry not found.');
+  }
+  const r = await H.post('/api/cash-out/batch', { rows: [editBody(live, '500.00'), editBody(gone, '500.00')] }, { cookie });
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual([r.json.saved, r.json.failed], [1, 1]);
+  assert.deepStrictEqual(r.json.results[1], { id: gone, ok: false, error: 'Entry not found.' });
+  assert.deepStrictEqual([amountOf(live), amountOf(gone)], [50000, 10000], 'only the live row changed');
+});

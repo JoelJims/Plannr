@@ -25,7 +25,7 @@
 // the plain-JSON ledger export/import above — a separate concern (raw database bytes, not the
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
-import { db, isStorageFullError, rollbackQuietly } from './db.js';
+import { db, isStorageFullError, rollbackQuietly, transaction } from './db.js';
 import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
 import * as requestRules from './request-rules.js';
 import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
@@ -146,7 +146,7 @@ export function installFetchShim(repo) {
     now: () => new Date(),
   });
   const coreContext = {
-    db, repo, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
+    db, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
     host,
     auth: requireApiAuth, // never called here: localApp runs only the last handler
     logError: (...args) => console.error(...args),

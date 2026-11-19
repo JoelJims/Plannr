@@ -33,7 +33,7 @@ export function register(app, ctx) {
     for (const t of TRASH_TABLES) {
       trash[t] = [];
       // One row at a time: a contract's shaper reads its children (step 1.4 B11).
-      for (const r of TRASH_REPO[t].listDeleted()) trash[t].push({ ...(await TRASH_SHAPERS[t](r)), deletedAt: r.deleted_at });
+      for (const r of await TRASH_REPO[t].listDeleted()) trash[t].push({ ...(await TRASH_SHAPERS[t](r)), deletedAt: r.deleted_at });
     }
     res.json({ trash });
   });
@@ -46,7 +46,7 @@ export function register(app, ctx) {
     const table = trashTable(req);
     if (!table) return res.status(400).json({ error: 'Unknown table.' });
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !TRASH_REPO[table].find(id)) return res.status(404).json({ error: 'That deleted item was not found.' });
+    if (!Number.isInteger(id) || !(await TRASH_REPO[table].find(id))) return res.status(404).json({ error: 'That deleted item was not found.' });
     // Guard: a contractor payment must not go live under a still-deleted contract — otherwise a
     // live payment sits under a deleted contract, inflating Overview spend while the contract's
     // value stays out of the totals. Require the contract to be restored first.
@@ -76,7 +76,7 @@ export function register(app, ctx) {
         }
       }
     }
-    TRASH_REPO[table].restore(id);
+    await TRASH_REPO[table].restore(id);
     res.json({ ok: true });
   });
 
@@ -85,7 +85,7 @@ export function register(app, ctx) {
     const table = trashTable(req);
     if (!table) return res.status(400).json({ error: 'Unknown table.' });
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || !TRASH_REPO[table].find(id)) return res.status(404).json({ error: 'That deleted item was not found.' });
+    if (!Number.isInteger(id) || !(await TRASH_REPO[table].find(id))) return res.status(404).json({ error: 'That deleted item was not found.' });
     // Guard: contractor_payments.contract_id references contract(id) with NO ACTION (unlike
     // contract_payment_dates / contract_services, which CASCADE). Hard-deleting a contract that
     // any payment — live OR soft-deleted — still references would orphan/violate the FK, so
@@ -109,7 +109,7 @@ export function register(app, ctx) {
         return res.status(409).json({ error: `This contract still has ${k} cash-out entr${k === 1 ? 'y' : 'ies'} drawing against one of its allowances (live or in the Recycle Bin). Permanently deleting it would orphan ${k === 1 ? 'that entry' : 'those entries'} — unlink or restore ${k === 1 ? 'it' : 'them'} first.` });
       }
     }
-    TRASH_REPO[table].hardDelete(id); // contract_payment_dates / contract_services children cascade
+    await TRASH_REPO[table].hardDelete(id); // contract_payment_dates / contract_services children cascade
     res.json({ ok: true });
   });
 }
