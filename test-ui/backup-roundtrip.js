@@ -9,8 +9,34 @@
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const assert = require('assert');
 const F = require('../test/fixtures/full-dataset');
+
+// The desktop's own upgrade of an old database, for comparison: build the file from the fixture's SQL,
+// run db.js's init() on it in a child process (never this process: it must not bind db.js), count rows.
+function desktopUpgradeCounts(sql, approve) {
+  const os = require('os');
+  const { spawnSync } = require('child_process');
+  const { DatabaseSync } = require('node:sqlite');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-old-backup-'));
+  const file = path.join(dir, 'old.db');
+  const d = new DatabaseSync(file);
+  d.exec(sql);
+  d.exec(approve);
+  d.close();
+  const script = `
+    const db = require(${JSON.stringify(path.join(__dirname, '..', 'db.js'))});
+    db.init().then(() => {
+      const t = db.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
+      process.stdout.write(JSON.stringify(Object.fromEntries(t.map((n) => [n, db.db.prepare('SELECT COUNT(*) AS n FROM ' + n).get().n]))));
+      db.db.close();
+    }, (e) => { console.error(e.message); process.exit(1); });`;
+  const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, PLANNR_DB: file, PLANNR_TEST: '1' } });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  if (r.status !== 0) throw new Error('desktop upgrade failed: ' + r.stderr);
+  return JSON.parse(r.stdout);
+}
 
 const PORT = 8097;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -109,6 +135,73 @@ function sameDb(name, actual, expected) {
     check('a write sent during an encrypted restore waits for it to finish', during.restoreStatus === 200 && during.writeStatus === 201 && during.order === 'restore then write', JSON.stringify(during));
     const afterBoth = await dump();
     check('…and is kept (the restore did not wipe it)', afterBoth.tables.cash_in.filter((r) => r.reason === 'sent during a restore').length === 1);
+
+    // ---- A restore that fails half-way leaves the data exactly as it was (step 1.4 B17) ----
+    // The restore rebuilds every table inside one transaction. Make its last write fail: everything
+    // before it is rolled back, foreign keys are switched back on, and the database is intact.
+    const beforeFailed = await dump();
+    await page.evaluate(async () => {
+      const { db } = await import('/db.js');
+      const exec = db.exec;
+      db.exec = function (sql, ...rest) {
+        if (typeof sql === 'string' && sql.startsWith('DELETE FROM sqlite_sequence')) throw new Error('injected failure half-way through the restore');
+        return exec.call(this, sql, ...rest);
+      };
+      window.__plannrUnpatchExec = () => { db.exec = exec; };
+    });
+    const failed = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64 });
+    await page.evaluate(() => window.__plannrUnpatchExec());
+    check('an encrypted restore that fails half-way reports an error', failed.status >= 400, `${failed.status} ${JSON.stringify(failed.json).slice(0, 200)}`);
+    sameDb('…and the data is exactly as before (the whole rebuild was rolled back)', await dump(), beforeFailed);
+    const afterFailed = await page.evaluate(async () => {
+      const { db } = await import('/db.js');
+      return { fk: db.prepare('PRAGMA foreign_keys').get().foreign_keys, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check };
+    });
+    check('…foreign keys are on again and the database is intact', afterFailed.fk === 1 && afterFailed.integrity === 'ok', JSON.stringify(afterFailed));
+
+    // ---- An encrypted backup made by an OLD Plannr (schema v1) comes back upgraded (step 1.4 B17) ----
+    // The restore copies the backup's PRAGMA user_version (it is not in any table), so init() sees v1
+    // and runs the old upgrade steps: here, dropping the per-household tenant_id columns. Without the
+    // carry-over the database would keep the live v2 stamp and the old shape. The database is the
+    // schema-history fixture from commit 42ff006, with the two in-database approvals its destructive
+    // one-off steps ask for. The result must be what the desktop's own init() makes of the same file.
+    const OLD_SQL = fs.readFileSync(path.join(__dirname, '..', 'test', 'fixtures', 'schema-history', '03-42ff006.sql'), 'utf8');
+    const APPROVE = "INSERT OR REPLACE INTO settings (tenant_id, key, value) VALUES (1, '_service_price_drop_approved', '1'), (1, '_taxonomy_wipe_approved', '1')";
+    const desktop = desktopUpgradeCounts(OLD_SQL, APPROVE);
+    const oldBackup = await page.evaluate(async ([sql, approve, pp]) => {
+      const { getSqlite3 } = await import('/db-engine.js');
+      const { encrypt } = await import('/backup-crypto.js');
+      const sqlite3 = getSqlite3();
+      const d = new sqlite3.oo1.DB(':memory:', 'c');
+      try {
+        d.exec(sql);
+        d.exec(approve);
+        const before = { version: d.selectValue('PRAGMA user_version'), tenantCols: d.selectValue("SELECT COUNT(*) FROM pragma_table_info('cash_out') WHERE name = 'tenant_id'") };
+        const enc = await encrypt(sqlite3.capi.sqlite3_js_db_export(d.pointer), pp);
+        let binary = '';
+        for (let i = 0; i < enc.length; i += 0x8000) binary += String.fromCharCode.apply(null, enc.subarray(i, i + 0x8000));
+        return { before, data: btoa(binary) };
+      } finally { d.close(); }
+    }, [OLD_SQL, APPROVE, pass]);
+    check('the old backup really is schema v1 with tenant_id columns', oldBackup.before.version === 1 && oldBackup.before.tenantCols === 1, JSON.stringify(oldBackup.before));
+    const oldRestore = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64: oldBackup.data });
+    check('an encrypted backup from an older Plannr restores', oldRestore.status === 200, `${oldRestore.status} ${JSON.stringify(oldRestore.json).slice(0, 300)}`);
+    const upgraded = await page.evaluate(async () => {
+      const { db, SCHEMA_VERSION } = await import('/db.js');
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
+      const withTenant = tables.filter((t) => db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('${t}') WHERE name = 'tenant_id'`).get().n > 0);
+      return {
+        version: db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION, withTenant,
+        counts: Object.fromEntries(tables.sort().map((t) => [t, db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n])),
+        fkViolations: db.prepare('PRAGMA foreign_key_check').all().length,
+        integrity: db.prepare('PRAGMA integrity_check').get().integrity_check,
+      };
+    });
+    check('…and comes back upgraded: the current schema version, no tenant_id left, intact',
+      upgraded.version === upgraded.SCHEMA_VERSION && upgraded.withTenant.length === 0 && upgraded.fkViolations === 0 && upgraded.integrity === 'ok',
+      JSON.stringify(upgraded));
+    check('…with the same tables and row counts as the desktop\'s upgrade of the same database', JSON.stringify(upgraded.counts) === JSON.stringify(desktop),
+      `phone ${JSON.stringify(upgraded.counts)} | desktop ${JSON.stringify(desktop)}`);
 
     // ---- Schema version guards (Step 2): data from a NEWER Plannr is refused, never half-read ----
     const SCHEMA_VERSION = await page.evaluate(async () => (await import('/db.js')).SCHEMA_VERSION);

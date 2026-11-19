@@ -1080,3 +1080,23 @@ choices made on the way are in the session report's DECISIONS list.
     `migrations.test.js` without it. All 7 caught.
   - **Full suite:** `npm test` 493 tests (490 pass, 3 skipped); phone pass 202 of 219, exactly the
     17 known differences; all 13 UI suites and `test:slow` pass.
+- **B17b (2026-11-19): the phone's encrypted restore writes through the async interface.**
+  `public/local-snapshot.js` rebuilds the live database through `dbAdapter()`: foreign keys off,
+  then one `transaction()` that drops and recreates every table from the backup's own schema,
+  copies the rows, the AUTOINCREMENT counters and `PRAGMA user_version`, then foreign keys on again
+  (in a `finally`) and the foreign-key check. Only the platform parts stay on sqlite-wasm: exporting
+  the live image and opening the incoming one. `rollbackQuietly` is no longer imported.
+  - **Tests** (`test-ui/backup-roundtrip.js`, both new):
+    - a restore whose last write fails half-way: the error is reported, the data is exactly as
+      before, foreign keys are on again and the database is intact;
+    - an encrypted backup made by an old Plannr (the schema-history fixture from 42ff006, schema v1
+      with `tenant_id`) restores and comes back upgraded, with the same tables and row counts as the
+      desktop's own `init()` makes of the same file (run in a child process).
+  - **Known positives:** the rebuild outside a transaction; `user_version` not carried over (caught
+    only by the new old-backup check); foreign keys left off; the AUTOINCREMENT counters not
+    copied. All 4 caught.
+  - **Found on the way, not fixed here (decision 11):** the two oldest schemas (v1, 7cfcf89 and
+    2ebaf69) keep a legacy `sessions` table after their upgrade, and the start-up ownership check
+    then refuses to start. Pre-existing; logged for the security and quality review.
+  - **Full suite:** `npm test` 493 tests (490 pass, 3 skipped); phone pass 202 of 219, exactly the
+    17 known differences; all 13 UI suites and `test:slow` pass.
