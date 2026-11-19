@@ -1261,3 +1261,28 @@ choices made on the way are in the session report's DECISIONS list.
     `sqlite_sequence` left out, the row order, a missing table) each fail the file.
   - Full suite: node 523 tests (520 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C5 (2026-11-19): `core/storage-move.js`, the move itself (plan §2.1, §2.2).** The rules only:
+  every file, plugin and storage key is reached through a `host` object, so the same code runs on
+  the phone (C9 builds its host) and in Node. `moveToFile(host)` runs steps 0-6: the space check
+  (3 × the database + 20 MB), the encrypted backup (the page's own flow), the safety snapshot, the
+  exported bytes written byte for byte to the candidate and forced to disk, the C4 checks against
+  the localStorage copy (any difference deletes the candidate), the rename into place, and the
+  switch (the marker file says `native-v1`; the localStorage key repeats it). The progress record
+  (`plannr-storage-move`) is only a hint: "Continue" skips the backup and the snapshot only if the
+  database's SHA-256 is unchanged, and always redoes steps 3-6. Saving the backup records its time
+  in the database (`settings.last_encrypted_export_at`), so the database is exported again after
+  step 1: the snapshot, the file and the check use it as it is then, and "Continue" goes by that. `decideAtStartup()` is the §2.2
+  table, from facts only; a database file that no move record explains is set aside, not deleted
+  (decision 16).
+  - **Tests:** `test/storage-move.test.js` (19) over `test/_storage-move-host.js`, where two
+    node-sqlite files stand in for the localStorage copy and the phone's file: a full move whose
+    file matches the original exactly while the original is only read; a copy that does not match
+    (nothing switches); "Continue" with the database unchanged and changed; a lost or unreadable
+    progress record; a backup that stamps its time into the database (the move and "Continue" go
+    by the database after it); the backup not saved; every row of the startup table (12, one added for a
+    stale candidate after a move back); the facts read from the files. **Known positives:** 8
+    mutations (the checksum ignored on "Continue", the check ignored, no marker, no `quick_check`,
+    an unexplained file deleted, a stale candidate kept, an unreadable record, no export after the
+    backup) each fail the file.
+  - Full suite: node 545 tests (542 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.
