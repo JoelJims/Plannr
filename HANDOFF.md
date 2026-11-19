@@ -284,9 +284,9 @@ going over an allowance is a normal thing to happen, not an error.
   `test/fixtures/schema-history/` holds one small database for every schema `db.js` has ever
   built (8 of them, user_version 1 and 2, made-up rows only), plus the old migration runner
   (`db.js` and `ledgers.js` exactly as at 0e7b70b). `test/migration-equivalence.test.js`
-  upgrades each one with the old runner, the new `await init()` and `initSync()`, and compares
+  upgrades each one with the old runner and the new `await init()`, and compares
   the results: schema, user_version and a checksum of every table.
-  All three also make the same writes in the same order (step 1.4 B5).
+  Both also make the same writes in the same order (step 1.4 B5).
   `test/migration-legacy-shapes.test.js` does the same for made-up databases in shapes older than
   any in git history (user_version 0, and 1 with a second household; `test/fixtures/legacy-shapes/`,
   made by `make-legacy-shapes.js`), which reach the oldest parts of `legacyInit()` (step 1.4 B6, B8).

@@ -15,16 +15,12 @@
 // node:sqlite and sqlite-wasm are synchronous underneath, so both are built by
 // createSyncEngineAdapter() below: the methods do the work at once and return a settled Promise.
 //
-// While stage B converts the callers one file at a time, an adapter also keeps two synchronous
-// methods, prepare(sql) and execSync(sql), so code not yet converted keeps working. They go when
-// stage B ends (B17). Nothing here imports a platform module.
+// An adapter has no synchronous method: stage B kept two, prepare(sql) and execSync(sql), while it
+// converted the callers, and removed them at its end (B17). Nothing here imports a platform module.
 
 export const ADAPTER_METHODS = Object.freeze([
   'get', 'all', 'run', 'exec', 'transaction', 'exportBytes', 'replaceWith', 'info', 'close',
 ]);
-
-// Only until stage B ends (B17).
-export const TRANSITION_SYNC_METHODS = Object.freeze(['prepare', 'execSync']);
 
 export function checkAdapter(adapter) {
   const missing = ADAPTER_METHODS.filter((m) => !adapter || typeof adapter[m] !== 'function');
@@ -124,10 +120,6 @@ export function createSyncEngineAdapter(platform) {
       cacheFor = null; cache = new Map();
       await platform.close();
     },
-
-    // Transition only (removed in B17): for code that stage B has not converted yet.
-    prepare(sql) { return handle().prepare(sql); },
-    execSync(sql) { handle().exec(sql); },
   };
   return adapter;
 }

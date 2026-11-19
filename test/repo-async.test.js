@@ -1,4 +1,4 @@
-// Step 1.4 B10-B16: repo.js and the core move to the async database interface (core/db-adapter.js),
+// Step 1.4 B10-B17: repo.js and the core move to the async database interface (core/db-adapter.js),
 // one group per part, and every caller awaits it. This file checks the converted groups themselves: each call
 // answers with a Promise, a multi-row write is still one transaction, and the in-memory ledger list
 // (core/ledger-index.js) cannot be read before its first refresh. The routes over them are covered by
@@ -190,4 +190,47 @@ test('B16: the core never touches a synchronous database handle, and neither bac
     assert.ok(!/\brollbackQuietly\b/.test(keys), `${f}: coreContext passes no rollbackQuietly`);
     assert.match(keys, /\badapter: dbAdapter\(\)/, `${f}: coreContext passes the adapter`);
   }
+});
+
+// Step 1.4 B17: the synchronous transition code is gone for good. Nothing opens or upgrades the database
+// at once (initSync(), migrationPlan(), runNow()), the adapter has no synchronous side (prepare(),
+// execSync()), and repo.js prepares nothing at start (configure()). A caller that still needs one of
+// them would only work on the desktop engine, not on the phone's database file (stage C).
+test('B17: no synchronous start, plan or adapter method is left, and nothing calls one', async () => {
+  const db = require('../db');
+  for (const name of ['initSync', 'migrationPlan', 'runNow']) assert.strictEqual(db[name], undefined, `db.js exports no ${name}()`);
+  assert.strictEqual(repo.configure, undefined, 'repo.js has no configure()');
+  const adapterMod = await imp('core/db-adapter.js');
+  assert.strictEqual(adapterMod.TRANSITION_SYNC_METHODS, undefined, 'core/db-adapter.js lists no transition methods');
+  const live = db.dbAdapter();
+  for (const m of ['prepare', 'execSync']) assert.strictEqual(live[m], undefined, `the adapter has no ${m}()`);
+
+  const ROOT = path.join(__dirname, '..');
+  const SKIP = new Set(['node_modules', 'fixtures', 'vendor', 'android', 'dist', '.git']);
+  const files = [];
+  (function walk(dir, deep) {
+    for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = path.join(dir, e.name);
+      if (e.isDirectory()) { if (deep && !SKIP.has(e.name)) walk(rel, true); }
+      else if (/\.(c|m)?js$/.test(e.name) && rel !== path.join('test', 'repo-async.test.js')) files.push(rel);
+    }
+  })('.', false);
+  for (const d of ['core', 'public', 'test', 'test-ui', 'scripts']) if (fs.existsSync(path.join(ROOT, d))) (function walk(dir) {
+    for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(rel); }
+      else if (/\.(c|m)?js$/.test(e.name) && rel !== path.join('test', 'repo-async.test.js')) files.push(rel);
+    }
+  })(d);
+  const CALL = /\b(?:initSync|migrationPlan|runNow)\(|\.execSync\(|\brepo\.configure\(|\bTRANSITION_SYNC_METHODS\b/;
+  const bad = [];
+  for (const f of files) {
+    fs.readFileSync(path.join(ROOT, f), 'utf8').split(/\r?\n/).forEach((raw, i) => {
+      if (/^\s*(\/\/|\*)/.test(raw)) return; // a comment
+      const line = raw.replace(/\s\/\/.*$/, '');
+      if (CALL.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.ok(files.some((f) => f === 'db.js') && files.some((f) => f.startsWith('test')) && files.length > 100, `the check read the sources (${files.length} files)`);
+  assert.deepStrictEqual(bad, [], 'a removed synchronous method is still used here');
 });

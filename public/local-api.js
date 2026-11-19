@@ -166,7 +166,7 @@ export function installFetchShim(repo) {
   // the routes still written below, which are ported from server.js until they move to core/ too.
   const { REASON_MAX, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CUSTOM_CODE, ledgerLabel, resolveLedger, CASH_OUT_SELECT, cashOutRow } = cashAndLoansRoutes.register(localApp, { ...coreContext, makeLedgerCrud });
   // The Contract Details API (contracts, services, allowances): core/routes/contracts.js (step 1.3).
-  const { unitPricePaise, contractRow, CONTRACT_COLS } = contractsRoutes.register(localApp, { ...coreContext, ledgerLabel, resolveLedger });
+  const { unitPricePaise, contractRow } = contractsRoutes.register(localApp, { ...coreContext, ledgerLabel, resolveLedger });
 
   // The Contractor Payments API: core/routes/contractor-payments.js (step 1.3).
   const { CONTRACTOR_PAYMENTS_SELECT, paymentRow } = contractorPaymentsRoutes.register(localApp, { ...coreContext, makeLedgerCrud, ledgerLabel, resolveLedger, REASON_MAX });
@@ -329,8 +329,6 @@ export function installFetchShim(repo) {
   // Phase 15 backup-overdue reminder (GET/PUT /api/backup/reminder, POST /api/backup/mark-exported):
   // core/routes/backup-reminder.js (step 1.4 A6). Its clock is host.now().
   backupReminderRoutes.register(localApp, coreContext);
-
-  repo.configure({ contractCols: CONTRACT_COLS }); // backup statements now live in backup-format.js
 
   // ---------------------------------------------------------------------------
   // The fetch shim itself. Only /api/* is intercepted; everything else (styles.css, plannr-ui.js,

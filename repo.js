@@ -246,9 +246,8 @@ const contract = {
   cashOutReferencingAllowances: async (cid) => (await cStmt.cashOutReferencingAllowances.get(cid)).n,
 };
 
-// Column-list INSERT/UPDATE (contract) — statements built ONCE at boot via configure(); keyed by
-// table|cols. Building a same-key statement later just reuses the cached one.
-// Since step 1.4 B11 these build the SQL text only: the adapter prepares each text once.
+// Column-list INSERT/UPDATE (contract). Since step 1.4 B11 these build the SQL text only: the adapter
+// prepares each text once.
 const insertSqlFor = (table, cols) => `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`;
 const updateSqlFor = (table, cols) => `UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`;
 
@@ -455,12 +454,7 @@ const backup = {
   upsertSetting: (key, value) => S('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value), // settings PK is now a plain key
 };
 
-// Used to prepare every column/table-dependent statement at boot. Since step 1.4 B12 the adapter
-// prepares each SQL text on first use, so there is nothing to do; server.js and the phone still call
-// it until B17 tidies their start.
-function configure() {}
-
 export {
-  crud, trash, configure,
+  crud, trash,
   overview, contract, ledgerCustoms, ledgers, authoredCount, backup,
 };

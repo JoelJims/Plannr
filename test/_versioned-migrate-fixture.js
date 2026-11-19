@@ -72,8 +72,8 @@ async function main() {
     // ---- boot the real init() ----
     process.env.PLANNR_DB = dbPath;
     process.env.PLANNR_TEST = '1';
-    const { db, init, migrationPlan, SCHEMA_VERSION } = require('../db');
-    const plan = migrationPlan();
+    const { db, init, planMigrations, SCHEMA_VERSION } = require('../db');
+    const plan = await planMigrations();
     assert.deepStrictEqual([plan.from, plan.to, plan.needsSnapshot, plan.tooNew], [0, SCHEMA_VERSION, true, false]);
 
     await init();
@@ -108,7 +108,7 @@ async function main() {
 
     // 4) A restart changes nothing and needs no snapshot.
     const afterFirst = dumpAll(db);
-    assert.strictEqual(migrationPlan().needsSnapshot, false);
+    assert.strictEqual((await planMigrations()).needsSnapshot, false);
     await init();
     assert.deepStrictEqual(dumpAll(db), afterFirst, 'a second init() is a no-op');
     assert.strictEqual(snaps().length, 3, 'no new snapshot on a restart');

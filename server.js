@@ -210,7 +210,7 @@ const { makeLedgerCrud, LEDGER_CRUDS } = require('./core/ledger-crud.js').create
 // the routes still written below.
 const { REASON_MAX, CASH_IN_SELECT, cashInRow, LOANS_SELECT, loanRow, CUSTOM_CODE, ledgerLabel, resolveLedger, CASH_OUT_SELECT, cashOutRow } = require('./core/routes/cash-and-loans.js').register(api, { ...coreContext, makeLedgerCrud });
 // The Contract Details API (contracts, services, allowances): core/routes/contracts.js (step 1.3).
-const { unitPricePaise, contractRow, CONTRACT_COLS } = require('./core/routes/contracts.js').register(api, { ...coreContext, ledgerLabel, resolveLedger });
+const { unitPricePaise, contractRow } = require('./core/routes/contracts.js').register(api, { ...coreContext, ledgerLabel, resolveLedger });
 
 // The Contractor Payments API: core/routes/contractor-payments.js (step 1.3).
 const { CONTRACTOR_PAYMENTS_SELECT, paymentRow } = require('./core/routes/contractor-payments.js').register(api, { ...coreContext, makeLedgerCrud, ledgerLabel, resolveLedger, REASON_MAX });
@@ -612,10 +612,6 @@ app._watchStopSentinel = watchStopSentinel; // Phase 11B: test that a sentinel f
 // (the authoritative composition path; the endpoint's compressed stream is a weaker check).
 app._overviewPdfHtml = ({ part = 'full', theme = 'light', range = { start: null, end: null } } = {}) =>
   overviewPdfHtml({ part, theme, range });
-// Pre-builds every column/table-dependent repo statement (the makeLedgerCrud/trash factories already
-// built theirs at route-registration time above).
-repo.configure({ contractCols: CONTRACT_COLS }); // backup statements now live in backup-format.js
-
 module.exports = app;
 
 // EXTERNAL side effects — the LAN listener, cron scheduling, and the process signal handlers — run

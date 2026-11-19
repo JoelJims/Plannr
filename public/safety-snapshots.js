@@ -152,7 +152,7 @@ export async function writePreRestoreSnapshot() {
   return `a file inside the app (${await writeDatabaseSnapshot(`plannr-pre-restore-${stampNow()}.db`)})`;
 }
 
-// Before a schema upgrade at start-up (local-bootstrap.js). `plan` is db.js's migrationPlan().
+// Before a schema upgrade at start-up (local-bootstrap.js). `plan` is db.js's planMigrations() answer.
 // Returns the path written, or null in a plain browser.
 export async function writePreMigrationSnapshot(plan) {
   if (!(await isNative())) {

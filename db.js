@@ -149,9 +149,8 @@ function* legacyMarkerMissingCalls() {
 
 // What init() would do to this database, without changing anything. needsSnapshot: there is existing
 // data and at least one step will run (a brand-new, empty database needs no snapshot).
-// A generator of database calls like legacyInit() (step 1.4 B9), so one copy serves both:
-// planMigrations() awaits them (init(), the phone's start), migrationPlan() makes them at once
-// (initSync() and the tests, until B17).
+// A generator of database calls like legacyInit() (step 1.4 B9), awaited by planMigrations() (init(),
+// the phone's start).
 function* planCalls(list) {
   const from = (yield q.get('PRAGMA user_version')).user_version;
   const to = list.length ? list[list.length - 1].version : BASELINE_VERSION;
@@ -164,10 +163,6 @@ function* planCalls(list) {
 }
 export function planMigrations(adapter = dbAdapter(), list = MIGRATIONS) {
   return runAwaited(planCalls(list), adapter);
-}
-// TRANSITION ONLY (removed in B17 with initSync()): the same answer at once, on a synchronous handle.
-export function migrationPlan(dbh = db, list = MIGRATIONS) {
-  return runNow(planCalls(list), dbAdapter(dbh));
 }
 
 // Apply every migration newer than the database's user_version, oldest first, through the async
@@ -260,7 +255,7 @@ function finishUpgrade() {
   if (isNode) rmSync(join(snapshotDir(), PENDING_UPGRADE), { force: true });
 }
 
-// The checks before any upgrade step, shared by init() and initSync(): refuse a database from a newer
+// The checks before any upgrade step in init(): refuse a database from a newer
 // app version (nothing changed), then, on the desktop, the safety snapshot.
 function beforeUpgrade(plan, snapshot) {
   if (plan.tooNew) {
@@ -282,37 +277,15 @@ export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
   finishUpgrade();
 }
 
-// TRANSITION ONLY (step 1.4 B4; removed in B17 when server.js starts asynchronously): init() for
-// callers that cannot await yet: server.js, reset-db.js and seed-demo.js. The same checks, snapshot
-// and baseline as init(). The numbered steps run only through the async interface, so this refuses,
-// before changing anything, a database that still needs one; init() runs it.
-export function initSync({ snapshot = true } = {}) {
-  const plan = migrationPlan();
-  if (!plan.tooNew) {
-    const pending = plan.steps.filter((s) => s.version > BASELINE_VERSION);
-    if (pending.length) {
-      throw new Error(`initSync: this database needs upgrade step(s) ${pending.map((s) => `v${s.version} (${s.name})`).join(', ')}, which only the async init() runs. `
-        + 'Nothing was changed. Start this program with await init() (step 1.4 B17).');
-    }
-  }
-  beforeUpgrade(plan, snapshot);
-  runNow(legacyInit(), dbAdapter());
-  finishUpgrade();
-}
-
 // ---- legacyInit()'s database calls (step 1.4 B5–B9) ---------------------------------------------------
 //
 // legacyInit() is a generator: each database call it makes is `yield q.get(sql, params)` (or all, run,
-// exec), which hands the call to whoever runs it and gets the answer back (a row, the rows,
-// { changes, lastInsertRowid }, or the error thrown at that point). Two runners, on the one connection:
-//   - runAwaited (init(): the phone, and every caller from B17 on) awaits each call through the async
-//     interface, the same calls the capacitor-sqlite adapter will answer in stage C;
-//   - runNow (initSync(): server.js, reset-db.js and seed-demo.js until B17) makes each call at once
-//     through the adapter's transition methods, so their start stays synchronous.
-// Same calls, same order, same answers, same errors either way; test/migration-equivalence.test.js
-// compares the two write by write. Calls not converted yet still use `db` directly (B6–B9 convert
-// the rest), which is safe on the same connection. Once every call is converted and initSync() is gone
-// (B17), `yield q.x(` becomes `await tx.x(`.
+// exec), which hands the call to runAwaited() and gets the answer back (a row, the rows,
+// { changes, lastInsertRowid }, or the error thrown at that point). runAwaited() awaits each call
+// through the async interface, the same calls the capacitor-sqlite adapter answers in stage C.
+// test/migration-equivalence.test.js and test/migration-legacy-shapes.test.js compare its writes with
+// the old runner's, write by write. (Until step 1.4 B17 a second runner made the same calls at once
+// for initSync(); the generator form let one copy serve both.)
 const q = {
   get: (sql, params) => ({ op: 'get', sql, params }),
   all: (sql, params) => ({ op: 'all', sql, params }),
@@ -332,24 +305,6 @@ async function runAwaited(gen, adapter) {
     let value, error, failed = false;
     try {
       value = o.op === 'exec' ? await adapter.exec(o.sql) : await adapter[o.op](o.sql, o.params);
-    } catch (e) { failed = true; error = e; }
-    step = failed ? gen.throw(error) : gen.next(value);
-  }
-  return step.value;
-}
-function runNow(gen, adapter) {
-  const statements = new Map(); // prepared once per SQL text, as the async interface does
-  const statement = (sql) => { let s = statements.get(sql); if (!s) { s = adapter.prepare(sql); statements.set(sql, s); } return s; };
-  let step = gen.next();
-  while (!step.done) {
-    const o = checkOp(step.value);
-    let value, error, failed = false;
-    try {
-      if (o.op === 'exec') adapter.execSync(o.sql);
-      else if (o.op === 'run') {
-        const r = statement(o.sql).run(...(o.params || []));
-        value = { changes: Number(r.changes), lastInsertRowid: Number(r.lastInsertRowid) };
-      } else value = statement(o.sql)[o.op](...(o.params || []));
     } catch (e) { failed = true; error = e; }
     step = failed ? gen.throw(error) : gen.next(value);
   }

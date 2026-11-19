@@ -1100,3 +1100,20 @@ choices made on the way are in the session report's DECISIONS list.
     then refuses to start. Pre-existing; logged for the security and quality review.
   - **Full suite:** `npm test` 493 tests (490 pass, 3 skipped); phone pass 202 of 219, exactly the
     17 known differences; all 13 UI suites and `test:slow` pass.
+- **B17c (2026-11-19): the synchronous transition code is gone.** Nothing called it after B17a and
+  B17b, so `db.js` loses `initSync()`, `migrationPlan()` and `runNow()`; the adapter loses
+  `prepare()`, `execSync()` and `TRANSITION_SYNC_METHODS`; `repo.js` loses its empty `configure()`
+  and both backends stop calling it. `init()` is the only way to open the database.
+  - The tests that compared `initSync()` with `await init()` keep comparing `await init()` with the
+    old runner (0e7b70b), write for write, on all 8 schema fixtures; the plan tests keep
+    `migrationPlan()`'s answers as known answers. `CONTRIBUTING.md` and `HANDOFF.md` say so.
+  - **Tests:** new guard in `test/repo-async.test.js` ("B17: no synchronous start, plan or adapter
+    method is left, and nothing calls one"): no module exports or defines a removed name, and no
+    file outside the guard calls one; `test/db-adapter-node.test.js` checks the adapter has no
+    synchronous method.
+  - Two tests that only made sense with `initSync()` go: `upgrade-retry` 1d (a failed `initSync()`
+    start) and 2b (the same through `initSync()`); their `await init()` twins stay.
+  - **Known positives:** `initSync()` exported again; the adapter's `prepare()` back; a
+    `repo.configure()` call left in `server.js`; the transition list exported again. All 4 caught.
+  - **Full suite:** `npm test` 492 tests (489 pass, 3 skipped); phone pass 203 of 220, exactly the
+    17 known differences; all 13 UI suites and `test:slow` pass.

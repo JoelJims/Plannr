@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { DatabaseSync } = require('node:sqlite');
-const { SCHEMA_VERSION, MIGRATIONS, assertMigrationList, migrationPlan, planMigrations, runMigrations, schemaVersionOf, dbAdapter } = require('../db');
+const { SCHEMA_VERSION, MIGRATIONS, assertMigrationList, planMigrations, runMigrations, schemaVersionOf, dbAdapter } = require('../db');
 const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
@@ -71,24 +71,26 @@ test('a failing step rolls back completely (its changes AND its version stamp); 
   assert.deepStrictEqual(await runMigrations(dbAdapter(d), [addTag, addLog]), [4]);
 });
 
-test('migrationPlan says what would run without changing anything', () => {
+test('planMigrations says what would run without changing anything', async () => {
+  const plan = (d, list) => planMigrations(dbAdapter(d), list);
   const empty = memDb(0, false);
-  assert.deepStrictEqual(migrationPlan(empty, [addTag]), {
+  assert.deepStrictEqual(await plan(empty, [addTag]), {
     from: 0, to: 3, tooNew: false, needsSnapshot: false, // a brand-new install has nothing to protect
     steps: [{ version: 2, name: 'baseline: historic migrations up to schema v2' }, { version: 3, name: 'add notes.tag' }],
   });
   const old = memDb(2);
-  const plan = migrationPlan(old, [addTag, addLog]);
-  assert.deepStrictEqual([plan.from, plan.to, plan.steps.map((s) => s.version), plan.needsSnapshot, plan.tooNew], [2, 4, [3, 4], true, false]);
+  const p = await plan(old, [addTag, addLog]);
+  assert.deepStrictEqual([p.from, p.to, p.steps.map((s) => s.version), p.needsSnapshot, p.tooNew], [2, 4, [3, 4], true, false]);
   assert.strictEqual(schemaVersionOf(old), 2, 'planning changed nothing');
-  const current = migrationPlan(memDb(4), [addTag, addLog]);
+  const current = await plan(memDb(4), [addTag, addLog]);
   assert.deepStrictEqual([current.steps.length, current.needsSnapshot, current.tooNew], [0, false, false]);
-  const newer = migrationPlan(memDb(5), [addTag, addLog]);
+  const newer = await plan(memDb(5), [addTag, addLog]);
   assert.strictEqual(newer.tooNew, true, 'a database from a newer app version is flagged');
 });
 
 // Step 1.4 B9: the plan is made of database calls like legacyInit(); planMigrations() awaits them
-// through the async interface (init(), the phone's start), migrationPlan() makes them at once.
+// through the async interface (init(), the phone's start). Until B17, migrationPlan() made the same
+// calls at once; its answers for these databases are kept below as known answers.
 function plannrLike(version, markers) {
   const d = memDb(version);
   d.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
@@ -108,21 +110,27 @@ function asyncOnly(d, calls) {
   };
 }
 
-test("planMigrations gives migrationPlan's answer through the async interface alone, for every kind of database", async () => {
+test('planMigrations gives the known answer through the async interface alone, for every kind of database', async () => {
+  // [from, to, step versions, needsSnapshot, tooNew] with no numbered steps, then with addTag + addLog.
   const cases = {
-    'brand new': () => memDb(0, false),
-    'v2, no settings table': () => memDb(2),
-    'v2, every one-off marker': () => plannrLike(2, ALL_MARKERS),
-    'v2, the taxonomy marker missing': () => plannrLike(2, ALL_MARKERS.filter((k) => k !== '_migrated_ledger_taxonomy_v1')),
-    'v2, every marker missing': () => plannrLike(2, []),
-    'v1': () => plannrLike(1, ALL_MARKERS),
-    'v4 (current)': () => memDb(4),
-    'v5 (newer)': () => memDb(5),
+    'brand new': [() => memDb(0, false), [0, 2, [2], false, false], [0, 4, [2, 3, 4], false, false]],
+    'v2, no settings table': [() => memDb(2), [2, 2, [], false, false], [2, 4, [3, 4], true, false]],
+    'v2, every one-off marker': [() => plannrLike(2, ALL_MARKERS), [2, 2, [], false, false], [2, 4, [3, 4], true, false]],
+    'v2, the taxonomy marker missing': [() => plannrLike(2, ALL_MARKERS.filter((k) => k !== '_migrated_ledger_taxonomy_v1')), [2, 2, [2], true, false], [2, 4, [2, 3, 4], true, false]],
+    'v2, every marker missing': [() => plannrLike(2, []), [2, 2, [2], true, false], [2, 4, [2, 3, 4], true, false]],
+    'v1': [() => plannrLike(1, ALL_MARKERS), [1, 2, [2], true, false], [1, 4, [2, 3, 4], true, false]],
+    'v4 (current)': [() => memDb(4), [4, 2, [], false, true], [4, 4, [], false, false]],
+    'v5 (newer)': [() => memDb(5), [5, 2, [], false, true], [5, 4, [], false, true]],
   };
-  for (const [name, make] of Object.entries(cases)) {
-    for (const list of [[], [addTag, addLog]]) {
+  const STEP = { 3: 'add notes.tag', 4: 'add log table' };
+  for (const [name, [make, ...answers]] of Object.entries(cases)) {
+    for (const [i, list] of [[], [addTag, addLog]].entries()) {
       const calls = [];
-      const want = migrationPlan(make(), list);
+      const [from, to, versions, needsSnapshot, tooNew] = answers[i];
+      const steps = versions.map((v) => ({ version: v, name: v === 2
+        ? (from < 2 ? 'baseline: historic migrations up to schema v2' : 'baseline: one-off clean-ups this database has not had yet')
+        : STEP[v] }));
+      const want = { from, to, steps, tooNew, needsSnapshot };
       assert.deepStrictEqual(await planMigrations(asyncOnly(make(), calls), list), want, `${name}, ${list.length} steps`);
       assert.ok(calls.length >= 2 && calls[0] === 'PRAGMA user_version', `${name}: planned through the async interface (${calls.length} calls)`);
     }
@@ -134,12 +142,11 @@ test("planMigrations gives migrationPlan's answer through the async interface al
 
 test("init() and the phone's start plan through planMigrations (the async interface)", () => {
   const src = fs.readFileSync(path.join(ROOT, 'db.js'), 'utf8');
-  const init = src.slice(src.indexOf('export async function init('), src.indexOf('export function initSync('));
+  const at = src.indexOf('export async function init(');
+  const init = src.slice(at, src.indexOf('\n}\n', at));
   assert.match(init, /await planMigrations\(/, 'init() awaits the plan');
-  assert.doesNotMatch(init, /migrationPlan\(/, 'init() does not plan at once');
   const boot = fs.readFileSync(path.join(ROOT, 'public', 'local-bootstrap.js'), 'utf8');
   assert.match(boot, /await planMigrations\(\)/, 'the phone awaits the plan');
-  assert.doesNotMatch(boot, /migrationPlan\(/, 'the phone does not plan at once');
 });
 
 test('an old database migrates through the REAL init(): data kept, snapshot first, newer DB refused (spawned)', () => {

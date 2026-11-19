@@ -20,18 +20,16 @@ forward. There is no server to fix it later.
      (`plannr-upgrade-pending.json`);
   3. applies each missing step in order. Each step runs in its own transaction together with its
      version stamp, so a failing step rolls back completely.
-- `init()` is async (step 1.4 B4). `server.js`, `reset-db.js` and `seed-demo.js` cannot wait yet and
-  call `initSync()` until step B17. `initSync()` refuses a database that still needs a numbered step
-  (only `init()` runs those), so a new step makes them fail loudly until then.
+- `init()` is async (step 1.4 B4), and it is the only way to open the database: `server.js`,
+  `reset-db.js` and `seed-demo.js` await it too (step 1.4 B17). There is no synchronous
+  `initSync()`, `migrationPlan()` or adapter `prepare()`/`execSync()` any more;
+  `test/repo-async.test.js` fails if one comes back.
 - `legacyInit()` is a generator (step 1.4 B5–B9): each of its database calls is
-  `yield q.get(sql, params)` (or `all`, `run`, `exec`; parameters as an array). `init()` awaits each
-  call through the async interface; `initSync()` makes the same calls at once. The upgrade plan is
-  made the same way: `planMigrations()` (awaited: `init()` and the phone's start) and
-  `migrationPlan()` (at once: `initSync()` and tests) run one generator.
-  `test/migration-equivalence.test.js` and `test/migration-legacy-shapes.test.js` check that both
-  make exactly the old runner's writes, in order. Yield nothing but a `q.*` call (a helper generator
-  goes in with `yield*`; a callback such as `.filter()` cannot yield, so use a loop). From B17, when
-  `initSync()` goes, `yield q.x(` becomes `await tx.x(`.
+  `yield q.get(sql, params)` (or `all`, `run`, `exec`; parameters as an array), and `init()` awaits
+  each call through the async interface. The upgrade plan is made the same way by `planMigrations()`.
+  `test/migration-equivalence.test.js` and `test/migration-legacy-shapes.test.js` check that it
+  makes exactly the old runner's writes, in order. Yield nothing but a `q.*` call (a helper generator
+  goes in with `yield*`; a callback such as `.filter()` cannot yield, so use a loop).
 - `repo.js` reads and writes through the async interface (step 1.4 B10–B12): every function returns
   a Promise, so every call is awaited (or returned). `test/repo-async.test.js` fails on a repo call
   in `core/`, `server.js` or `public/local-api.js` that is not. A write of several rows goes inside

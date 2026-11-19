@@ -1,14 +1,14 @@
 // Step 1.4 B6: legacyInit()'s oldest branches give the same writes and the same database through the
-// old runner (db.js at 0e7b70b), await init() and initSync().
+// old runner (db.js at 0e7b70b) and await init(). (Until B17 the transition initSync() was compared too.)
 //
 // The schema-history fixtures start at user_version 1, so they never reach the parts of legacyInit()
 // written for databases older than that: the tx_date backfills, the Phase 5B and phase/subpart
 // rebuilds, adding tenant_id (by ALTER on an empty table, by rebuild on a full one), the settings
 // rebuild, the custom-name backfill, the owner row on an old database; and no fixture has a second
 // household's rows for the Step 2a collapse to remove (L4, L5). test/fixtures/legacy-shapes/ holds made-up
-// databases in those shapes (make-legacy-shapes.js). Each is upgraded three ways,
-// with and without the approvals, and the three must agree write for write. Then every COMMIT of the
-// upgrade is made to fail in turn (the rollback paths), and the three must still agree: the same
+// databases in those shapes (make-legacy-shapes.js). Each is upgraded both ways,
+// with and without the approvals, and the two must agree write for write. Then every COMMIT of the
+// upgrade is made to fail in turn (the rollback paths), and the two must still agree: the same
 // error, the same writes, the same database.
 'use strict';
 const { test, before, after } = require('node:test');
@@ -22,7 +22,7 @@ const H = require('./fixtures/schema-history/harness');
 const SHAPES_DIR = path.join(__dirname, 'fixtures', 'legacy-shapes');
 const SHAPES = JSON.parse(fs.readFileSync(path.join(SHAPES_DIR, 'manifest.json'), 'utf8')).shapes;
 const MAN = L.manifest();
-const RUNNERS = ['old-init', 'init', 'initSync'];
+const RUNNERS = ['old-init', 'init'];
 const VARIANTS = [{ name: 'not approved', approve: false }, { name: 'approved', approve: true }];
 const START = new Date(Date.now() - 2000).toISOString().replace('T', ' ').slice(0, 19);
 const MASK = L.maskSince(START);
@@ -51,7 +51,7 @@ function copyOf(s, ...parts) {
 }
 // Jobs grouped by runner (each runner is one module), spread over child processes.
 async function runAll(jobs) {
-  const by = { 'old-init': [], init: [], initSync: [] };
+  const by = { 'old-init': [], init: [] };
   for (const j of jobs) by[j.run].push(j);
   await Promise.all(Object.entries(by).map(async ([run, list]) => {
     if (!list.length) return;
@@ -68,7 +68,7 @@ before(async () => {
   for (const f of ['db.js', 'ledgers.js']) fs.copyFileSync(path.join(L.DIR, MAN.oldRunner.dir, f), path.join(oldDir, f));
   OLD_DB_JS = path.join(oldDir, 'db.js');
 
-  // 1. Every shape, both variants, three runners, every write recorded.
+  // 1. Every shape, both variants, both runners, every write recorded.
   const jobs = [];
   for (const s of SHAPES) for (const v of VARIANTS) for (const r of RUNNERS) {
     jobs.push({ db: copyOf(s, v.approve ? 'approved' : 'plain', r), run: r, approve: v.approve, key: `${s.file}|${v.name}|${r}`, fault: { record: true } });
@@ -116,16 +116,12 @@ test('the legacy shapes are the files make-legacy-shapes.js wrote, all from befo
 
 for (const s of SHAPES) {
   for (const v of VARIANTS) {
-    test(`${s.file} (${v.name}): old init(), await init() and initSync() make the same writes and the same database`, () => {
-      const [old, neu, sync] = RUNNERS.map((r) => res[`${s.file}|${v.name}|${r}`]);
-      for (const [name, r] of [['await init()', neu], ['initSync()', sync]]) {
-        assert.deepStrictEqual({ ok: r.result.ok, error: r.result.error }, { ok: old.result.ok, error: old.result.error }, `${name}: same outcome as the old init()`);
-      }
+    test(`${s.file} (${v.name}): old init() and await init() make the same writes and the same database`, () => {
+      const [old, neu] = RUNNERS.map((r) => res[`${s.file}|${v.name}|${r}`]);
+      assert.deepStrictEqual({ ok: neu.result.ok, error: neu.result.error }, { ok: old.result.ok, error: old.result.error }, 'await init(): same outcome as the old init()');
       const want = L.fingerprintFile(old.db, { mask: MASK });
       assert.deepStrictEqual(L.fingerprintFile(neu.db, { mask: MASK }), want, 'await init(): same database');
-      assert.deepStrictEqual(L.fingerprintFile(sync.db, { mask: MASK }), want, 'initSync(): same database');
       assert.ok(writes(neu.result).length > 50, `the upgrade wrote (${writes(neu.result).length} writes)`);
-      assert.deepStrictEqual(writes(sync.result), writes(neu.result), 'initSync() makes exactly the writes await init() makes');
       assert.deepStrictEqual(writes(neu.result), writes(old.result), 'the same writes as the old init(), in the same order');
       if ((v.approve || s.approvedInSettings) && !s.refusesFirstStart) { // L2 and L3 store the approvals they need as settings
         assert.ok(old.result.ok, old.result.error);
@@ -136,14 +132,14 @@ for (const s of SHAPES) {
         assert.ok(!old.result.ok && new RegExp(`row-count guard failed for ${s.refusesFirstStart}`).test(old.result.error), old.result.error);
         assert.strictEqual(want.userVersion, s.userVersion, 'the version is not stamped');
       }
-      for (const r of [neu, sync]) for (const snap of H.snapshotsBeside(r.db)) assert.deepStrictEqual(L.fingerprintFile(snap), L.fingerprintFile(base(s)), 'the snapshot is the database before the upgrade');
+      for (const snap of H.snapshotsBeside(neu.db)) assert.deepStrictEqual(L.fingerprintFile(snap), L.fingerprintFile(base(s)), 'the snapshot is the database before the upgrade');
       assert.strictEqual(H.snapshotsBeside(neu.db).length, 1, 'a snapshot was taken before the upgrade');
     });
   }
 }
 
 // What the oldest branches did, read from the upgraded database (so a branch that silently stopped
-// running fails here even if all three runners agreed).
+// running fails here even if both runners agreed).
 const cols = (d, t) => d.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
 const open = (s) => new DatabaseSync(res[`${s}|approved|init`].db, { readOnly: true });
 const shapeFile = (prefix) => SHAPES.find((s) => s.file.startsWith(prefix)).file;
@@ -233,33 +229,31 @@ test("L4: the Step 2a collapse keeps exactly the first household's rows; its set
 // The old runner is no reference for the second start: before the B4 fix it took the already
 // rebuilt contract_services for the pre-Services one and dropped it (docs/step-1.4-storage-plan.md,
 // B4 "Found by the failure tests"), which then fails the cash_out foreign-key check.
-test('L5: the cascade is not counted, so the first start refuses; the next start finishes, the same in await init() and initSync()', () => {
+test('L5: the cascade is not counted, so the first start refuses; the next start finishes', () => {
   const s = SHAPES.find((x) => x.file.startsWith('L5'));
-  const [old, neu, sync] = RUNNERS.map((r) => res[`${s.file}|second start|${r}`]);
+  const [old, neu] = RUNNERS.map((r) => res[`${s.file}|second start|${r}`]);
   assert.ok(!old.result.ok && /cash_out tenant rebuild: foreign_key_check found .*contract_services/.test(old.result.error), `the old runner's known pre-B4 failure (${old.result.error})`);
-  for (const r of [neu, sync]) assert.ok(r.result.ok, r.result.error);
+  assert.ok(neu.result.ok, neu.result.error);
   assert.ok(writes(neu.result).length > 50, `the second start wrote (${writes(neu.result).length} writes)`);
-  assert.deepStrictEqual(writes(sync.result), writes(neu.result), 'initSync() makes exactly the writes await init() makes');
   const want = L.fingerprintFile(neu.db, { mask: MASK });
   assert.strictEqual(want.userVersion, 2);
-  assert.deepStrictEqual(L.fingerprintFile(sync.db, { mask: MASK }), want, 'the same database');
   assert.deepStrictEqual(L.checks(neu.db), { integrity: 'ok', foreignKeyViolations: 0 });
   firstHouseholdOnly(s, neu.db);
   const before = JSON.stringify(L.fingerprintFile(base(s)));
-  for (const r of [neu, sync]) {
+  for (const r of [neu]) {
     assert.ok(H.snapshotsBeside(r.db).some((f) => JSON.stringify(L.fingerprintFile(f)) === before), 'the snapshot from before the first start is still there');
   }
 });
 
-test('every COMMIT of each old upgrade, made to fail: the three runners report the same error, make the same writes and leave the same database', () => {
+test('every COMMIT of each old upgrade, made to fail: both runners report the same error, make the same writes and leave the same database', () => {
   let n = 0;
   for (const s of SHAPES) {
     assert.ok(commitRuns[s.file].length >= 5, `${s.file}: ${commitRuns[s.file].length} commits`);
     for (const c of commitRuns[s.file]) {
-      const [old, neu, sync] = RUNNERS.map((r) => c.runs[r]);
+      const [old, neu] = RUNNERS.map((r) => c.runs[r]);
       const where = `${s.file}, COMMIT at write ${c.at}`;
       assert.ok(!old.result.ok && /INJECTED FAULT/.test(old.result.error), `${where}: the old runner failed there (${old.result.error})`);
-      for (const r of [neu, sync]) {
+      for (const r of [neu]) {
         assert.strictEqual(r.result.error, old.result.error, `${where}: same error`);
         assert.deepStrictEqual(writes(r.result), writes(old.result), `${where}: same writes`);
         assert.deepStrictEqual(L.fingerprintFile(r.db, { mask: MASK }), L.fingerprintFile(old.db, { mask: MASK }), `${where}: same database`);

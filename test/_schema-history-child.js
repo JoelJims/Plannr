@@ -6,7 +6,7 @@
 // db.js opens PLANNR_DB when it loads, so every job imports a FRESH copy of the module (a different
 // ?job= query string is a different ES module instance) after pointing PLANNR_DB at its file.
 // jobs.json: { module: <path to the db.js to use>, jobs: [ job, ... ] }. A job:
-//   { db, run: 'old-init' | 'init' | 'initSync', approve?, chain?: { style, failAt, upTo }, fault?: { at } | { record: true } }
+//   { db, run: 'old-init' | 'init', approve?, chain?: { style, failAt, upTo }, fault?: { at } | { record: true } }
 //   { db, run: 'old-runMigrations' | 'runMigrations', chain }   (numbered steps only, on a plain handle)
 // fault: every exec() and statement run() during the job counts as one write; { at: n } makes the
 // n-th throw before it reaches SQLite (a crash or full disk at that point); { record: true } returns
@@ -53,7 +53,6 @@ async function runJob(moduleUrl, job, i) {
       armed = job.fault ? { count: 0, at: job.fault.at || 0, log: job.fault.record ? [] : null } : null;
       try {
         if (job.run === 'old-init') m.init();
-        else if (job.run === 'initSync') m.initSync();
         else await m.init(job.chain ? { migrations: chain({ ...job.chain, style: 'async' }) } : undefined);
       } finally {
         if (armed) { result.writes = armed.count; if (armed.log) result.log = armed.log; }

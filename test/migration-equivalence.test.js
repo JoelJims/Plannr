@@ -4,16 +4,16 @@
 // built (made by running each historical db.js from git; see make-fixtures.js), with made-up rows,
 // and the OLD runner: db.js and ledgers.js exactly as they were at 0e7b70b, before B4.
 //
-// Every fixture is upgraded three ways, each on its own copy and in its own process: the old init(),
-// the new await init(), and the transition initSync() that server.js uses until B17. Each runs with
-// and without the approvals the destructive one-off steps need. The three must agree on the outcome
+// Every fixture is upgraded two ways, each on its own copy and in its own process: the old init() and
+// the new await init(). (Until B17 a third, the transition initSync(), was compared too.) Each runs
+// with and without the approvals the destructive one-off steps need. The two must agree on the outcome
 // (success, or the same refusal) and leave the same database: the same schema, the same user_version
 // and the same checksum for every table. The numbered-step runner itself is compared the same way
 // (old runMigrations with synchronous steps, new one with async steps).
 //
 // Step 1.4 B5: every write each runner makes is recorded (test/_schema-history-child.js), and the
-// three must make the same writes in the same order: legacyInit()'s calls, awaited by init() and
-// made at once by initSync(), are the old runner's calls one for one.
+// two must make the same writes in the same order: legacyInit()'s calls, awaited by init(), are the
+// old runner's calls one for one.
 'use strict';
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -26,7 +26,7 @@ const H = require('./fixtures/schema-history/harness');
 const ROOT = path.join(__dirname, '..');
 const MAN = L.manifest();
 const VARIANTS = [{ name: 'not approved', approve: false }, { name: 'approved', approve: true }];
-const RUNNERS = ['old-init', 'init', 'initSync'];
+const RUNNERS = ['old-init', 'init'];
 // Rows init() seeds while upgrading get datetime('now'); hide those values, compare every other one.
 const START = new Date(Date.now() - 2000).toISOString().replace('T', ' ').slice(0, 19);
 const MASK = L.maskSince(START);
@@ -47,7 +47,7 @@ before(async () => {
   for (const f of ['db.js', 'ledgers.js']) fs.copyFileSync(path.join(L.DIR, MAN.oldRunner.dir, f), path.join(oldDir, f));
   OLD_DB_JS = path.join(oldDir, 'db.js');
 
-  const jobs = { 'old-init': [], init: [], initSync: [] };
+  const jobs = { 'old-init': [], init: [] };
   for (const f of MAN.fixtures) {
     const base = L.loadFixture(f, path.join(TMP, `${f.commit}.base.db`));
     for (const v of VARIANTS) {
@@ -85,20 +85,16 @@ test('there is a fixture for every schema db.js has built, from user_version 1 t
 
 for (const f of MAN.fixtures) {
   for (const v of VARIANTS) {
-    test(`${f.file} (${v.name}): old init(), await init() and initSync() leave the same database`, () => {
-      const [old, neu, sync] = RUNNERS.map((r) => results[`${f.file}|${v.name}|${r}`]);
+    test(`${f.file} (${v.name}): old init() and await init() leave the same database`, () => {
+      const [old, neu] = RUNNERS.map((r) => results[`${f.file}|${v.name}|${r}`]);
       assert.deepStrictEqual({ ok: neu.result.ok, error: neu.result.error }, { ok: old.result.ok, error: old.result.error }, 'await init(): same outcome as the old init()');
-      assert.deepStrictEqual({ ok: sync.result.ok, error: sync.result.error }, { ok: old.result.ok, error: old.result.error }, 'initSync(): same outcome as the old init()');
       const want = L.fingerprintFile(old.db, { mask: MASK });
       assert.deepStrictEqual(L.fingerprintFile(neu.db, { mask: MASK }), want, 'await init(): same schema, user_version and table checksums');
-      assert.deepStrictEqual(L.fingerprintFile(sync.db, { mask: MASK }), want, 'initSync(): same schema, user_version and table checksums');
-      for (const r of [old, neu, sync]) assert.deepStrictEqual(L.checks(r.db), L.checks(old.db));
-      // Step 1.4 B5: legacyInit() is run two ways, awaited (init) and at once (initSync). They make the
-      // same writes in the same order, and so did the old runner.
+      assert.deepStrictEqual(L.checks(neu.db), L.checks(old.db));
+      // Step 1.4 B5: await init() makes the old runner's writes, in the same order.
       // (The safety snapshot, VACUUM INTO a file named by path and time, is checked further down.)
       const writes = (r) => r.result.log.filter((w) => !/^VACUUM INTO /.test(w));
       assert.ok(writes(neu).length > 0, 'writes were recorded');
-      assert.deepStrictEqual(writes(sync), writes(neu), 'initSync() makes exactly the writes await init() makes, in the same order');
       assert.deepStrictEqual(writes(neu), writes(old), 'the same writes as the old init(), in the same order');
       if (v.approve) {
         assert.ok(old.result.ok, `with approval every past database upgrades (${old.result.error || ''})`);
@@ -106,11 +102,11 @@ for (const f of MAN.fixtures) {
         assert.deepStrictEqual(L.checks(old.db), { integrity: 'ok', foreignKeyViolations: 0 });
       }
       // Safety snapshots: wherever the old runner took one, the new ones did too, and each holds the
-      // fixture exactly as it was. (The new ones also take one before the one-off clean-ups on a v2
-      // database from an older app, which the old runner skipped; see migrationPlan in db.js.)
+      // fixture exactly as it was. (The new one also takes one before the one-off clean-ups on a v2
+      // database from an older app, which the old runner skipped; see planMigrations in db.js.)
       const base = L.fingerprintFile(path.join(TMP, `${f.commit}.base.db`));
-      if (snapshotsBeside(old.db).length) for (const r of [neu, sync]) assert.strictEqual(snapshotsBeside(r.db).length, 1);
-      for (const r of [old, neu, sync]) for (const s of snapshotsBeside(r.db)) assert.deepStrictEqual(L.fingerprintFile(s), base, `${path.basename(s)} is the database before the upgrade`);
+      if (snapshotsBeside(old.db).length) assert.strictEqual(snapshotsBeside(neu.db).length, 1);
+      for (const r of [old, neu]) for (const s of snapshotsBeside(r.db)) assert.deepStrictEqual(L.fingerprintFile(s), base, `${path.basename(s)} is the database before the upgrade`);
     });
   }
 }

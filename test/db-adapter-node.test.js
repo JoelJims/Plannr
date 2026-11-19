@@ -77,15 +77,18 @@ for (const name of NAMES) {
 
 // ---- What only the file adapter has ----------------------------------------------------------------
 
-test('the adapter passes checkAdapter, keeps the transition methods, and names its engine', async () => {
-  const { checkAdapter, ADAPTER_METHODS, TRANSITION_SYNC_METHODS } = await load('core/db-adapter.js');
+test('the adapter passes checkAdapter, names its engine, and has no synchronous method (step 1.4 B17)', async () => {
+  const mod = await load('core/db-adapter.js');
+  const { checkAdapter, ADAPTER_METHODS } = mod;
+  assert.deepStrictEqual(Object.keys(mod).filter((k) => /SYNC/.test(k)), [], 'no list of transition methods is exported');
   await withAdapter(async (db) => {
     assert.strictEqual(checkAdapter(db), db);
     assert.strictEqual(db.engine, 'node-sqlite');
-    for (const m of [...ADAPTER_METHODS, ...TRANSITION_SYNC_METHODS]) assert.strictEqual(typeof db[m], 'function', m);
-    db.execSync('CREATE TABLE t (x)');
-    db.prepare('INSERT INTO t VALUES (?)').run(7);
-    assert.deepStrictEqual({ ...(await db.get('SELECT x FROM t')) }, { x: 7 }, 'sync and async calls see the same database');
+    for (const m of ADAPTER_METHODS) assert.strictEqual(typeof db[m], 'function', m);
+    for (const m of ['prepare', 'execSync']) assert.strictEqual(db[m], undefined, `no ${m}()`);
+    await db.exec('CREATE TABLE t (x)');
+    await db.run('INSERT INTO t VALUES (?)', [7]);
+    assert.deepStrictEqual({ ...(await db.get('SELECT x FROM t')) }, { x: 7 });
   });
   assert.throws(() => checkAdapter({ engine: 'x', get() {} }), /missing: all, run, exec, transaction, exportBytes, replaceWith, info, close/);
 });
@@ -163,6 +166,7 @@ test('after close, every call says the database is closed', async () => {
   await withAdapter(async (db) => {
     await db.close();
     await assert.rejects(db.get('SELECT 1'), /the database is closed/);
-    assert.throws(() => db.prepare('SELECT 1'), /the database is closed/);
+    await assert.rejects(db.run('SELECT 1'), /the database is closed/);
+    await assert.rejects(db.exec('SELECT 1'), /the database is closed/);
   });
 });
