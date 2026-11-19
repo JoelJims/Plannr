@@ -64,7 +64,7 @@ function makeFakePlugins(dataDir, opts = {}) {
         c.db = new DatabaseSync(fileOf(database), readonly ? { readOnly: true } : {});
         c.db.exec('PRAGMA foreign_keys = ON');
         if (!readonly) c.db.prepare('SELECT COUNT(*) FROM sqlite_master').get(); // touches the file, as Android does
-      } catch (e) { c.db = null; fail('Open', e); }
+      } catch (e) { if (c.db) { try { c.db.close(); } catch { /* not open */ } } c.db = null; fail('Open', e); }
     },
     async close({ database, readonly = false }) {
       calls.push(['close', database, readonly]);

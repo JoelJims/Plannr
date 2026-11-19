@@ -271,7 +271,7 @@ export function installFetchShim(repo) {
     if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
     if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
     try {
-      const plain = exportSnapshotBytes();
+      const plain = await exportSnapshotBytes();
       const enc = await encrypt(plain, passphrase);
       res.send(enc);
     } catch (e) {

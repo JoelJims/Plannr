@@ -138,7 +138,7 @@ export function bytesToBase64(bytes) {
 // A whole-database copy (a standard SQLite file, unencrypted, gzipped, in the app's private folder).
 async function writeDatabaseSnapshot(filename, fsApi) {
   const { exportSnapshotBytes } = await import('./local-snapshot.js');
-  const bytes = exportSnapshotBytes();
+  const bytes = await exportSnapshotBytes();
   if (!bytes || !bytes.length) throw new Error('the database export for the safety snapshot was empty');
   return saveSnapshot(filename, bytes, fsApi);
 }

@@ -43,6 +43,9 @@ function openDb(EngineDatabaseSync) {
 
 export let db;
 let readyPromise = null;
+// Step 1.4 C9: on the phone, once the data has moved to its own file, local-bootstrap.js hands db.js
+// the adapter on that file (useAdapter) before ready(), and kvvfs is not opened as the database.
+let externalAdapter = null;
 
 if (isNode) {
   mkdirSync(DATA_DIR, { recursive: true }); // make sure the folder for the database file exists
@@ -60,7 +63,7 @@ if (isNode) {
  * before its functions are first called. repo.js's internals are unchanged from before this phase.
  */
 export function ready() {
-  if (db) return Promise.resolve();
+  if (db || externalAdapter) return Promise.resolve();
   if (!readyPromise) {
     readyPromise = import('./db-engine.js').then(async (engine) => {
       await engine.ready();
@@ -123,9 +126,26 @@ let ownAdapter = null;
 // dbAdapter() is db.js's own connection (one shared adapter, so a nested transaction is refused);
 // dbAdapter(handle) wraps another handle (the tests use throwaway databases).
 export function dbAdapter(dbh) {
+  if (externalAdapter && (dbh === undefined || dbh === db)) return externalAdapter;
   if (dbh === undefined || dbh === db) return ownAdapter || (ownAdapter = adapterOver(() => db));
   return adapterOver(() => dbh);
 }
+
+/**
+ * Step 1.4 C9: make `adapter` (core/db-adapter.js; the phone's database file) db.js's own connection,
+ * instead of the kvvfs database ready() would open. Only in a browser, and only before ready(): `db`
+ * (the synchronous handle) then stays unset, and everything goes through dbAdapter().
+ */
+export function useAdapter(adapter) {
+  if (isNode) throw new Error('db.js: useAdapter() is for the phone; under Node db.js opens its own file.');
+  if (db || readyPromise || externalAdapter) throw new Error('db.js: useAdapter() must be called once, before ready().');
+  if (!adapter || typeof adapter.transaction !== 'function' || typeof adapter.exportBytes !== 'function') {
+    throw new TypeError('db.js: useAdapter() needs an adapter (core/db-adapter.js).');
+  }
+  externalAdapter = adapter;
+}
+/** True when db.js opened the database itself (`db` is set); false once useAdapter() was used. */
+export const usingOwnHandle = () => !externalAdapter;
 
 // Run fn(tx) inside one transaction on db.js's connection: COMMIT when it resolves, ROLLBACK when it
 // throws (the error is passed on). One at a time: a nested call is refused.

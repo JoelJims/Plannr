@@ -26,7 +26,26 @@ window.__plannrMode = mode; // read by test-ui/runtime-mode.js
 if (mode === 'server') {
   console.log('[local-bootstrap] desktop dev server (server.js) detected — leaving fetch alone (not local-only mode).');
 } else {
-  const { ready, init, planMigrations } = await import('./db.js');
+  const { ready, init, planMigrations, useAdapter } = await import('./db.js');
+  // Step 1.4 C9: which copy holds the data, before anything reads it (docs/step-1.4-storage-plan.md
+  // §2.2). Without the phone's two storage plugins (the browser preview, the UI suites) this answers
+  // "localstorage" at once and touches nothing. A file that is missing or damaged stops here, on the
+  // recovery screen, with nothing changed.
+  let storage;
+  try {
+    const { chooseStorage } = await import('./storage-native.js');
+    storage = await chooseStorage({ plugins: window.__plannrTestPlugins });
+  } catch (e) {
+    showStartupError(e);
+    throw e;
+  }
+  window.__plannrStorage = { use: storage.use, native: storage.native, prompt: storage.prompt || null, marker: storage.marker || null };
+  if (storage.use === 'recovery') {
+    const { showRecoveryScreen } = await import('./storage-recovery.js');
+    await showRecoveryScreen(storage);
+    throw new Error('Plannr: the database file is ' + storage.reason + '; the recovery screen is shown.');
+  }
+  if (storage.use === 'native') useAdapter(storage.adapter);
   await ready();
   // Phase 2 (Step 2): before a schema upgrade touches existing data, copy the whole database into the
   // app's private folder (safety-snapshots.js). If that copy cannot be written and verified, stop

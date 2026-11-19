@@ -31,6 +31,7 @@
     "test:runtime-mode": "node test-ui/runtime-mode.js",
     "test:offline": "node test-ui/offline.js",
     "test:db-adapter-kvvfs": "node test-ui/db-adapter-kvvfs.js",
+    "test:storage-startup": "node test-ui/storage-startup.js",
     "sync:public-modules": "node sync-public-modules.js",
     "android:sync": "node sync-public-modules.js && npx cap sync android",
     "release:android": "node release-android.js"

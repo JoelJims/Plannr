@@ -1343,3 +1343,30 @@ choices made on the way are in the session report's DECISIONS list.
     positives:** 12 mutations, each caught.
   - Full suite: node 608 tests (605 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C9 (2026-11-19): startup chooses the storage (plan §2.2); the recovery screen.**
+  `public/storage-native.js` builds the move's host from the phone's two plugins (CapacitorSQLite and
+  PlannrStorage), the kvvfs copy and the safety snapshots, and `chooseStorage()` runs the §2.2 table
+  before any page reads data: it deletes a leftover candidate, sets aside a database file no move
+  record explains, and answers `localstorage` (as today; with the "interrupted" prompt after a stopped
+  move), `native` (an adapter open on the file) or `recovery`. Without both plugins (the browser
+  preview, the UI suites, an older APK) it answers `localstorage` at once and touches nothing.
+  `local-bootstrap.js` calls it first; on `native` it hands the adapter to `db.js` (`useAdapter()`,
+  only before `ready()`), so kvvfs is not opened as the database. The encrypted backup and restore
+  work on the file (`local-snapshot.js`: `exportBytes()` and `replaceWith()` through the adapter, the
+  "too new" check from the image's header). `public/storage-recovery.js`: the recovery screen, with
+  "Use the old copy as it was on <date>" (after a confirmation that says what is not in it) and
+  "Restore an encrypted backup" (into a new file; the damaged one is set aside). The marker file is
+  written beside itself and renamed, so it is whole or absent. Nothing on the page starts a move yet
+  (C10).
+  - **Tests:** `test/storage-native.test.js` (11), the phone host over the Node stand-in plugins: no
+    plugins; the paths; `quick_check` on a missing file (false, no empty file made); never moved; a move then startup on the file, the marker whole; the marker
+    unreadable (the localStorage key decides); an interrupted move; an unexplained file set aside;
+    the file missing or damaged (recovery, nothing changed); the way back and the delete on the phone
+    host; the localStorage limit equal to the meter's. `test-ui/storage-startup.js` (new,
+    `npm run test:storage-startup`, 35 checks in Chromium with `test-ui/_fake-native-plugins.js`):
+    the six startup cases, including saves going to the file and not to localStorage, the encrypted
+    backup and restore on the file, the recovery screen's two paths and its wording for a missing or a damaged file, and `useAdapter()` refused after
+    `ready()`. The Node stand-in's failed open now closes what it opened, as Android's does.
+    **Known positives:** 11 mutations, each caught. On the emulator (C9 build `5519e8e5…9217`, 15,074,622 bytes, over the C3 build with 502 cash-in rows): the app starts on localStorage with the plugins seen and makes no file; a marker `native-v1` with no file gives the recovery screen and changes nothing; with the marker removed the same 502 rows are back.
+  - Full suite: node 619 tests (616 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite (with the new `test:storage-startup`) and `test:slow` pass.
