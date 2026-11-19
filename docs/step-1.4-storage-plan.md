@@ -1244,3 +1244,20 @@ choices made on the way are in the session report's DECISIONS list.
   - Debug APK: 15,056,197 bytes (+9.0 MB, almost all `libsqlcipher.so` for 4 ABIs, as C1 measured).
   - Full suite: node 507 tests (504 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C4 (2026-11-19): `core/storage-check.js`, the checks after the copy (plan §2.3).**
+  `fingerprint(db)` reads one database through the async interface, so the same code runs on the
+  localStorage copy and on the new file: `integrity_check`, `user_version`, the schema text of every
+  table, index, trigger and view, and for every table (`sqlite_sequence` included) the row count and
+  a SHA-256 of its rows in rowid order, each value hashed with its `typeof()` (so `1`, `1.0` and `'1'`
+  differ; a BLOB as hex). Rowid values are not hashed, so a `VACUUM INTO` copy passes.
+  `compareFingerprints(before, after)` lists every difference in plain words; `summarize()` and
+  `summaryText()` give "All <n> tables match (<n> rows)." for the marker file and the page.
+  - **Tests:** `test/storage-check.test.js`, 13: identical copies and a `VACUUM INTO` copy pass;
+    each of these fails with its own message: one changed value, a missing row, an extra row, `1`
+    against `1.0`, `1` against `'1'`, an index only in the new copy, the same index on another
+    column, a different `user_version`, an AUTOINCREMENT counter moved on, the same rows in another
+    order, a missing table, a damaged new copy. **Known positives:** 8 mutations (the type left out
+    of the hash, the integrity check, `user_version`, the schema text, the row hashes,
+    `sqlite_sequence` left out, the row order, a missing table) each fail the file.
+  - Full suite: node 523 tests (520 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.
