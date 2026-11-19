@@ -3,14 +3,14 @@
 // 1. Over HTTP, through test/helpers.js, so run-tests.js runs these against both platforms (server.js
 //    and the phone's public/local-api.js). The clock is real here, so only "today" is checked.
 // 2. With a fixed clock: the core module registered on a small fake app, over an in-memory
-//    node:sqlite settings table, with a host whose now() is set by the test. This is where the
+//    node:sqlite settings table (through the async adapter, db-adapter-node.js), with a host whose
+//    now() is set by the test. This is where the
 //    "days since" rounding and the overdue boundary are checked.
 const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { DatabaseSync } = require('node:sqlite');
 
 before(async () => { await H.startApp(); });
 after(async () => { await H.stopApp(); });
@@ -82,8 +82,9 @@ const loadCore = () => import(pathToFileURL(path.join(__dirname, '..', 'core', '
 // A fake app that records the routes, and a res that records the answer.
 async function fixedClockApp() {
   const core = await loadCore();
-  const db = new DatabaseSync(':memory:');
-  db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
+  const { openNodeSqliteAdapter } = await import(pathToFileURL(path.join(__dirname, '..', 'db-adapter-node.js')).href);
+  const adapter = openNodeSqliteAdapter(':memory:');
+  await adapter.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
   const clock = { now: new Date('2026-03-10T12:00:00Z') };
   const routes = {};
   const app = {};
@@ -94,13 +95,13 @@ async function fixedClockApp() {
       routes[`${m.toUpperCase()} ${p}`] = handler;
     };
   }
-  core.register(app, { auth, db, host: { now: () => new Date(clock.now.getTime()) } });
-  const call = (key, body) => {
+  core.register(app, { auth, adapter, host: { now: () => new Date(clock.now.getTime()) } });
+  const call = async (key, body) => {
     const res = { code: 200, body: undefined, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
-    routes[key]({ body: body || {}, query: {} }, res);
+    await routes[key]({ body: body || {}, query: {} }, res);
     return res;
   };
-  return { core, db, clock, routes, call, status: () => call('GET /api/backup/reminder').body };
+  return { core, adapter, clock, routes, call, status: async () => (await call('GET /api/backup/reminder')).body };
 }
 
 test('fixed clock: the core registers exactly the three reminder routes, each behind auth', async () => {
@@ -109,35 +110,36 @@ test('fixed clock: the core registers exactly the three reminder routes, each be
 });
 
 test('fixed clock: mark-exported stamps host.now() exactly, not the database clock', async () => {
-  const { call, db } = await fixedClockApp();
-  const r = call('POST /api/backup/mark-exported');
+  const { call, adapter } = await fixedClockApp();
+  const r = await call('POST /api/backup/mark-exported');
   assert.strictEqual(r.body.lastExportAt, '2026-03-10 12:00:00');
-  assert.strictEqual(db.prepare("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'").get().value, '2026-03-10 12:00:00');
+  assert.strictEqual((await adapter.get("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'")).value, '2026-03-10 12:00:00');
   assert.deepStrictEqual(r.body, { lastExportAt: '2026-03-10 12:00:00', reminderDays: 7, daysSince: 0, overdue: false });
 });
 
 test('fixed clock: days since is floored, and overdue starts only AFTER the threshold', async () => {
   const { call, clock, status } = await fixedClockApp();
-  call('POST /api/backup/mark-exported'); // 2026-03-10 12:00:00
+  await call('POST /api/backup/mark-exported'); // 2026-03-10 12:00:00
   const at = (iso) => { clock.now = new Date(iso); return status(); };
-  assert.deepStrictEqual([at('2026-03-11T11:59:59Z').daysSince, at('2026-03-11T12:00:00Z').daysSince], [0, 1]);
-  const almost7 = at('2026-03-17T11:59:59Z');
+  assert.deepStrictEqual([(await at('2026-03-11T11:59:59Z')).daysSince, (await at('2026-03-11T12:00:00Z')).daysSince], [0, 1]);
+  const almost7 = await at('2026-03-17T11:59:59Z');
   assert.deepStrictEqual([almost7.daysSince, almost7.overdue], [6, false], '6 days 23:59:59 reads as 6');
-  const day7 = at('2026-03-17T12:00:00Z');
+  const day7 = await at('2026-03-17T12:00:00Z');
   assert.deepStrictEqual([day7.daysSince, day7.overdue], [7, false], 'exactly the threshold is not overdue yet');
-  const day8 = at('2026-03-18T12:00:00Z');
+  const day8 = await at('2026-03-18T12:00:00Z');
   assert.deepStrictEqual([day8.daysSince, day8.overdue], [8, true]);
   // Turning it off clears overdue; a longer threshold moves the boundary.
-  assert.strictEqual(call('PUT /api/backup/reminder', { days: 'off' }).body.overdue, false);
-  assert.deepStrictEqual(call('PUT /api/backup/reminder', { days: 8 }).body.overdue, false);
-  assert.strictEqual(at('2026-03-19T12:00:00Z').overdue, true);
+  assert.strictEqual((await call('PUT /api/backup/reminder', { days: 'off' })).body.overdue, false);
+  assert.deepStrictEqual((await call('PUT /api/backup/reminder', { days: 8 })).body.overdue, false);
+  assert.strictEqual((await at('2026-03-19T12:00:00Z')).overdue, true);
 });
 
 test('fixed clock: a clock set back before the last backup reads as 0 days, not negative', async () => {
   const { call, clock, status } = await fixedClockApp();
-  call('POST /api/backup/mark-exported');
+  await call('POST /api/backup/mark-exported');
   clock.now = new Date('2026-03-01T00:00:00Z');
-  assert.deepStrictEqual([status().daysSince, status().overdue], [0, false]);
+  const s = await status();
+  assert.deepStrictEqual([s.daysSince, s.overdue], [0, false]);
 });
 
 test('fixed clock: daysSinceUtc and toUtcStamp on their own', async () => {

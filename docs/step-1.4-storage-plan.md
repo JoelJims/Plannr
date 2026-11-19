@@ -1008,3 +1008,20 @@ choices made on the way are in the session report's DECISIONS list.
     tables. All 4 caught.
   - **Full suite:** all passes. `npm test` 485 tests, 0 failures, the same 3 skipped; the phone pass
     196 of 213, the same 17 known differences; 13 UI suites; `test:slow`.
+- **B14 (2026-11-19): the settings routes are on the async interface** (the budget, the reminder
+  times on Home, the backup reminder).
+  - Each reads and writes its settings row through `ctx.adapter`. `getBudgetPaise()` answers with
+    a Promise (the Overview and its PDF already await it); the backup reminder's helpers and every
+    handler are async.
+  - **Tests:** new `test/settings-routes.test.js` (2, both passes): the budget and the reminder
+    times are written, read back through their own `GET`, refused when bad (nothing changes) and
+    cleared. Until now no node test read either back. The fixed-clock reminder tests run over an
+    in-memory `node-sqlite` adapter. The "every call is awaited" guard now also covers direct
+    adapter calls (`adapter.`, `tx.`, `dbAdapter().`) and the settings helpers.
+  - **Known positives:** the budget's `GET` not awaited; the budget clear not awaited (guard); the
+    reminder times always reading as none (caught only by the new test); the backup reminder's
+    upsert with its values swapped; the reminder times' save not awaited (guard). All 5 caught.
+  - **Full suite:** `npm test` 487 tests, 0 failures, the same 3 skipped; the phone pass 198 of 215,
+    the same 17 known differences; 13 UI suites. `test:slow` failed once on the timed PDF idle test
+    (its 1.5 s idle window raced the test under load; nothing B14 touches), then passed twice when
+    re-run; the test is fixed in the next commit.

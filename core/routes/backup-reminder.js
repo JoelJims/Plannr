@@ -7,7 +7,8 @@
 // of days.
 //
 // The time comes from ctx.host.now() (core/host.js), never from the platform or from SQLite's
-// datetime('now'), so a test can fix the clock.
+// datetime('now'), so a test can fix the clock. The settings are read and written through ctx.adapter,
+// the async database interface (step 1.4 B14).
 
 export const BACKUP_REMINDER_DEFAULT_DAYS = 7;
 export const BACKUP_REMINDER_MIN_DAYS = 1;
@@ -29,53 +30,53 @@ export function daysSinceUtc(utc, now) {
 }
 
 export function register(app, ctx) {
-  const { auth, db, host } = ctx;
+  const { auth, adapter, host } = ctx;
 
-  const setSetting = (key, value) => db.prepare(
+  const setSetting = (key, value) => adapter.run(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-  ).run(key, value);
+  [key, value]);
 
-  function getLastExportAt() {
-    const r = db.prepare("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'").get();
+  async function getLastExportAt() {
+    const r = await adapter.get("SELECT value FROM settings WHERE key = 'last_encrypted_export_at'");
     return (r && r.value) ? r.value : null;
   }
 
-  function getBackupReminderDays() {
-    const r = db.prepare("SELECT value FROM settings WHERE key = 'backup_reminder_days'").get();
+  async function getBackupReminderDays() {
+    const r = await adapter.get("SELECT value FROM settings WHERE key = 'backup_reminder_days'");
     if (!r || r.value == null) return BACKUP_REMINDER_DEFAULT_DAYS;
     if (r.value === 'off') return null;
     const n = Number(r.value);
     return Number.isInteger(n) && n >= BACKUP_REMINDER_MIN_DAYS && n <= BACKUP_REMINDER_MAX_DAYS ? n : BACKUP_REMINDER_DEFAULT_DAYS;
   }
 
-  function getBackupReminderStatus() {
-    const lastExportAt = getLastExportAt();
-    const reminderDays = getBackupReminderDays();
+  async function getBackupReminderStatus() {
+    const lastExportAt = await getLastExportAt();
+    const reminderDays = await getBackupReminderDays();
     const since = lastExportAt ? daysSinceUtc(lastExportAt, host.now()) : null;
     const overdue = reminderDays != null && (since === null || since > reminderDays);
     return { lastExportAt, reminderDays, daysSince: since, overdue };
   }
 
-  app.get('/api/backup/reminder', auth, (req, res) => { res.json(getBackupReminderStatus()); });
+  app.get('/api/backup/reminder', auth, async (req, res) => { res.json(await getBackupReminderStatus()); });
 
-  app.put('/api/backup/reminder', auth, (req, res) => {
+  app.put('/api/backup/reminder', auth, async (req, res) => {
     const raw = req.body.days;
     if (raw === null || raw === 'off') {
-      setSetting('backup_reminder_days', 'off');
-      return res.json(getBackupReminderStatus());
+      await setSetting('backup_reminder_days', 'off');
+      return res.json(await getBackupReminderStatus());
     }
     const n = Number(raw);
     if (!Number.isInteger(n) || n < BACKUP_REMINDER_MIN_DAYS || n > BACKUP_REMINDER_MAX_DAYS) {
       return res.status(400).json({ error: `Enter a whole number of days between ${BACKUP_REMINDER_MIN_DAYS} and ${BACKUP_REMINDER_MAX_DAYS}, or turn it off.` });
     }
-    setSetting('backup_reminder_days', String(n));
-    res.json(getBackupReminderStatus());
+    await setSetting('backup_reminder_days', String(n));
+    res.json(await getBackupReminderStatus());
   });
 
   // Called only after the encrypted backup file is verified to actually exist (Filesystem.stat() on
   // native, the closest browser equivalent otherwise): see saveFile() in data-backup.html.
-  app.post('/api/backup/mark-exported', auth, (req, res) => {
-    setSetting('last_encrypted_export_at', toUtcStamp(host.now()));
-    res.json(getBackupReminderStatus());
+  app.post('/api/backup/mark-exported', auth, async (req, res) => {
+    await setSetting('last_encrypted_export_at', toUtcStamp(host.now()));
+    res.json(await getBackupReminderStatus());
   });
 }

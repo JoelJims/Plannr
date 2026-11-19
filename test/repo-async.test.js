@@ -124,8 +124,8 @@ test('B11: every repo.contract function answers with a Promise', async () => {
   H.clearLedger();
 });
 
-// Every database call the shared core and both backends make through repo.js (and the async helpers
-// built on it) is awaited, returned, or the body of an arrow function its caller awaits. A call left
+// Every database call the shared core and both backends make through repo.js or the adapter (and the
+// async helpers built on them) is awaited, returned, or the body of an arrow function its caller awaits. A call left
 // un-awaited answers the request before it has run, and its failure is lost (an unhandled rejection
 // instead of a 500). The node:sqlite engine runs the SQL at call time, so no route test can see a
 // missing await on a write whose answer is not read; this check can.
@@ -135,10 +135,12 @@ test('B12: every repo call in the core and both backends is awaited', () => {
     .filter((f) => f.endsWith('.js')).map((f) => path.join('core', f))];
   const HELPERS = ['contractRow', 'getContractRow', 'getServiceRow', 'getLiveServiceForContract', 'getLiveAllowanceForContract',
     'writePaymentDates', 'allowanceById', 'computeOverview', 'computeUpcomingPayments', 'overviewPdfHtml', 'saveLedgerCustom',
-    'validate', 'finalize', 'afterWrite'];
+    'validate', 'finalize', 'afterWrite', 'getBudgetPaise', 'getNotificationTimes', 'getLastExportAt', 'getBackupReminderDays',
+    'getBackupReminderStatus', 'setSetting'];
   const CALL = new RegExp(String.raw`(?:\brepo\.(?:overview|contract|ledgerCustoms|ledgers|backup)\.\w+|\brepo\.authoredCount|\brc\.\w+`
     + String.raw`|\bTRASH_REPO\[\w+\]\.\w+|\bLEDGER_CRUDS\.\w+\.\w+|\bledgerIndex\.refresh`
-    + String.raw`|\bbackupFormat\.(?:buildBackup|applyBackup|assertImportOwnershipComplete)|\b(?:${HELPERS.join('|')}))\(`, 'g');
+    + String.raw`|\bbackupFormat\.(?:buildBackup|applyBackup|assertImportOwnershipComplete)`
+    + String.raw`|\b(?:adapter|tx|dbAdapter\(\))\.(?:get|all|run|exec|transaction)|\b(?:${HELPERS.join('|')}))\(`, 'g');
   const SYNC = new Set(['repo.ledgers.toCsv']); // builds text, no database
   const bad = [];
   let seen = 0;

@@ -1,10 +1,11 @@
 // Cross-platform plan, step 1.3 — the reminder times on Home: up to 5 "HH:MM" times, stored as one
 // settings row. The phone schedules the reminders itself (public/notifications.js); these routes only
 // store the list. The only copy: server.js and public/local-api.js both call register(app, ctx).
-// See core/routes/people.js for what `app` and `ctx` are.
+// See core/routes/people.js for what `app` and `ctx` are. The row is read and written through ctx.adapter,
+// the async database interface (step 1.4 B14).
 
 export function register(app, ctx) {
-  const { db, auth } = ctx;
+  const { adapter, auth } = ctx;
 
   // Phase 6b — up to 5 daily local-notification times ("HH:MM", 24h), replacing the deleted
   // scheduled-email report (Phase 1.3 removed daily-report.js, nodemailer, and its scheduling UI).
@@ -22,20 +23,20 @@ export function register(app, ctx) {
     }
     return out.sort();
   }
-  function getNotificationTimes() {
-    const r = db.prepare("SELECT value FROM settings WHERE key = 'daily_report_times'").get();
+  async function getNotificationTimes() {
+    const r = await adapter.get("SELECT value FROM settings WHERE key = 'daily_report_times'");
     if (!r || r.value == null) return [];
     try { return normalizeNotificationTimes(JSON.parse(r.value)) || []; } catch { return []; }
   }
 
-  app.get('/api/notification-times', auth, (req, res) => {
-    res.json({ times: getNotificationTimes() });
+  app.get('/api/notification-times', auth, async (req, res) => {
+    res.json({ times: await getNotificationTimes() });
   });
 
-  app.put('/api/notification-times', auth, (req, res) => {
+  app.put('/api/notification-times', auth, async (req, res) => {
     const times = normalizeNotificationTimes(req.body.times);
     if (times === null) return res.status(400).json({ error: 'Send up to 5 unique times as "HH:MM" (24h).' });
-    db.prepare("INSERT INTO settings (key, value) VALUES ('daily_report_times', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(times));
+    await adapter.run("INSERT INTO settings (key, value) VALUES ('daily_report_times', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(times)]);
     res.json({ times });
   });
 }
