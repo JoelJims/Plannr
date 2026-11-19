@@ -1041,3 +1041,17 @@ choices made on the way are in the session report's DECISIONS list.
     read as the highest id. All 5 caught.
   - **Full suite:** all passes. `npm test` 489 tests, 0 failures, the same 3 skipped; the phone pass
     200 of 217, the same 17 known differences; 13 UI suites; `test:slow`.
+- **B16 (2026-11-19): the core gets no synchronous database handle.**
+  - After B13–B15 no file in `core/` used `ctx.db`, `.prepare(` or `rollbackQuietly`. Both backends
+    now leave `db` and `rollbackQuietly` out of `coreContext`, so a core module that reached for them
+    would fail at once.
+  - **Tests:** `test/repo-async.test.js` (+1) reads every core file (except `core/db-adapter.js`, which
+    implements the interface over an engine) and fails on `ctx.db`, a `db` destructured from `ctx`,
+    `.prepare(`, `.execSync(` or `rollbackQuietly`; it also checks that neither backend's
+    `coreContext` passes `db` or `rollbackQuietly`, and that both pass the adapter. CONTRIBUTING.md
+    states the rule.
+  - **Known positives:** a route destructuring `db` from `ctx`; `db` put back into the dev server's
+    `coreContext`; `rollbackQuietly` put back into the phone's; a route preparing a statement on the
+    adapter's transition method. All 4 caught.
+  - **Full suite:** all passes. `npm test` 490 tests, 0 failures, the same 3 skipped; the phone pass
+    201 of 218, the same 17 known differences; 13 UI suites; `test:slow`.

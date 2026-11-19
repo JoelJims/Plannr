@@ -169,8 +169,9 @@ const api = queuedRoutes(app, requestQueue);
 const startJobs = [];
 const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
 atStart(() => ledgerIndex.refresh());
+// The core reaches the database only through `adapter` and `repo` (step 1.4 B16): no synchronous handle.
 const coreContext = {
-  db, adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, parseLedgerFilters,
+  adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, istDateStamp, parseLedgerFilters,
   host,
   auth: requireApiAuth,
   logError: (...args) => { if (!IS_PROD) console.error(...args); },

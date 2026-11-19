@@ -37,6 +37,10 @@ forward. There is no server to fix it later.
   in `core/`, `server.js` or `public/local-api.js` that is not. A write of several rows goes inside
   `transaction(async (tx) => …)` from `db.js` (the core gets it as `ctx.transaction`), never its own
   `BEGIN`/`COMMIT`.
+- The shared core (`core/`) reaches the database only through `ctx.adapter` and `repo` (step 1.4
+  B13–B16), never a synchronous handle: no `ctx.db`, no `.prepare(`. That way it runs unchanged on the
+  phone's database file (stage C), which has no synchronous side. The same test checks this, and
+  that neither backend puts `db` or `rollbackQuietly` into `coreContext`.
 - Version 2 is the baseline: everything up to it is the older, hand-gated code in `legacyInit()`.
   Do not add new schema changes there. A v2 database made by an older app can still need some of its
   one-off clean-ups (gated on settings markers); `init()` takes the snapshot before those too.

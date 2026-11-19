@@ -146,8 +146,9 @@ export function installFetchShim(repo) {
     snapshot: { writeJson: (backup) => writeJsonSnapshot(backup) },
     now: () => new Date(),
   });
+  // The core reaches the database only through `adapter` and `repo` (step 1.4 B16): no synchronous handle.
   const coreContext = {
-    db, adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, rollbackQuietly, istDateStamp, storageFull, parseLedgerFilters,
+    adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, istDateStamp, storageFull, parseLedgerFilters,
     host,
     auth: requireApiAuth, // never called here: localApp runs only the last handler
     logError: (...args) => console.error(...args),

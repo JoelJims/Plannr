@@ -1,5 +1,5 @@
-// Step 1.4 B10-B12: repo.js moves to the async database interface (core/db-adapter.js), one group
-// per part, and every caller awaits it. This file checks the converted groups themselves: each call
+// Step 1.4 B10-B16: repo.js and the core move to the async database interface (core/db-adapter.js),
+// one group per part, and every caller awaits it. This file checks the converted groups themselves: each call
 // answers with a Promise, a multi-row write is still one transaction, and the in-memory ledger list
 // (core/ledger-index.js) cannot be read before its first refresh. The routes over them are covered by
 // the route tests, in both passes.
@@ -162,4 +162,32 @@ test('B12: every repo call in the core and both backends is awaited', () => {
   }
   assert.ok(seen > 100, `the check found the calls (${seen})`);
   assert.deepStrictEqual(bad, [], 'these calls are not awaited');
+});
+
+// Step 1.4 B16: the shared core reaches the database only through ctx.adapter and repo.js, so it runs
+// unchanged on an adapter with no synchronous side (the phone's database file, stage C). The adapter's
+// own file is the one place in the core that touches an engine handle.
+test('B16: the core never touches a synchronous database handle, and neither backend hands it one', () => {
+  const ROOT = path.join(__dirname, '..');
+  const files = fs.readdirSync(path.join(ROOT, 'core'), { recursive: true }).filter((f) => f.endsWith('.js'))
+    .map((f) => path.join('core', f)).filter((f) => f !== path.join('core', 'db-adapter.js'));
+  const SYNC = /\.prepare\(|\.execSync\(|\bctx\.db\b|\brollbackQuietly\b|\{[^}]*\bdb\b[^}]*\}\s*=\s*ctx\b/;
+  const bad = [];
+  for (const f of files) {
+    fs.readFileSync(path.join(ROOT, f), 'utf8').split(/\r?\n/).forEach((raw, i) => {
+      if (/^\s*(\/\/|\*)/.test(raw)) return; // a comment
+      const line = raw.replace(/\s\/\/.*$/, '');
+      if (SYNC.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.ok(files.length > 15, `the check read the core (${files.length} files)`);
+  assert.deepStrictEqual(bad, [], 'the core touches the synchronous database here');
+  for (const f of ['server.js', 'public/local-api.js']) {
+    const block = /const coreContext = \{([\s\S]*?)\n\s*\};/.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    assert.ok(block, `${f}: coreContext found`);
+    const keys = block[1].replace(/\/\/.*$/gm, '');
+    assert.ok(!/(?:^|[\s,{])db\s*[,:]/.test(keys), `${f}: coreContext passes no db`);
+    assert.ok(!/\brollbackQuietly\b/.test(keys), `${f}: coreContext passes no rollbackQuietly`);
+    assert.match(keys, /\badapter: dbAdapter\(\)/, `${f}: coreContext passes the adapter`);
+  }
 });
