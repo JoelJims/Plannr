@@ -1207,3 +1207,40 @@ choices made on the way are in the session report's DECISIONS list.
   - Debug APK: 6,012,309 bytes (+3,832 over B17c). Full suite: node 492 tests (489 pass, 3
     skipped); phone pass 203 of 220, the 17 known differences and nothing new; every UI suite and
     `test:slow` pass.
+- **C3 (2026-11-19): the phone's file adapter, `public/db-adapter-capacitor.js`, and the plugin
+  pinned.** `package.json` gets `@capacitor-community/sqlite` `8.1.1` (exact; decision D6); `npx cap
+  sync` adds it to the two generated Gradle files. It brings 17 packages of its own for its browser
+  implementation, none of which is in the APK (decision 18 of the session report). Nothing uses the
+  adapter yet (the startup wiring is C9).
+  - **`core/db-adapter.js`** gains `createAsyncEngineAdapter(platform)`, the twin of
+    `createSyncEngineAdapter` for an engine that is async underneath, with the same contract
+    (closed checks, `transaction()` with `BEGIN`/`COMMIT`/`ROLLBACK`, no nesting, no
+    `exportBytes`/`replaceWith`/`close` inside one). `exec()` splits its script with
+    `splitStatements()` (literals, quoted names, comments and a trigger's `BEGIN ... END` do not
+    split) and `returnsRows()` sends each statement to the plugin's `query()` or `run()` (C1).
+  - **The adapter:** `transaction: false` on every call; never `execute()`; `SELECT changes()` when
+    the plugin reports more than 1 (a cascade); refuses values the bridge would change (`undefined`,
+    booleans, `BigInt`, binary, objects, `NaN`); errors keep SQLite's code (`errcode`).
+    `journal_mode = DELETE` and `foreign_keys = ON` on every open. `exportBytes()` is `VACUUM INTO`
+    a cache file, read back through `PlannrStorage` and removed. `replaceWith()` writes the image
+    next to the database, opens it read-only and runs `integrity_check` and `foreign_key_check`,
+    closes the database, refuses if a `-journal` is still there, then renames it over the file and
+    reopens; a refused image leaves no file. `info()` gives the file's size (with its journal) and
+    the free space.
+  - **Found on the emulator:** a page that went away inside a transaction left the next page
+    unable to open the database ("database is locked", code 5). On Android a `BEGIN` sent through
+    the plugin becomes an EXCLUSIVE transaction, and closing the connection does not end it. Every
+    open now sends `ROLLBACK` on the connection the last page left before closing it (as SQLite
+    does after a crash). The stand-in plugins in `test/_fake-capacitor-sqlite.js` now behave the
+    same way, so the Node test fails without the fix.
+  - **Tests:** `test/db-adapter-capacitor.test.js`, 15 tests over the stand-in plugins
+    (`test/_fake-capacitor-sqlite.js`, built from the C1 measurements): the whole contract suite,
+    each work-around, a page reload mid-transaction, an image that opens but fails
+    `integrity_check`, a WAL-stamped image, the journal refusal, `splitStatements()` and
+    `returnsRows()`. **Known positives:** 10 mutations (the `changes()` fix, routing, splitting at
+    literals and inside a trigger, the reconnect, the rollback before it, the value check, the
+    journal check, the integrity check) each fail the file. On the emulator (`plannr-test`) the
+    contract suite on the real plugins and the reload check: 15 of 15.
+  - Debug APK: 15,056,197 bytes (+9.0 MB, almost all `libsqlcipher.so` for 4 ABIs, as C1 measured).
+  - Full suite: node 507 tests (504 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.
