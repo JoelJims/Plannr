@@ -124,6 +124,28 @@ test('move data back is refused when the data is over 90% of the localStorage li
   assert.strictEqual((await decide(host)).use, 'native');
 });
 
+test('without the confirmation, move data back only checks: too big and too little space come before the question (C10)', async () => {
+  const { moveBack } = await load('core/storage-move.js');
+  const { dir, host } = await moved();
+  const before = sha(path.join(dir, 'local.db'));
+  const bytes = (await host.file.exportBytes()).length;
+  const limit = host.local.limitChars;
+  host.local.limitChars = Math.floor((bytes * 2) / 0.9) - 1024; // just too small
+  const e1 = await moveBack(host).catch((e) => e);
+  assert.strictEqual(e1.step, 'size', 'too big: said instead of asking');
+  host.local.limitChars = limit;
+  host.freeBytes = async () => 1024;
+  const e2 = await moveBack(host).catch((e) => e);
+  assert.strictEqual(e2.step, 'space', 'too little space: said instead of asking');
+  host.freeBytes = async () => 8e9;
+  const e3 = await moveBack(host).catch((e) => e);
+  assert.strictEqual(e3.step, 'confirm', 'it can be done: then the question');
+  await host.file.close();
+  assert.deepStrictEqual(host.calls, []);
+  assert.strictEqual(sha(path.join(dir, 'local.db')), before);
+  assert.strictEqual(marker(host).storage, 'native-v1');
+});
+
 for (const point of ['back-size', 'back-snapshot', 'back-write', 'local-replace', 'back-check', 'back-switch', 'marker-write']) {
   test(`move data back stopped at "${point}": the app stays on the file, which is unchanged`, async () => {
     const { moveBack } = await load('core/storage-move.js');

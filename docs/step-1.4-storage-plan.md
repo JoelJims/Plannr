@@ -1370,3 +1370,36 @@ choices made on the way are in the session report's DECISIONS list.
     **Known positives:** 11 mutations, each caught. On the emulator (C9 build `5519e8e5…9217`, 15,074,622 bytes, over the C3 build with 502 cash-in rows): the app starts on localStorage with the plugins seen and makes no file; a marker `native-v1` with no file gives the recovery screen and changes nothing; with the marker removed the same 502 rows are back.
   - Full suite: node 619 tests (616 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite (with the new `test:storage-startup`) and `test:slow` pass.
+- **C10 (2026-11-19): the Data Backup page runs the move (plan §2, §2.4).** A new section, "Where
+  your data is kept" (`public/storage-move-ui.js`, started by the page with its own helpers), shown
+  only in a build with the storage plugins.
+  - **On localStorage:** "Move to the new storage", with the passphrase for the step-1 encrypted
+    backup typed twice (the page's own rule). Step 1 uses the page's `saveFile()` (the same proof the
+    file was written, the same "mark exported") and asks "Confirm you have the backup", as the Ledger
+    List import does. While the move runs an overlay lists the seven steps, marks the current one, and
+    makes everything behind it inert; leaving the page asks first. After the switch the page reloads
+    at once, so the app opens the file. After an interruption: "The move to the new storage was
+    interrupted. [Continue] [Not now]". "Continue" asks for a passphrase only if a new backup is
+    needed (the data changed since the interrupted one); "Not now" hides the prompt for this session
+    (decision 21). After a move back or an emergency switch the section says so.
+  - **On the file:** "Your data is in its own file on this phone since <date>. All <n> tables match
+    (<n> rows)." and "Old copy kept (from <date>, <n> MB)", with "Delete the old copy" (refused
+    without an encrypted backup since the move, then a confirmation) and "Move data back" (a
+    confirmation, the overlay, then a reload onto the old storage).
+  - `moveBack()` now checks the size and the free space before its confirmation (decision 22), so
+    the page calls it once unconfirmed and never asks a question it cannot carry out.
+  - **Tests:** `test-ui/storage-move-ui.js` (new, `npm run test:storage-move-ui`, 50 checks in
+    Chromium with the stand-in plugins and the real kvvfs database): no plugins (hidden); low space
+    (both numbers, before any backup, nothing changed); the passphrase rules; the step-1
+    confirmation cancelled (nothing started, the page usable); a full move with every step shown in
+    order and the page inert; the page reopened on the file with the data, the panel's texts; a save
+    going to the file and not the old copy; delete refused without a backup; move back refused for
+    space before asking, cancelled, then done (reopened on the old storage with the data entered on
+    the file); the move again over the kept file; a backup, then delete (cancelled, then done); a
+    reload in the middle of the move ("interrupted", the half-done file removed, "Not now" for the
+    session, "Continue" asking for a passphrase because the data changed); "Continue" with the data
+    unchanged skipping the backup and the snapshot. `test/storage-move-rules.test.js`: one more
+    (without the confirmation, too big and too little space come before the question).
+    **Known positives:** 11 mutations, each caught.
+  - Full suite: node 620 tests (617 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite (with the new `test:storage-move-ui`) and `test:slow` pass.

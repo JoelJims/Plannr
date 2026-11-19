@@ -284,8 +284,9 @@ async function snapshotOrStop(host, step, bytes, kind) {
 export async function moveBack(host, { confirmed = false, onStep } = {}) {
   const marker = await readMarker(host);
   if (!marker || marker.storage !== MARKER_NATIVE) throw new MoveError('state', 'Your data is not in the new storage, so there is nothing to move back.');
-  if (confirmed !== true) throw new MoveError('confirm', 'Moving your data back replaces the old copy with your current data. Confirm to go on.');
   const say = async (name) => { await point(host, `back-${name}`); if (onStep) onStep(name); };
+  // Without `confirmed` this only checks: the size and the free space are refused before the
+  // question is asked (the page asks only what can be done), and then the question itself.
 
   await say('size');
   const bytes = await host.file.exportBytes();
@@ -296,6 +297,7 @@ export async function moveBack(host, { confirmed = false, onStep } = {}) {
   const free = Number(await host.freeBytes());
   const need = requiredFreeBytes(bytes.length);
   if (!(free >= need)) throw new MoveError('space', spaceMessage(need, free), { needBytes: need, freeBytes: free });
+  if (confirmed !== true) throw new MoveError('confirm', 'Moving your data back replaces the old copy with your current data. Confirm to go on.');
 
   await say('snapshot');
   const snapshots = {};

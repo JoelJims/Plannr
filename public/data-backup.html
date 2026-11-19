@@ -92,6 +92,19 @@
     .st-fill { height: 100%; width: 0; background: var(--text-dim); transition: width .3s; }
     .st-fill.warning, .st-fill.critical { background: var(--accent); }
     .msg.st-critical { font-weight: 600; }
+    /* Step 1.4 C10: the move to the phone's own database file */
+    .mv-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 12px; }
+    .mv-overlay { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 24px 16px; background: rgba(0,0,0,0.78); }
+    .mv-overlay[hidden] { display: none; }
+    .mv-box { width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line-strong); padding: 20px; }
+    .mv-box h2 { font-family: var(--font-head); font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text); margin: 0 0 8px; }
+    .mv-box h2:focus { outline: none; }
+    .mv-box p { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 12px; }
+    .mv-steps { margin: 0 0 12px; padding-left: 22px; color: var(--text-faint); font-size: 13.5px; line-height: 1.7; }
+    .mv-steps li[data-state="done"] { color: var(--text-dim); }
+    .mv-steps li[data-state="done"]::after { content: " \2713"; color: var(--accent); }
+    .mv-steps li[data-state="now"] { color: var(--text); font-weight: 600; }
+    .mv-steps li[data-state="now"]::after { content: " \2026"; }
     .bk-note { color: var(--text-faint); font-size: 12px; line-height: 1.45; margin: 12px 0 0; }
     .bk-warn { color: #ffb020; font-size: 12.5px; line-height: 1.45; margin: 0 0 12px; } /* amber-only (was coral) */
     .ledger-csv-errors { color: #f87171; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-width: 54ch; }
@@ -205,6 +218,43 @@
         <div id="storageMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
+      <!-- Step 1.4 C10: the move to the phone's own database file (docs/step-1.4-storage-plan.md §2).
+           Shown only in a build with the storage plugins; filled in by storage-move-ui.js. -->
+      <section class="bk-section" id="moveSection" hidden>
+        <h2>Where your data is kept <span class="tag muted" id="moveTag">This phone</span></h2>
+        <div id="moveInterrupted" hidden>
+          <p class="bk-warn" role="alert">The move to the new storage was interrupted. Your data is still in the old storage, and nothing was lost.</p>
+          <div class="mv-actions">
+            <button type="button" id="moveContinueBtn" class="btn primary">Continue</button>
+            <button type="button" id="moveNotNowBtn" class="btn ghost">Not now</button>
+          </div>
+        </div>
+        <div id="moveStart" hidden>
+          <p id="moveStateText">Plannr keeps your data inside the app's web storage, which is full at about 2.8 MB. The new storage is a database file of its own on this phone, with room for years of entries.</p>
+          <details class="wt">
+            <summary>What happens</summary>
+            <div class="wt-body">
+              <p>First an encrypted backup of everything is saved where you choose, then a safety copy on the phone. The data is then copied into the new file and every table is checked against the original. Only if all of it matches does Plannr switch.</p>
+              <p>The old copy is kept, unchanged, until you delete it here. You can also move your data back.</p>
+            </div>
+          </details>
+          <label for="movePass">Passphrase for the encrypted backup</label>
+          <input type="password" id="movePass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
+          <label for="movePass2">Type the passphrase again</label>
+          <input type="password" id="movePass2" autocomplete="new-password" placeholder="The same passphrase">
+          <button type="button" id="moveBtn" class="btn primary">Move to the new storage</button>
+        </div>
+        <div id="oldCopyPanel" hidden>
+          <p id="moveDoneText"></p>
+          <p id="oldCopyText"></p>
+          <div class="mv-actions">
+            <button type="button" id="deleteOldCopyBtn" class="btn ghost">Delete the old copy</button>
+            <button type="button" id="moveBackBtn" class="btn ghost">Move data back</button>
+          </div>
+        </div>
+        <div id="moveMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
       <!-- 1. JSON backup (restorable) -->
       <section class="bk-section">
         <h2>JSON backup <span class="tag">Restorable</span></h2>
@@ -313,6 +363,16 @@
       </section>
 
     </main>
+  </div>
+
+  <!-- Step 1.4 C10: shown while a move runs; the rest of the page is inert (storage-move-ui.js). -->
+  <div id="moveOverlay" class="mv-overlay" role="dialog" aria-modal="true" aria-labelledby="moveOverlayTitle" hidden>
+    <div class="mv-box">
+      <h2 id="moveOverlayTitle" tabindex="-1">Moving your data…</h2>
+      <p>Keep Plannr open. Nothing can be changed until this finishes.</p>
+      <ol id="moveSteps" class="mv-steps" aria-live="polite"></ol>
+      <div id="moveOverlayMsg" class="msg" role="status" aria-live="polite"></div>
+    </div>
   </div>
 
   <script src="/plannr-ui.js"></script>
@@ -525,6 +585,13 @@
         const d = new Date();
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
       };
+
+      // Step 1.4 C10: the move to the new storage (storage-move-ui.js). Its step-1 backup is saved by
+      // this page's own saveFile(), the same as "Download encrypted backup". Only in a build with the
+      // storage plugins; anywhere else the section stays hidden.
+      import('/storage-move-ui.js')
+        .then((m) => m.initMovePanel({ makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText }))
+        .catch((err) => console.error('[data-backup] the storage move panel could not start:', err));
 
       // ---- 1. Download JSON backup ------------------------------------------
       const downloadJsonBtn = document.getElementById('downloadJsonBtn');
