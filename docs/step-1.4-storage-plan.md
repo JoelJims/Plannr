@@ -1189,3 +1189,21 @@ choices made on the way are in the session report's DECISIONS list.
     than their size (measured again on the Overview in C3/C13).
   - The plugin brings one package of its own, `jeep-sqlite` (its browser implementation, unused on
     Android); it is locked by `package-lock.json` at C3 like every other package.
+- **C2 (2026-11-19): Plannr's own storage helper for the phone (`PlannrStorage`).** A small
+  Capacitor plugin inside the app, `android/app/src/main/java/com/plannr/app/PlannrStoragePlugin.java`
+  (no new dependency, decision D4), registered in `MainActivity` before the bridge starts. It does
+  what the SQLite and Filesystem plugins cannot: `info()` (free and total bytes from `StatFs`, and
+  the app's own folders), `sizes({paths})` (-1 for a missing file), `readFile({path})` (base64,
+  at most 64 MiB), `writeFile({path, data})` (written, `fsync`ed, then the folder synced before it
+  answers; a failed write removes its partial file), `rename({from, to})` (one atomic step, the
+  same folder only) and `remove({path})` (files only). Every path must be absolute and inside the
+  app's data folder after `..` and links are resolved; anything else is refused. Nothing calls it
+  yet (the adapter is C3).
+  - **Checked on the emulator** (`plannr-test`, a scratch script driving the app's WebView): 24 of
+    24 checks pass: every method, the refusals (`/sdcard`, another app's folder, `..`, a relative
+    path, a folder, bad base64, a rename across folders, a missing source) and a 4 MB file written
+    and read back byte for byte (write 435 ms, read 564 ms). Free space reported: 4.6 GB.
+  - **Known positive:** a build with the outside-the-app check removed fails 4 checks.
+  - Debug APK: 6,012,309 bytes (+3,832 over B17c). Full suite: node 492 tests (489 pass, 3
+    skipped); phone pass 203 of 220, the 17 known differences and nothing new; every UI suite and
+    `test:slow` pass.
