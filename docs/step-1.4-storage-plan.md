@@ -1303,3 +1303,19 @@ choices made on the way are in the session report's DECISIONS list.
     switched move undone, the check ignored, no marker) each fail a file.
   - Full suite: node 584 tests (581 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C7 (2026-11-19): low space and the move (plan §2.5).** The check before the move refuses with
+  both numbers ("Plannr needs about <n> MB free to move your data. Your phone has <n> MB free.");
+  the space needed is rounded up and the space free rounded down, so the message never understates
+  the gap. A disk that fills during the snapshot or the file write now gives that same message (with
+  the space free at that moment) instead of a raw error: `isDiskFull()` knows Node's `ENOSPC`,
+  SQLite's `SQLITE_FULL` with or without its extended code, and the Android message. The partial
+  file goes (C6), localStorage is untouched, and "Continue" works once space is freed.
+  - **Tests:** `test/storage-move-space.test.js` (6): the formula and message; not enough space
+    (nothing starts, nothing written); the file write full half-way, then "Continue"; SQLite itself
+    full midway (`max_page_count`); the snapshot full (stopped at step 2); `isDiskFull` on every
+    platform's error and on unrelated errors. The C6 half-way test now checks the space message,
+    with `ENOSPC` kept as the cause. **Known positives:** 5 mutations (extended codes not recognised,
+    a raw error from the snapshot, a raw error from the write, the need rounded down, one byte short
+    accepted) each fail the file.
+  - Full suite: node 590 tests (587 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.

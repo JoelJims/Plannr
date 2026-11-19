@@ -34,7 +34,9 @@ export const STEPS = ['space', 'backup', 'snapshot', 'write', 'check', 'place', 
  *  the snapshot and the temporary backup file, plus a margin (plan §2.5). */
 export const requiredFreeBytes = (bytes) => 3 * Math.max(0, Number(bytes) || 0) + MARGIN_BYTES;
 
-const mbText = (bytes) => `${Math.max(1, Math.ceil(bytes / MB))} MB`;
+// Never understate what is needed, never overstate what is free.
+const needText = (bytes) => `${Math.max(1, Math.ceil(bytes / MB))} MB`;
+const freeText = (bytes) => `${Math.max(0, Math.floor(bytes / MB))} MB`;
 
 export class MoveError extends Error {
   constructor(step, message, details) {
@@ -46,7 +48,22 @@ export class MoveError extends Error {
 
 /** The message when there is not enough space (plan §2.5). */
 export function spaceMessage(needBytes, freeBytes) {
-  return `Plannr needs about ${mbText(needBytes)} free to move your data. Your phone has ${mbText(freeBytes)} free. Free some space, then try again.`;
+  return `Plannr needs about ${needText(needBytes)} free to move your data. Your phone has ${freeText(freeBytes)} free. Free some space, then try again.`;
+}
+
+/** A write that failed because the disk is full (Node's ENOSPC, SQLite's SQLITE_FULL, Android's message). */
+export function isDiskFull(err) {
+  if (!err) return false;
+  const code = err.errcode ?? err.resultCode;
+  if (err.code === 'ENOSPC' || (typeof code === 'number' && (code & 0xff) === 13)) return true;
+  return /ENOSPC|no space left on device|database or disk is full|SQLITE_FULL/i.test(String(err.message || err));
+}
+
+// A full disk during a step: the same message as the check before the move, with the space free now.
+async function spaceError(host, step, need, err) {
+  let free = NaN;
+  try { free = Number(await host.freeBytes()); } catch { /* unknown */ }
+  return new MoveError(step, spaceMessage(need, Number.isFinite(free) ? free : 0), { needBytes: need, freeBytes: free, cause: err });
 }
 
 export async function sha256Hex(bytes) {
@@ -112,7 +129,12 @@ export async function moveToFile(host, { onStep } = {}) {
     await writeProgress(host, progress);
 
     await step(2);
-    progress.snapshot = await host.snapshot(bytes);
+    try {
+      progress.snapshot = await host.snapshot(bytes);
+    } catch (e) {
+      if (isDiskFull(e)) throw await spaceError(host, 'snapshot', need, e);
+      throw e;
+    }
     progress.done.push('snapshot');
     await writeProgress(host, progress);
   }
@@ -126,6 +148,7 @@ export async function moveToFile(host, { onStep } = {}) {
     try {
       await host.candidate.write(bytes);
     } catch (e) {
+      if (isDiskFull(e)) throw await spaceError(host, 'write', need, e);
       throw new MoveError('write', `The new file could not be written: ${e && e.message ? e.message : e}`, { cause: e });
     }
     await point(host, 'after-write');

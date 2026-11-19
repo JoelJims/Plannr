@@ -110,7 +110,8 @@ test('the candidate write runs out of space half-way: the partial file is remove
   const err = await moveToFile(host).catch((e) => e);
   await host.source.close();
   assert.strictEqual(err.step, 'write');
-  assert.match(err.message, /ENOSPC/);
+  assert.match(err.message, /Plannr needs about .* free to move your data/, 'C7: a full disk gives the space message');
+  assert.match(err.details.cause.message, /ENOSPC/);
   assert.ok(!fs.existsSync(host.files.candidate));
 });
 
