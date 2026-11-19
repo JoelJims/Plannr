@@ -1286,3 +1286,20 @@ choices made on the way are in the session report's DECISIONS list.
     backup) each fail the file.
   - Full suite: node 545 tests (542 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C6 (2026-11-19): the move stopped at every step (plan §2.2, §5.1).** `moveToFile` now undoes
+  what its own run made when anything fails before the marker file says `native-v1`: the candidate,
+  and the database file if step 5 had already renamed it into place. A failure after the marker is
+  written is not a failure (the move has switched), so nothing is undone then; the marker file is
+  read back to tell the two apart.
+  - **Tests:** `test/storage-move-kill.test.js` (39). A thrown error at each of 16 checkpoints from
+    the space check to the marker write: the localStorage copy is byte-for-byte unchanged, no
+    candidate or database file is left, and the startup table still picks localStorage. A failure
+    just after the marker: the app uses the file. The candidate write running out of space half-way:
+    the partial file is removed. A **real process kill** (`test/_storage-move-child.js`, refuses any
+    folder outside the OS temp folder) at 20 points over steps 2-6, including inside the snapshot and
+    between the write's chunks: a fresh process reads the facts, the startup table decides, "Continue"
+    finishes, the fingerprints match, and no run ends with both copies unusable or both in use.
+    **Known positives:** 5 mutations (the placed file not removed, the candidate not removed, a
+    switched move undone, the check ignored, no marker) each fail a file.
+  - Full suite: node 584 tests (581 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.

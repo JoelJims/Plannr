@@ -76,6 +76,8 @@ const point = (host, name) => (host.checkpoint ? host.checkpoint(name) : undefin
  *   candidate.open()        an adapter on the candidate
  *   candidate.remove()      delete the candidate (and its journal); fine if there is none
  *   candidate.place()       step 5: rename the candidate to the database file (atomic)
+ *   main.remove()           undo step 5 when a later step fails before the switch
+ *   marker.read()           (to tell, after a failure, whether the switch happened)
  *   marker.write(obj)       step 6: the marker file, forced to disk
  *   markerKey.write(obj)    step 6: the localStorage key that repeats it
  *   progress.read/write/clear()   the progress record (localStorage)
@@ -115,54 +117,65 @@ export async function moveToFile(host, { onStep } = {}) {
     await writeProgress(host, progress);
   }
 
-  await step(3);
-  await host.candidate.remove();
+  // Steps 3-6. If anything fails before the marker says native-v1, undo what this run made: the
+  // candidate, and the database file if it was already renamed into place (plan §5.1, C6).
+  let placed = false;
   try {
-    await host.candidate.write(bytes);
-  } catch (e) {
-    await host.candidate.remove().catch(() => {});
-    throw new MoveError('write', `The new file could not be written: ${e && e.message ? e.message : e}`, { cause: e });
-  }
-  await point(host, 'after-write');
-
-  await step(4);
-  let fpNew;
-  let candidate = null;
-  try {
-    candidate = await host.candidate.open();
-    fpNew = await fingerprint(candidate);
-  } catch (e) {
-    if (candidate) await candidate.close().catch(() => {});
-    await host.candidate.remove().catch(() => {});
-    throw new MoveError('check', `The new file could not be checked: ${e && e.message ? e.message : e}`, { cause: e });
-  }
-  await candidate.close();
-  const fpOld = await fingerprint(host.source);
-  const diffs = compareFingerprints(fpOld, fpNew);
-  if (diffs.length) {
+    await step(3);
     await host.candidate.remove();
-    throw new MoveError('check', `The new file does not match your data, so nothing was switched: ${diffs[0]}`, { diffs });
+    try {
+      await host.candidate.write(bytes);
+    } catch (e) {
+      throw new MoveError('write', `The new file could not be written: ${e && e.message ? e.message : e}`, { cause: e });
+    }
+    await point(host, 'after-write');
+
+    await step(4);
+    let fpNew;
+    let candidate = null;
+    try {
+      candidate = await host.candidate.open();
+      fpNew = await fingerprint(candidate);
+    } catch (e) {
+      throw new MoveError('check', `The new file could not be checked: ${e && e.message ? e.message : e}`, { cause: e });
+    } finally {
+      if (candidate) await candidate.close().catch(() => {});
+    }
+    const fpOld = await fingerprint(host.source);
+    const diffs = compareFingerprints(fpOld, fpNew);
+    if (diffs.length) throw new MoveError('check', `The new file does not match your data, so nothing was switched: ${diffs[0]}`, { diffs });
+    await point(host, 'after-check');
+
+    await step(5);
+    await host.candidate.place();
+    placed = true;
+    await point(host, 'after-place');
+
+    await step(6);
+    const summary = summarize(fpOld);
+    const at = host.now().toISOString();
+    const marker = {
+      storage: MARKER_NATIVE,
+      movedAt: at,
+      check: { tables: summary.tables, rows: summary.rows, perTable: summary.perTable },
+      oldCopy: { kept: true, since: at, bytes: bytes.length, checksum },
+    };
+    await host.marker.write(marker);
+    await point(host, 'after-marker');
+    try { await host.markerKey.write({ storage: MARKER_NATIVE, movedAt: at }); } catch { /* the file is what counts */ }
+    try { await host.progress.clear(); } catch { /* a stale hint is harmless once the marker says native-v1 */ }
+    return { summary, marker };
+  } catch (err) {
+    let switched = false;
+    if (placed) {
+      try { const m = await host.marker.read(); switched = !!(m && m.storage === MARKER_NATIVE); } catch { /* unreadable: not switched */ }
+    }
+    if (!switched) {
+      await host.candidate.remove().catch(() => {});
+      if (placed) await host.main.remove().catch(() => {});
+    }
+    throw err;
   }
-  await point(host, 'after-check');
-
-  await step(5);
-  await host.candidate.place();
-  await point(host, 'after-place');
-
-  await step(6);
-  const summary = summarize(fpOld);
-  const at = host.now().toISOString();
-  const marker = {
-    storage: MARKER_NATIVE,
-    movedAt: at,
-    check: { tables: summary.tables, rows: summary.rows, perTable: summary.perTable },
-    oldCopy: { kept: true, since: at, bytes: bytes.length, checksum },
-  };
-  await host.marker.write(marker);
-  await point(host, 'after-marker');
-  try { await host.markerKey.write({ storage: MARKER_NATIVE, movedAt: at }); } catch { /* the file is what counts */ }
-  try { await host.progress.clear(); } catch { /* a stale hint is harmless once the marker says native-v1 */ }
-  return { summary, marker };
 }
 
 /**
