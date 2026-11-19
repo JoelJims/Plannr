@@ -1140,3 +1140,52 @@ choices made on the way are in the session report's DECISIONS list.
     `init()` 133/143 ms before (28f4927) and 181/183 ms after (+45 ms: every call is now awaited);
     400 saves 5,756/5,731 → 5,793/5,687 ms; 400 Overviews 5,391/5,570 → 5,425/5,498 ms; 4 × 100
     requests at once 1,439/1,602 → 1,259/1,437 ms. `npm test` 107 s (456 tests) → 121 s (492 tests).
+- **C1 (2026-11-19): the spike — `@capacitor-community/sqlite` 8.1.1 checked on the emulator, in a
+  test build that is not committed.** The plugin went into a scratch worktree only (its
+  `package.json`); the app's `package.json` gets it at C3. Emulator `plannr-test`: Android 16
+  (API 36), x86_64. 60 checks, run in the app's WebView through Playwright. Engine: SQLite 3.53.3
+  (SQLCipher 4.17.0); the database is not encrypted (`mode: 'no-encryption'`).
+  - **The file:** `/data/user/0/com.plannr.app/databases/<name>SQLite.db` (the same folder as
+    `/data/data/...`), as planned. The plugin starts with `journal_mode` `delete` and
+    `foreign_keys` on.
+  - **`execute()` must not be used.** It rewrites the SQL before running it: it removes `--` and
+    the rest of the line even inside a string literal (a `DEFAULT 'a -- b; c'` broke the
+    `CREATE TABLE`), and it upper-cases `end;` inside literals (`'the end; really'` was stored as
+    `'the END; really'`). So the adapter splits a multi-statement `exec()` itself, respecting
+    literals and comments, and runs each statement with `run()`.
+  - **`run()`** handles `CREATE`, `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `BEGIN`, `COMMIT`,
+    `ROLLBACK` and `PRAGMA user_version = n`. A statement that answers with a row
+    (`PRAGMA journal_mode = DELETE`) fails there ("Queries can be performed using SQLiteDatabase
+    query or rawQuery methods only") and works through `query()`.
+  - **`changes` differs from `node:sqlite` on a cascade.** The plugin reports the change in
+    `total_changes()`, so a `DELETE` whose `ON DELETE CASCADE` removes 3 children reports 4;
+    `node:sqlite` reports 1. `SELECT changes()` right after gives 1. The adapter asks for it
+    whenever the plugin reports more than 1 (one extra call, only then). `lastId` is
+    `last_insert_rowid()`, the same as `node:sqlite`'s `lastInsertRowid`.
+  - **The upserts:** all 12 `ON CONFLICT` / `OR IGNORE` / `OR REPLACE` / `REPLACE` forms Plannr
+    uses give the same rows and changes as `node:sqlite` (0 for an ignored insert).
+  - **Values:** `REAL 2.0` stays `real`; integers to 9×10^14, negatives, `NULL`, `''` and
+    `'₹ 1,00,000 — “quotes” ✓ 🙂'` come back unchanged with the right `typeof()`.
+  - **Our own transactions work** with `transaction: false` on every call: `BEGIN`/`COMMIT` and
+    `ROLLBACK` through `run()`. After a `FOREIGN KEY constraint failed` inside one, the transaction
+    is still open, and `ROLLBACK` undoes the earlier insert. `PRAGMA foreign_keys` inside a
+    transaction is a no-op, as in SQLite.
+  - **`VACUUM INTO`** a file in the app's cache folder works, and `Filesystem.readFile` reads it
+    back. **Placing a file works:** `Filesystem.writeFile` with an absolute `file://` path in
+    `databases/`, opening it as a second database (integrity `ok`), then closing the database,
+    `Filesystem.rename` over it and reopening (data, integrity and foreign keys as before).
+    `Filesystem.stat` gives real file sizes. Free space and fsync are not available from the
+    plugins, so Plannr's own Java helper (C2, decision D4) is still needed for those two and for
+    the forced-to-disk write.
+  - **During an open write transaction** a `-journal` file sits next to the database (4,616 bytes),
+    so a kill mid-write is repaired when the file is next opened.
+  - **APK size:** 6,019,041 → 15,619,584 bytes (+9.6 MB). Almost all of it is `libsqlcipher.so`
+    for 4 ABIs (7.6 MB, of which 4.5 MB is x86/x86_64, used only by emulators).
+  - **Speed** (emulator, the PC busy with a test run): one call across the bridge takes about
+    5.5–12 ms. 12,000 single-row inserts in one transaction: 66 s. 400 single saves: 5.0–5.4 s;
+    400 saves as `BEGIN`/`INSERT`/`COMMIT`: 9.7–10.4 s. A `GROUP BY` over 12,800 rows: 16 ms;
+    reading all 12,800 rows: 1.3 s; 100 tiny queries: 0.7–0.8 s. So the move copies the file byte
+    for byte (never row by row), as planned, and the number of queries per screen matters more
+    than their size (measured again on the Overview in C3/C13).
+  - The plugin brings one package of its own, `jeep-sqlite` (its browser implementation, unused on
+    Android); it is locked by `package-lock.json` at C3 like every other package.
