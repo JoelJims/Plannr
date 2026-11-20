@@ -1516,3 +1516,15 @@ choices made on the way are in the session report's DECISIONS list.
     storage-move-ui ("the prompt is back in a new session") failed once and passed 3 times out of 3
     when run again. This part changes no code those suites run; the check reads the page before the
     move panel has finished, and the next part fixes that wait.
+- **Test fix (2026-11-20): storage-move-ui waits for the move panel before reading it.**
+  - `open()` in `test-ui/storage-move-ui.js` waited for the storage choice
+    (`window.__plannrStorage`) but not for the Data Backup page's move panel, which is set up just
+    after it. A check of the "interrupted" prompt could read the page too early: "the prompt is back
+    in a new session" failed once in the C13 run, and a check that the prompt stays hidden could
+    pass for the same reason. `open()` and `settle()` (after each reload) now also wait until the
+    panel has shown its section; the prompt and its buttons are set in that same task (decision 31).
+  - **Proofs:** "Not now" not kept for the session, and a prompt that no longer comes back from the
+    progress record, are each caught. With the panel set up 1.5 s late, the suite still passes; the
+    previous waits fail 5 checks in the same run.
+  - Full suite: node 645 tests (642 pass, 3 skipped); phone pass 204 of 221, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.

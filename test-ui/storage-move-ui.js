@@ -63,9 +63,12 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   const open = async (page) => {
     await page.goto(`${BASE}/data-backup.html`, { waitUntil: 'load' });
     await page.evaluate(() => import('/local-bootstrap.js'));
-    await page.waitForFunction(() => window.__plannrStorage !== undefined);
+    await panelReady(page);
   };
-  const settle = (page) => page.waitForLoadState('load').then(() => page.evaluate(() => import('/local-bootstrap.js'))).then(() => page.waitForTimeout(300));
+  // The move panel is set up after the storage is chosen: it shows its section, then (in the same
+  // task) the prompt and the buttons. Read nothing before that, or a check races it.
+  const panelReady = (page) => page.waitForFunction(() => window.__plannrStorage !== undefined && (!window.__plannrStorage.native || !document.getElementById('moveSection').hidden));
+  const settle = (page) => page.waitForLoadState('load').then(() => page.evaluate(() => import('/local-bootstrap.js'))).then(() => panelReady(page)).then(() => page.waitForTimeout(300));
   const storageOf = (page) => page.evaluate(() => window.__plannrStorage && { use: window.__plannrStorage.use, prompt: window.__plannrStorage.prompt });
   const api = (page, method, url, body) => page.evaluate(async ([m, u, b]) => {
     const r = await fetch(u, { method: m, headers: { 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) });
