@@ -1545,3 +1545,41 @@ choices made on the way are in the session report's DECISIONS list.
     than before. The data is the same (every table checked).
   - Documents only: the code is that of the previous commit (0539d5e), whose full suite passed
     (decision 32).
+- **C15, part 1 (2026-11-20): emulator E3 (kills) and E4 (low space) (plan §5.3).**
+  - **On the `plannr-test` emulator only, with test data only.** Each run starts clean: the 9d7fd97
+    build with the full fixture and 200 entries, then the new build over it with `adb install -r`.
+  - **E3, kills (96 checks, all pass).** The move was started from the Data Backup page with a
+    test-only pause at each of its 11 checkpoints (`TEST_DELAY_KEY`); the page counted the pauses and
+    the app was force-stopped inside the chosen one, then reopened:
+    - killed before the switch (points 1-10: before the space check, before the backup, before the
+      snapshot, before and after writing the file, before and after its check, before and after
+      placing it, before the marker): the app reopened on `localStorage` with every row as it was,
+      and no move file left behind (a candidate, or a placed file with no marker, is removed at
+      startup);
+    - "Continue" (odd points) finished the move in 2.8-5.4 s, on the file, every row there; "Not
+      now" (even points) kept the app working on `localStorage` (a save went through);
+    - killed after the marker (point 11): the app reopened on the file with every row.
+  - **Found by E3: Android's WebView writes `localStorage` to disk a few seconds late.** A
+    force-stop loses the last seconds of writes. Killed 8.6 s in, just after the backup, the progress
+    record was lost and no move file existed yet, so the app reopened with no "interrupted" prompt:
+    correct (nothing to continue, every row there, "Move" works). Killed 11.7 s in, the record was
+    there but its "snapshot done" update was not, so "Continue" makes the snapshot again (harmless).
+    The script now expects the prompt exactly when a progress record or a move file survived
+    (decision 33). **The same delay applies to every save on `localStorage` today:** a save made in
+    the last few seconds before Android kills the app can be lost. On the database file a saved
+    entry is already in the file when the save answers, so killing the app cannot lose it; one more
+    reason for the move.
+  - **E4, low space (15 checks, all pass).** The emulator's storage was filled with one file of
+    our own (`/data/local/tmp/plannr-e4-fill.bin`, removed at the end):
+    - with 12 MB free, the move refused before the backup: "Plannr needs about 21 MB free to move
+      your data. Your phone has 7 MB free. Free some space, then try again." No file, marker,
+      snapshot or progress record was left, and every row was as it was;
+    - with the space freed, the move ran;
+    - on the file with 60 MB free, the meter said "This phone has only 60 MB free. New entries
+      cannot be saved once the phone is full: free up space on the phone.";
+    - with the phone full (0 bytes free), a save answered "Storage is full — this change was not
+      saved. Your saved data is safe. This phone is out of space: free up space on the phone
+      (photos, videos, apps you no longer use), then try again." Nothing was saved; once space was
+      freed, saving worked again, and after a restart `PRAGMA integrity_check` said `ok`. This is
+      the real disk-full error on a real file, the one decision 24 relies on.
+  - Documents only: the code is that of 0539d5e, whose full suite passed (decision 32).
