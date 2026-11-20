@@ -1403,3 +1403,23 @@ choices made on the way are in the session report's DECISIONS list.
     **Known positives:** 11 mutations, each caught.
   - Full suite: node 620 tests (617 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite (with the new `test:storage-move-ui`) and `test:slow` pass.
+- **Incident 2 (2026-11-19/20): a test opened `data/plannr.db`; fixed so no test can.**
+  - **What happened:** `test/seed-demo.test.js` (B17a, 5f80e46, 2026-11-19 19:41) read
+    `SCHEMA_VERSION` with `require('../db')` in the test process, where `PLANNR_DB` was not set, so
+    each `npm test` since then opened the live `data/plannr.db` (a read-write handle, then
+    `PRAGMA journal_mode = DELETE` and `PRAGMA foreign_keys = ON`, then closed at exit).
+  - **No change to the data:** the file's modification time is still 2026-09-04 07:43:12, and the
+    `data/` folder's is still 2026-09-12 11:13:47, so no rollback journal was ever created there
+    (SQLite creates one before any write). Neither PRAGMA writes to a file already in DELETE mode.
+  - **Why the guard missed it:** `run-tests.js` compares the file's modification time, which an open
+    that writes nothing does not change. Found because a full run in a scratch worktree (no real
+    database) left an empty `data/plannr.db` behind; a scan of every test file named the one.
+  - **The fix:** `db.js` refuses to open the live path under Node's test runner
+    (`NODE_TEST_CONTEXT`, set for every test file and inherited by what it spawns), whether
+    `PLANNR_DB` is unset or names that file. Outside the test runner (the dev server, the scripts)
+    nothing changes. The seed-demo test points `PLANNR_DB` at a file of its own.
+  - **Tests:** `test/live-db-guard.test.js` (new, 4), on a copy of `db.js` in a temp folder, so a
+    broken guard could only ever open that copy's file. **Known positives:** 3 mutations (no guard;
+    seed-demo without its own file; a case-sensitive path check), each caught.
+  - Full suite: node 624 tests (621 pass, 3 skipped); phone pass 203 of 220, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.

@@ -47,6 +47,16 @@ let readyPromise = null;
 // the adapter on that file (useAdapter) before ready(), and kvvfs is not opened as the database.
 let externalAdapter = null;
 
+// No test ever opens the live database (step 1.4, incident 2). Under Node's test runner
+// (NODE_TEST_CONTEXT is set for every test file and inherited by what it spawns), PLANNR_DB must
+// name the test's own file first, as test/helpers.js does. run-tests.js's mtime check cannot see an
+// open that writes nothing, which is how test/seed-demo.test.js opened data/plannr.db unnoticed.
+const LIVE_DB = isNode ? join(DATA_DIR, 'plannr.db') : '';
+const samePath = (a, b) => String(a).replace(/\\/g, '/').toLowerCase() === String(b).replace(/\\/g, '/').toLowerCase();
+if (isNode && process.env.NODE_TEST_CONTEXT && samePath(DB_PATH, LIVE_DB)) {
+  throw new Error('db.js: a test was about to open the live database (data/plannr.db). Set PLANNR_DB to a file of its own first (test/helpers.js does).');
+}
+
 if (isNode) {
   mkdirSync(DATA_DIR, { recursive: true }); // make sure the folder for the database file exists
   db = openDb(NodeDatabaseSync);

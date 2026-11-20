@@ -12,7 +12,13 @@ const { DatabaseSync } = require('node:sqlite');
 
 const ROOT = path.resolve(__dirname, '..');
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-seed-demo-'));
-after(() => { fs.rmSync(DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+// db.js opens PLANNR_DB as soon as it loads, and this file reads SCHEMA_VERSION from it: point it at
+// a file of this test's own first, never the live data/plannr.db (incident 2; db.js now refuses).
+process.env.PLANNR_DB = path.join(DIR, 'this-process.db');
+after(() => {
+  try { require('../db').db.close(); } catch { /* never loaded */ } // this process's own file, so the folder can go
+  fs.rmSync(DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
 
 test('seed-demo on a new database: the schema is made first, then the demo data is seeded', () => {
   const file = path.join(DIR, 'demo.db');
