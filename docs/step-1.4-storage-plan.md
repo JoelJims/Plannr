@@ -1,6 +1,6 @@
 # Step 1.4: storage plan
 
-Status: **stages A–C built and checked on the `plannr-test` emulator (2026-11-20); stage D next.**
+Status: **stages A–D built (2026-11-21); the phone parts checked on the `plannr-test` emulator.**
 Written 2026-11-16; the owner said OK to build it. The work log is §8. Nothing in this plan moves
 the owner's real data. That needs a separate OK, after the real-phone check in §5.4 passes
 (`docs/PHONE-TEST-CHECKLIST.md`, check 9).
@@ -1672,3 +1672,24 @@ choices made on the way are in the session report's DECISIONS list.
     differences and nothing new; every UI suite and `test:slow` pass. The UI suites ran on the installed
     Chromium 151 through a scratch folder, because the pinned Chromium (149, revision 1228) was removed
     from the shared Playwright folder by another project's install (decision 37).
+- **D2 (2026-11-21): the desktop app's data folder on Windows, macOS and Linux (`desktop-paths.js`).**
+  - `userDataDir()` gives the folder Electron's `app.getPath('userData')` gives: Windows
+    `%APPDATA%\Plannr` (the home folder's `AppData\Roaming` when `APPDATA` is missing or not an
+    absolute path); macOS `~/Library/Application Support/Plannr`; Linux `$XDG_CONFIG_HOME/Plannr`, or
+    `~/.config/Plannr` when it is unset or not absolute (the XDG rule). `desktopDbPath()` is
+    `plannr.db` in it. Each takes the system, the environment and the home folder as options (default:
+    this machine's), with that system's separators, so all three are checked on any machine. Another
+    system, a missing home folder or an app name with a path in it is refused.
+  - A plain function, Node only (not copied to `public/`). Nothing calls it yet: Electron (Phase 4)
+    passes the path to the node-sqlite adapter. It never names the dev server's `data/plannr.db`: the
+    desktop app starts empty and is filled from a backup file.
+  - **Tests:** `test/desktop-paths.test.js` (6): each system with and without its variable, the
+    refusals, and on this machine an absolute path in a `Plannr` folder of its own, outside the project.
+    Nothing opens a database.
+  - **Known positives (6, all caught):** the macOS folder wrong; `XDG_CONFIG_HOME` ignored; a relative
+    `APPDATA` accepted; an app name with a path in it accepted; the Windows file joined with `/`; an
+    unknown system treated as Linux.
+  - Full suite: node 660 tests (657 pass, 3 skipped); phone pass 213 of 230, the 17 known
+    differences and nothing new; every UI suite (on the stand-in Chromium, decision 37) and `test:slow`
+    pass.
+  - This plan's status line: stages A–D built.
