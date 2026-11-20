@@ -253,7 +253,7 @@ script read the Data Backup page 2.5 s after a reload while the slow emulator to
     Chromium through a scratch folder until you restore the exact one.** Playwright 1.61.1 needs
     Chromium revision 1228. At 2026-11-20 21:45 another project's Playwright install cleaned the
     shared folder D:\dev\ms-playwright and left only revision 1234 (Plannr at D:\Projects\Plannr is
-    not registered in its .links, only an old C:\Users\joeli\Documents\Plannr path is). Downloading
+    not registered in its .links, only an older copy of the project in another folder is). Downloading
     the browser again is a download from the internet, which needs your OK, so it was not done. The
     UI suites now run with PLAYWRIGHT_BROWSERS_PATH set to scratchpad\pw-browsers, where the -1228
     names are junctions to the installed -1234 browsers (nothing in D:\dev\ms-playwright changed).
