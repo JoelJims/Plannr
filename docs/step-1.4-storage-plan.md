@@ -1464,3 +1464,24 @@ choices made on the way are in the session report's DECISIONS list.
     differences and nothing new; every UI suite and `test:slow` pass. One static-hosting check
     failed once (the browser's "wasm streaming compile failed: Failed to fetch" on one page, then
     its own fallback); the suite passed 3 times out of 3 when run again (noted for the review).
+- **C12 (2026-11-20): Android Auto Backup rules for the database file (plan §3.4).**
+  - **`backup_rules.xml` and `data_extraction_rules.xml`** (cloud backup and device transfer, the
+    same lists in both) now include the database file `plannrSQLite.db`, its `-journal` and the
+    marker `plannr-storage.json`, and keep the two localStorage folders (the database before the
+    move; the old copy after it, while it is kept). Nothing else in `databases/` is included, so the
+    move's candidate file and anything set aside with it never reach a backup.
+  - **Safety snapshots are no longer backed up** (decision D2): they stay on the phone, where the
+    restore that needs them runs. This also keeps the backup well inside Android's 25 MB.
+  - **The size check** (`test-ui/storage-limit.js`, section 5): the worst case is now right after a
+    move, with the old copy kept beside a file as big as the database that filled localStorage, plus
+    the marker. It must stay at or under 15 MB (25 MB is Android's limit).
+  - **Tests:** `test/auto-backup.test.js` (rewritten, 7: the manifest points at both files; the
+    exact list for Android 6-11; the same list for cloud backup and device transfer on Android 12+;
+    no cache folders; no snapshots, no move candidate, no whole folders; the names matching
+    `MAIN_NAME` and `MARKER_FILE` in `public/storage-native.js`; the README's privacy wording);
+    `test-ui/storage-limit.js` (the new budget).
+    **Known positives:** 4 mutations, each caught.
+  - Measured with localStorage full: the database is 2.76 MB, so right after a move the backup is at
+    most 12.76 MB (10 MB for the old copy, an upper bound, plus the file and the marker).
+  - Full suite: node 645 tests (642 pass, 3 skipped); phone pass 204 of 221, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass.

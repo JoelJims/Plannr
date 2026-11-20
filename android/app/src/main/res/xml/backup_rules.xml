@@ -3,18 +3,23 @@
      Android 12 and later read data_extraction_rules.xml instead; keep the two lists identical.
 
      With <include> rules, ONLY what is listed is backed up. Android never backs up the app's cache
-     folders (cache/, code_cache/, no_backup/), so the WebView's HTTP and GPU caches stay out.
+     folders (cache/, code_cache/, no_backup/), so the WebView's HTTP and GPU caches stay out. The
+     candidate file of a move (plannr-movingSQLite.db), files set aside, the WebView's other folders
+     and safety-snapshots/ are left out too (step 1.4, decision D2: snapshots stay on the phone).
      Everything here must stay well under Android's 25 MB per-app limit, or Android skips the whole
-     backup: measured with Plannr's storage full, the ledger is at most ~10 MB and the three gzipped
-     safety snapshots well under 2 MB (test-ui/storage-limit.js checks this budget).
-     Phase 2, Step 5. -->
+     backup: right after the move, at most ~10 MB for the old localStorage copy plus the database
+     file (test-ui/storage-limit.js checks this budget; the Data Backup page shows the estimate).
+     Phase 2, Step 5; step 1.4 C12 (docs/step-1.4-storage-plan.md §3.1). -->
 <full-backup-content>
-    <!-- The ledger: the database lives in the WebView's localStorage (sqlite-wasm kvvfs).
-         Current Android System WebView keeps it in app_webview/Default/Local Storage/leveldb/. -->
+    <!-- The database file (step 1.4), its rollback journal if a write was in progress (SQLite repairs
+         the file from it when it next opens), and the marker that says which storage is in use. -->
+    <include domain="database" path="plannrSQLite.db" />
+    <include domain="database" path="plannrSQLite.db-journal" />
+    <include domain="file" path="plannr-storage.json" />
+    <!-- The database before the move, and the old copy after it while it is kept (decision D3): the
+         WebView's localStorage (sqlite-wasm kvvfs). Current Android System WebView keeps it in
+         app_webview/Default/Local Storage/leveldb/; older versions had no "Default" profile folder.
+         These two lines go in the release after the old copy is deleted. -->
     <include domain="root" path="app_webview/Default/Local Storage/" />
-    <!-- The same for older WebView versions, which had no "Default" profile folder. -->
     <include domain="root" path="app_webview/Local Storage/" />
-    <!-- Safety snapshots (public/safety-snapshots.js). Capacitor's Directory.Data is the app's
-         files/ folder (Context.getFilesDir()), which is the "file" domain here. -->
-    <include domain="file" path="safety-snapshots/" />
 </full-backup-content>
