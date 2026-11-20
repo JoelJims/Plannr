@@ -1528,3 +1528,20 @@ choices made on the way are in the session report's DECISIONS list.
     previous waits fail 5 checks in the same run.
   - Full suite: node 645 tests (642 pass, 3 skipped); phone pass 204 of 221, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C14 (2026-11-20): emulator E2, near the old limit (plan §5.3).**
+  - **On the `plannr-test` emulator only, with test data only.** The 9d7fd97 build with the full
+    fixture and 12,800 typical entries written in bulk (13,018 rows; `localStorage` 95.9% full, the
+    plan's "about 95%"), then the new build over it (`adb install -r`).
+  - **Results (13 checks, all pass):** the update kept every row; the move ran from the Data Backup
+    page: the encrypted backup took **4.3 s**, the move after its confirmation **7.7 s**; the marker
+    checked 13,029 rows in 14 tables; every table matches; a save goes to the file. The file is
+    2.2 MB. The meter: "Your data file is 2.2 MB. With the old copy (7.7 MB), Android's Google backup
+    of Plannr is about 9.9 MB of the 25 MB it allows (40%)." So even the fullest phone stays well
+    inside Android's limit, with the old copy kept.
+  - **Seen on the way, harmless:** the old build leaves SQLite's journal record
+    (`kvvfs-local-jrnl`) in `localStorage` after its last write. The update does not touch it (the
+    same keys and sizes before and after `install -r`), and the step-1 backup's small write replaces
+    it with a smaller one, so `localStorage` is about 1 million characters smaller after the move
+    than before. The data is the same (every table checked).
+  - Documents only: the code is that of the previous commit (0539d5e), whose full suite passed
+    (decision 32).
