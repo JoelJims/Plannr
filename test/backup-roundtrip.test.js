@@ -152,6 +152,6 @@ test('encrypted backup: contains every table exactly (whole-database copy, count
     copy.close();
     fs.rmSync(tmp, { force: true });
   }
-  // Restoring an encrypted backup is a phone feature (desktop answers 501); the phone's restore is
-  // round-tripped in test-ui/backup-roundtrip.js.
+  // Restoring it: test/backup-encrypted-restore.test.js (both targets, step 1.4 D1), and the phone's
+  // sqlite-wasm path in test-ui/backup-roundtrip.js.
 });

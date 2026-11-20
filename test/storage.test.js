@@ -53,10 +53,9 @@ test('desktop /api/storage: database size, no app storage limit', async () => {
   assert.strictEqual(r.json.level, 'ok');
 });
 
-test('desktop: restoring an encrypted backup answers 501 with what to do instead (until D1)', { skip: H.TARGET === 'shim' && 'the phone restores' }, async () => {
-  for (const body of [{}, { passphrase: 'x'.repeat(12), dataBase64: 'AAAA' }]) {
-    const r = await H.post('/api/backup/import-encrypted', body);
-    assert.strictEqual(r.status, 501);
-    assert.match(r.json.error, /^Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server\. Use the Android app/);
-  }
+test('restoring an encrypted backup is there on both targets: the dev server too since D1, no 501', async () => {
+  // The whole restore: test/backup-encrypted-restore.test.js. Here only that the route answers.
+  const r = await H.post('/api/backup/import-encrypted', {});
+  assert.strictEqual(r.status, 400);
+  assert.strictEqual(r.json.error, 'Enter the passphrase this backup was encrypted with.');
 });

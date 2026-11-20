@@ -31,7 +31,7 @@ export const HOST_SERVICES = Object.freeze({
 export const HOST_OPTIONAL = Object.freeze({
   'database.restore': 'database.restore(bytes) -> Promise: replace the whole database with a decrypted '
     + 'backup (checked first; a newer schema throws an error with code BACKUP_TOO_NEW), then bring it '
-    + 'up to this version. Left out on the dev server until D1: the encrypted restore answers 501 there.',
+    + 'up to this version. The phone and the dev server both supply it (step 1.4 D1); without it the encrypted restore answers 501.',
   'snapshot.writeDatabase': 'snapshot.writeDatabase() -> Promise<string|null>: save a whole-database '
     + 'safety copy before an encrypted restore replaces it; returns where it went.',
 });

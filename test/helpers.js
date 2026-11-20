@@ -24,7 +24,9 @@ const LIVE_DB = path.resolve(__dirname, '..', 'data', 'plannr.db');
 assert.notStrictEqual(path.resolve(TEST_DB).toLowerCase(), LIVE_DB.toLowerCase(), 'test DB must not be the live DB');
 
 const app = require('../server'); // requires ./db (binds prepared statements to TEST_DB) with side effects gated off
-const { db } = require('../db');
+// db.js's handle is read at the time of use (dbModule.db): restoring an encrypted backup on the dev
+// server replaces the database file and swaps the handle (step 1.4 D1).
+const dbModule = require('../db');
 // server.js sets the test database up with the async init() as its first start job (step 1.4 B17):
 // until app._ready resolves the file may have no tables yet. startApp() waits for it; a file that
 // only seeds or reads the database awaits H.ready in its first before() hook.
@@ -110,11 +112,11 @@ let userSeq = 0;
 // row back, whatever name/opts it asked for, instead of fabricating a second identity.
 function seedUser(opts = {}) {
   assertReady();
-  const existing = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1').get();
+  const existing = dbModule.db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1').get();
   if (existing) return { id: existing.id, username: existing.username, displayName: existing.displayName, password: SEED_PW };
   const username = opts.username || `user${++userSeq}`;
   const displayName = opts.displayName || username;
-  const info = db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)').run(username, displayName, SEED_HASH);
+  const info = dbModule.db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)').run(username, displayName, SEED_HASH);
   return { id: Number(info.lastInsertRowid), username, displayName, password: SEED_PW };
 }
 // No sessions table and no cookie check exist anymore — every request resolves to the fixed
@@ -129,7 +131,7 @@ function seedLoggedIn(opts) { const user = seedUser(opts); return { user, cookie
 // Phase 2 dropped tenant_id from every ledger table — these seed helpers no longer stamp one.
 function seedContract(opts = {}) {
   assertReady();
-  const info = db.prepare(
+  const info = dbModule.db.prepare(
     `INSERT INTO contract (contractor_name, area_of_work, ledger_code, price_of_contract_paise, date_signed, deleted_at)
      VALUES (?, ?, ?, ?, ?, ?)`
   ).run(opts.contractorName || 'ACME', opts.areaOfWork || 'Foundation', opts.ledgerCode || '5.0',
@@ -138,13 +140,13 @@ function seedContract(opts = {}) {
 }
 function seedPayment(opts = {}) {
   assertReady();
-  const info = db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at) VALUES (?, ?, ?, ?)')
+  const info = dbModule.db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at) VALUES (?, ?, ?, ?)')
     .run(opts.contractId, opts.payDate || '2026-07-10', opts.amountPaise == null ? 4000000 : opts.amountPaise, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 function seedCashOut(opts = {}) {
   assertReady();
-  const info = db.prepare(
+  const info = dbModule.db.prepare(
     `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, contract_scope, contract_stated_paise, deleted_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.txDate || '2026-07-12', opts.byType || 'user',
@@ -154,7 +156,7 @@ function seedCashOut(opts = {}) {
 }
 function seedCashIn(opts = {}) {
   assertReady();
-  const info = db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at) VALUES (?, ?, ?, ?, ?, ?)')
+  const info = dbModule.db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.byType || 'user', opts.byUserId == null ? null : opts.byUserId,
       opts.byLabel || null, opts.reason || null, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
@@ -163,18 +165,18 @@ function seedCashIn(opts = {}) {
 // Clear ledger + config state between tests in a file (users/sessions kept). Lets each test start
 // from a clean slate without a fresh DB per test.
 function clearLedger() {
-  for (const t of ['cash_out', 'cash_in', 'contractor_payments', 'contract', 'loans']) { try { db.exec(`DELETE FROM ${t}`); } catch { /* table may not exist */ } }
-  try { db.prepare("DELETE FROM settings WHERE key IN ('budget_paise','daily_report_recipients','daily_report_whatsapp','daily_report_times','daily_report_time','daily_report_whatsapp_times','daily_report_email_last_success','daily_report_email_last_catchup','daily_report_whatsapp_last_success','daily_report_whatsapp_last_catchup','daily_report_email_attempts','daily_report_whatsapp_attempts','daily_report_whatsapp_alert_last','daily_report_email_last_snapshot','daily_report_whatsapp_last_snapshot','auth_events','auth_events_unknown')").run(); } catch { /* ignore */ }
+  for (const t of ['cash_out', 'cash_in', 'contractor_payments', 'contract', 'loans']) { try { dbModule.db.exec(`DELETE FROM ${t}`); } catch { /* table may not exist */ } }
+  try { dbModule.db.prepare("DELETE FROM settings WHERE key IN ('budget_paise','daily_report_recipients','daily_report_whatsapp','daily_report_times','daily_report_time','daily_report_whatsapp_times','daily_report_email_last_success','daily_report_email_last_catchup','daily_report_whatsapp_last_success','daily_report_whatsapp_last_catchup','daily_report_email_attempts','daily_report_whatsapp_attempts','daily_report_whatsapp_alert_last','daily_report_email_last_snapshot','daily_report_whatsapp_last_snapshot','auth_events','auth_events_unknown')").run(); } catch { /* ignore */ }
 }
 
 // Best-effort cleanup of the temp DB when the file's process exits.
 process.on('exit', () => {
   for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } }
-  if (TEST_DIR) { try { db.close(); } catch { /* ignore */ } try { fs.rmSync(TEST_DIR, { recursive: true, force: true }); } catch { /* ignore */ } }
+  if (TEST_DIR) { try { dbModule.db.close(); } catch { /* ignore */ } try { fs.rmSync(TEST_DIR, { recursive: true, force: true }); } catch { /* ignore */ } }
 });
 
 module.exports = {
-  app, db, ready, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
+  app, get db() { return dbModule.db; }, ready, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
   startApp, stopApp, req, raw, pdfHtml, outsideRequests, get, post, put, del, clearLedger,
   seedUser, seedSession, seedLoggedIn, seedContract, seedPayment, seedCashOut, seedCashIn,
 };

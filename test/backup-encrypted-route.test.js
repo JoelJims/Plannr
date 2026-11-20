@@ -149,7 +149,7 @@ test('import-encrypted: each restore failure gets its own answer', async () => {
   assert.ok(!h.names().includes('refresh'));
 });
 
-test('import-encrypted: without database.restore (the dev server until D1) a 501 that says what to do, before anything is read', async () => {
+test('import-encrypted: on a platform without database.restore, a 501 that says what to do, before anything is read', async () => {
   const h = await harness({ host: { database: { exportBytes: async () => SQLITE }, snapshot: { writeJson: async () => '' } } });
   delete h.host.database.restore;
   delete h.host.snapshot.writeDatabase;

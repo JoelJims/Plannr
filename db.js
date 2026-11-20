@@ -122,22 +122,41 @@ export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').
 
 // Step 1.4 B4: the async database interface (core/db-adapter.js) over a synchronous handle. Since
 // B9, every database call legacyInit() and the upgrade plan make goes through it (below); only the
-// desktop's safety snapshot (VACUUM INTO, Node only) still uses `db` directly. Only get/all/run/exec/transaction work here: exporting, replacing
-// and closing the database stay with each platform until the adapters take over the whole database.
-const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter yet (step 1.4, stage B/C).`); };
-function adapterOver(handle) {
-  return createSyncEngineAdapter({
-    engine: isNode ? 'node-sqlite' : 'wasm-kvvfs',
-    handle,
-    exportBytes: notHereYet('exportBytes'), replaceWith: notHereYet('replaceWith'), info: notHereYet('info'), close: notHereYet('close'),
-  });
+// desktop's safety snapshots (VACUUM INTO, Node only) still use `db` directly.
+//
+// Exporting, replacing, measuring and closing (step 1.4 D1): under Node, db.js's own connection is a
+// database file, and its adapter does these with db-adapter-node.js's file operations, loaded only
+// when first needed (the phone's copy of this file never loads it). A replace swaps `db` for a new
+// handle: read `db` at the time of use (or use dbAdapter()), never keep it. In a browser, and for any
+// other handle, only get/all/run/exec/transaction work here; the phone's database file has its own
+// adapter (useAdapter, below).
+const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter here (only for its own database file, under Node).`); };
+const nodeFiles = () => import('./db-adapter-node.js');
+const ownFilePlatform = {
+  exportBytes: async () => (await nodeFiles()).exportFileBytes(db),
+  async replaceWith(bytes) {
+    if (DB_PATH === ':memory:') throw new Error('db.js: replaceWith needs a database file, not :memory:.');
+    const { replaceDatabaseFile } = await nodeFiles();
+    try {
+      replaceDatabaseFile(DB_PATH, bytes, () => { db.close(); db = null; });
+    } finally {
+      if (!db) db = openDb(NodeDatabaseSync); // the new file, or the old one if the rename never happened
+    }
+  },
+  info: async () => (await nodeFiles()).databaseFileInfo(DB_PATH),
+  close() { if (db) { db.close(); db = null; } },
+};
+function adapterOver(handle, own = false) {
+  const files = own && isNode ? ownFilePlatform
+    : { exportBytes: notHereYet('exportBytes'), replaceWith: notHereYet('replaceWith'), info: notHereYet('info'), close: notHereYet('close') };
+  return createSyncEngineAdapter({ engine: isNode ? 'node-sqlite' : 'wasm-kvvfs', handle, ...files });
 }
 let ownAdapter = null;
 // dbAdapter() is db.js's own connection (one shared adapter, so a nested transaction is refused);
 // dbAdapter(handle) wraps another handle (the tests use throwaway databases).
 export function dbAdapter(dbh) {
   if (externalAdapter && (dbh === undefined || dbh === db)) return externalAdapter;
-  if (dbh === undefined || dbh === db) return ownAdapter || (ownAdapter = adapterOver(() => db));
+  if (dbh === undefined || dbh === db) return ownAdapter || (ownAdapter = adapterOver(() => db, true));
   return adapterOver(() => dbh);
 }
 
@@ -285,6 +304,28 @@ function finishUpgrade() {
   if (isNode) rmSync(join(snapshotDir(), PENDING_UPGRADE), { force: true });
 }
 
+// Desktop only (step 1.4 D1): a whole-database copy beside the database file before an encrypted
+// restore replaces it (the phone's is writePreRestoreSnapshot() in safety-snapshots.js). The same
+// folder and rule as the copies before an upgrade: the newest 3 kept, the one just written never
+// deleted, and a failed clean-up never fails the restore. Returns the copy's path.
+export function writeRestoreSnapshot() {
+  if (!isNode) throw new Error('db.js: writeRestoreSnapshot() is for the desktop; the phone writes its own (safety-snapshots.js).');
+  const dir = snapshotDir();
+  mkdirSync(dir, { recursive: true });
+  const name = `plannr-pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
+  const file = join(dir, name);
+  db.exec(`VACUUM INTO '${file.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  if (!(statSync(file).size > 0)) throw new Error(`Safety snapshot ${file} is empty; the restore was not started.`);
+  try {
+    const old = readdirSync(dir).filter((f) => /^plannr-pre-restore-.*\.db$/.test(f) && f !== name)
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
+      .slice(KEEP_SNAPSHOTS - 1);
+    for (const { f } of old) rmSync(join(dir, f), { force: true });
+  } catch { /* the new copy is safe; older ones stay a while longer */ }
+  return file;
+}
+
 // The checks before any upgrade step in init(): refuse a database from a newer
 // app version (nothing changed), then, on the desktop, the safety snapshot.
 function beforeUpgrade(plan, snapshot) {
@@ -305,6 +346,33 @@ export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
   await runAwaited(legacyInit(), dbAdapter());
   await runMigrations(dbAdapter(), migrations);
   finishUpgrade();
+}
+
+// PRAGMA user_version is a 4-byte big-endian number at offset 60 of a SQLite file's header.
+export const imageUserVersion = (bytes) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(60);
+
+/** The answer to a backup made by a newer Plannr: nothing is changed (code BACKUP_TOO_NEW). */
+export function backupTooNew(userVersion) {
+  const err = new Error(`This backup was made by a newer version of Plannr (schema v${userVersion}; this version understands up to v${SCHEMA_VERSION}). Nothing was changed — update Plannr, then restore it.`);
+  err.code = 'BACKUP_TOO_NEW';
+  return err;
+}
+
+/**
+ * Replace the whole database with a decrypted backup, through db.js's adapter: the phone's database
+ * file (since step 1.4 C9) and the desktop's (since D1). A backup from a newer Plannr is refused
+ * before anything changes; the adapter checks the bytes (integrity) before it replaces anything; an
+ * older backup is then brought up to this version; foreign keys are checked last. The caller saves
+ * a safety copy first (core/routes/backup.js).
+ */
+export async function restoreFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 100) throw new Error('restoreSnapshotBytes: not a valid SQLite image.');
+  if (imageUserVersion(bytes) > SCHEMA_VERSION) throw backupTooNew(imageUserVersion(bytes));
+  const live = dbAdapter();
+  await live.replaceWith(bytes);
+  await init({ snapshot: false });
+  const fkViol = await live.all('PRAGMA foreign_key_check');
+  if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
 }
 
 // ---- legacyInit()'s database calls (step 1.4 B5–B9) ---------------------------------------------------

@@ -8,9 +8,8 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
-const { db, init, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter } = require('./db');
+const { init, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter, restoreFromBytes, writeRestoreSnapshot } = require('./db');
 const { encrypt, decrypt } = require('./backup-crypto'); // host.crypto: the encrypted backup (core/routes/backup.js)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
@@ -157,14 +156,16 @@ function currentUser(req) { return getOwner(); }
 const ledgerIndex = createLedgerIndex(repo);
 // The platform services the core may call (core/host.js, step 1.4 A4): this server's. Both are
 // defined further down: renderOverviewPdf (Playwright) and writeJsonSnapshotBesideDb.
-// Step 1.4 C11: the encrypted backup's crypto and database copy (vacuumSnapshotBytes), and what
-// /api/storage reports. No database.restore yet: the encrypted restore answers 501 here until D1.
+// Step 1.4 C11: the encrypted backup's crypto, and what /api/storage reports. Step 1.4 D1: the whole
+// database through db.js's adapter on the database file: exported (VACUUM INTO) for the encrypted
+// backup, and replaced by an encrypted restore after a whole-database safety copy beside it
+// (safety-snapshots/plannr-pre-restore-....db, the newest 3 kept).
 const host = checkHost({
   pdf: { render: (html) => renderOverviewPdf(html) },
-  snapshot: { writeJson: async (backup) => writeJsonSnapshotBesideDb(backup) },
+  snapshot: { writeJson: async (backup) => writeJsonSnapshotBesideDb(backup), writeDatabase: async () => projectPath(writeRestoreSnapshot()) },
   now: () => new Date(),
   crypto: { encrypt: (bytes, passphrase) => encrypt(bytes, passphrase), decrypt: (bytes, passphrase) => decrypt(bytes, passphrase) },
-  database: { exportBytes: async () => vacuumSnapshotBytes() },
+  database: { exportBytes: async () => dbAdapter().exportBytes(), restore: (bytes) => restoreFromBytes(bytes) },
   storage: { info: async () => desktopStorageInfo() },
 });
 // One request at a time (core/request-queue.js, step 1.4 B5): every /api route is registered through
@@ -362,32 +363,9 @@ const backupFormat = require('./backup-format');
 // is for the schema tests (app._assertImportOwnershipComplete).
 const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(dbAdapter()); // a Promise
 
-// Phase 10b — the whole database for the encrypted backup (this server's host.database.exportBytes;
-// the route is core/routes/backup.js since step 1.4 C11). VACUUM INTO a temp file first (safe to run
-// against a live DB — see backup-db.js's own header for why), read it, delete the temp file.
-function vacuumSnapshotBytes() {
-  const tmp = path.join(os.tmpdir(), `plannr-ledger-backup-${process.pid}-${crypto.randomBytes(6).toString('hex')}.db`);
-  let handle;
-  try {
-    const destSql = tmp.split('\\').join('/'); // SQLite wants forward slashes in the SQL string literal
-    try {
-      handle = new DatabaseSync(DB_PATH, { readOnly: true });
-      handle.exec(`VACUUM INTO '${destSql}'`);
-    } catch (e) {
-      try { if (handle) handle.close(); } catch { /* ignore */ }
-      handle = new DatabaseSync(DB_PATH);
-      handle.exec(`VACUUM INTO '${destSql}'`);
-    }
-    return fs.readFileSync(tmp);
-  } finally {
-    try { if (handle) handle.close(); } catch { /* ignore */ }
-    for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + s); } catch { /* ignore */ } }
-  }
-}
-// The encrypted backup routes are core/routes/backup.js (step 1.4 C11). This server supplies no
-// database.restore yet, so POST /api/backup/import-encrypted answers 501 with a clear message (not
-// Express's raw 404, which the page would swallow into a misleading "Restore failed"). Replacing the
-// live node:sqlite file is step 1.4 D1.
+// The encrypted backup routes are core/routes/backup.js (step 1.4 C11). Since step 1.4 D1 this
+// server restores an encrypted backup too: host.database.restore replaces the database file
+// (db-adapter-node.js: checked, written beside it, renamed over it) after host.snapshot.writeDatabase.
 
 // Phase 15 backup-overdue reminder (GET/PUT /api/backup/reminder, POST /api/backup/mark-exported):
 // core/routes/backup-reminder.js (step 1.4 A6). Its clock is host.now().
@@ -408,7 +386,11 @@ function writeJsonSnapshotBesideDb(backup) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const snapPath = path.join(path.dirname(DB_PATH), `auto-snapshot-before-import-${stamp}.json`);
   fs.writeFileSync(snapPath, JSON.stringify(backup, null, 2));
-  return path.relative(__dirname, snapPath).split(path.sep).join('/');
+  return projectPath(snapPath);
+}
+// A safety copy's path as the answer reports it: relative to the project, with forward slashes.
+function projectPath(p) {
+  return path.relative(__dirname, p).split(path.sep).join('/');
 }
 
 // JSON export and import (REPLACE, made safe: check, safety copy, one transaction):
@@ -553,7 +535,7 @@ async function shutdown() {
     if (_pdfBrowserPromise) { const b = await _pdfBrowserPromise.catch(() => null); if (b) await b.close().catch(() => {}); }
   } catch (e) { console.error('PDF browser shutdown error:', e); }
   // 3) Close the DB (no WAL to checkpoint — see the comment above shutdown()).
-  try { db.close(); } catch (e) { console.error('DB shutdown error:', e); }
+  try { await dbAdapter().close(); } catch (e) { console.error('DB shutdown error:', e); }
   clearTimeout(hardKill);
   console.log('[shutdown] browsers closed, DB closed — exiting cleanly.');
   process.exit(0);

@@ -89,10 +89,11 @@ for (const [file, importLine] of [
   });
 }
 
-test('only the phone restores an encrypted backup (the dev server until D1), with its whole-database safety copy (C11)', () => {
+test('the phone and the dev server both restore an encrypted backup, each after a whole-database safety copy (C11, D1)', () => {
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   const phone = fs.readFileSync(path.join(ROOT, 'public', 'local-api.js'), 'utf8');
-  assert.doesNotMatch(server, /\brestore: |writeDatabase: /);
+  assert.match(server, /database: \{ exportBytes: async \(\) => dbAdapter\(\)\.exportBytes\(\), restore: \(bytes\) => restoreFromBytes\(bytes\) \}/);
+  assert.match(server, /writeDatabase: async \(\) => projectPath\(writeRestoreSnapshot\(\)\)/);
   assert.match(phone, /database: \{ exportBytes: async \(\) => exportSnapshotBytes\(\), restore: \(bytes\) => restoreSnapshotBytes\(bytes\) \}/);
   assert.match(phone, /writeDatabase: \(\) => writePreRestoreSnapshot\(\)/);
 });

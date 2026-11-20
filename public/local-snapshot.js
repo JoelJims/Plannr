@@ -25,7 +25,7 @@
 // Step 1.4 C9: once the data is in its own file (db.js useAdapter()), both go through that adapter:
 // exportBytes() (VACUUM INTO), and replaceWith() (the image checked, then renamed over the file).
 
-import { db, init, SCHEMA_VERSION, dbAdapter, usingOwnHandle } from './db.js';
+import { db, init, SCHEMA_VERSION, dbAdapter, usingOwnHandle, restoreFromBytes, imageUserVersion, backupTooNew } from './db.js';
 import { getSqlite3 } from './db-engine.js';
 
 /** The whole database as a SQLite file image. Await it: on the file it is async. */
@@ -35,26 +35,13 @@ export function exportSnapshotBytes() {
   return sqlite3.capi.sqlite3_js_db_export(db.nativeHandle());
 }
 
-// PRAGMA user_version is a 4-byte big-endian number at offset 60 of a SQLite file's header.
-export const imageUserVersion = (bytes) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(60);
-
-function tooNew(userVersion) {
-  const err = new Error(`This backup was made by a newer version of Plannr (schema v${userVersion}; this version understands up to v${SCHEMA_VERSION}). Nothing was changed — update Plannr, then restore it.`);
-  err.code = 'BACKUP_TOO_NEW';
-  return err;
-}
+// The header's schema version and the "newer backup" answer are db.js's (step 1.4 D1: the desktop
+// restores too); imageUserVersion is still exported here for storage-recovery.js.
+export { imageUserVersion };
+const tooNew = backupTooNew;
 
 export async function restoreSnapshotBytes(bytes) {
-  if (!usingOwnHandle()) {
-    if (!(bytes instanceof Uint8Array) || bytes.length < 100) throw new Error('restoreSnapshotBytes: not a valid SQLite image.');
-    if (imageUserVersion(bytes) > SCHEMA_VERSION) throw tooNew(imageUserVersion(bytes));
-    const live = dbAdapter();
-    await live.replaceWith(bytes); // checked (integrity, foreign keys) before it replaces anything
-    await init({ snapshot: false }); // an older backup is brought up to this version's schema
-    const fkViol = await live.all('PRAGMA foreign_key_check');
-    if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
-    return;
-  }
+  if (!usingOwnHandle()) return restoreFromBytes(bytes); // the phone's database file (db.js, shared with the desktop)
   const sqlite3 = getSqlite3();
   const tempDb = new sqlite3.oo1.DB(':memory:', 'c');
   const p = sqlite3.wasm.allocFromTypedArray(bytes);

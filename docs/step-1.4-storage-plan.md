@@ -1632,3 +1632,43 @@ choices made on the way are in the session report's DECISIONS list.
   - This plan's status line: stages A–C built and checked on the emulator; stage D next; the real
     data still needs a separate OK.
   - Documents only: the code is that of 0539d5e, whose full suite passed (decision 32).
+- **D1 (2026-11-21): the desktop's database file through the adapter; the encrypted restore works on
+  the dev server.**
+  - **`db.js` under Node:** its own connection is the database file, and its adapter now exports,
+    replaces and measures it with `db-adapter-node.js`'s file operations (`exportFileBytes`,
+    `replaceDatabaseFile`, `databaseFileInfo`, now exported on their own; the adapter from B1 uses
+    the same three). They are loaded only when first needed, so the phone's copy of `db.js` never
+    loads them. A replace swaps the handle: the old one is closed, and `db` is the new one.
+    `test/helpers.js` reads the handle at the time of use for that reason, and `server.js` closes the
+    database at shutdown through the adapter.
+  - **`restoreFromBytes(bytes)` in `db.js`:** a backup from a newer Plannr is refused before anything
+    changes; the replace checks the bytes (integrity) before it replaces anything; an older backup is
+    brought up to this version; foreign keys are checked last. The phone's `local-snapshot.js` used
+    exactly these steps on its database file and now calls it (same messages); the dev server uses it
+    too.
+  - **`server.js`:** `host.database.restore` is `restoreFromBytes`, and `host.snapshot.writeDatabase`
+    writes a whole-database copy beside the database before the restore
+    (`safety-snapshots/plannr-pre-restore-….db`; the newest 3 kept, the one just written never
+    deleted, a failed clean-up never fails the restore). The encrypted export goes through the adapter
+    (`vacuumSnapshotBytes` removed). `POST /api/backup/import-encrypted` no longer answers 501 on the
+    dev server.
+  - **Tests (both passes):** `test/backup-encrypted-restore.test.js`: fill, export encrypted, change
+    things, restore: every table as it was at the export; on the dev server the safety copy is the data
+    from just before the restore; nothing is left beside the database; a save after the restore lands
+    in the restored data. A wrong passphrase, a changed file, a file that is not a database and a
+    damaged database change nothing (and the app still saves); a backup from a newer Plannr is refused
+    with its message and changes nothing; the dev server keeps the newest 3 copies. In the phone-code
+    pass the restore runs the phone's route and `restoreFromBytes` (`test/shim-snapshot-fake.mjs`;
+    the phone's sqlite-wasm path stays in `test-ui/backup-roundtrip.js`). `test/db-own-file.test.js`:
+    `info`, `exportBytes`, a replace that swaps and closes the handle, refused bytes that keep the same
+    handle and data, other handles refused, the safety copy's place and name. The 501 test in
+    `test/storage.test.js` is replaced (the route answers on both targets); the wiring test in
+    `test/core-host.test.js` now expects the restore on both.
+  - **Known positives (9, all caught):** the handle not reopened after a replace; a newer backup not
+    refused first (dev server, and phone code); no restore on the dev server (the 501 again); four
+    copies kept instead of three; a damaged database not checked before the replace; the phone code not
+    restoring; the written copy left beside the database after a refusal; the safety copy not written.
+  - Full suite: node 654 tests (651 pass, 3 skipped); phone pass 213 of 230, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass. The UI suites ran on the installed
+    Chromium 151 through a scratch folder, because the pinned Chromium (149, revision 1228) was removed
+    from the shared Playwright folder by another project's install (decision 37).

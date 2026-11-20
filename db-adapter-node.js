@@ -11,7 +11,9 @@
 //   - info(): the real size on disk (the file plus any -journal or -wal).
 //
 // Node only: it imports node:sqlite and node:fs, so it is not copied to public/.
-// Not used by db.js yet: stage B converts the callers one file at a time (B5 onwards).
+// The three file operations are also exported on their own (step 1.4 D1): db.js keeps its own
+// connection under Node and uses them for its adapter, so the dev server (and later the desktop app)
+// can export, replace and measure its database file the same way.
 
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
@@ -57,6 +59,52 @@ function integrityOk(file) {
   try { return h.prepare('PRAGMA integrity_check').all().map((r) => r.integrity_check).join('; '); } finally { h.close(); }
 }
 
+/** The whole database behind `handle` as SQLite file bytes: VACUUM INTO a temporary file, read it, delete it. */
+export function exportFileBytes(handle) {
+  const tmp = path.join(os.tmpdir(), `plannr-export-${process.pid}-${crypto.randomBytes(6).toString('hex')}.db`);
+  try {
+    handle.exec(`VACUUM INTO '${sqlPath(tmp)}'`);
+    return new Uint8Array(fs.readFileSync(tmp));
+  } finally {
+    for (const s of ['', ...SIDE_FILES]) { try { fs.unlinkSync(tmp + s); } catch { /* not there */ } }
+  }
+}
+
+/**
+ * Replace the database file `file` with `bytes`, all or nothing: check they are a SQLite database,
+ * write them beside it and force them to disk, check their integrity, then call closeHandle() (the
+ * caller closes its open handle on the file), rename over the old file in one step and make the
+ * rename durable. On any error the old file stays as it was and the written copy is removed. Either
+ * way the caller reopens `file` afterwards: the new database, or the old one if the rename never
+ * happened.
+ */
+export function replaceDatabaseFile(file, bytes, closeHandle) {
+  if (!(bytes instanceof Uint8Array) || !looksLikeSqlite(bytes)) {
+    throw new Error('db (node-sqlite): replaceWith was given something that is not a SQLite database.');
+  }
+  const incoming = `${file}.incoming-${crypto.randomBytes(6).toString('hex')}`;
+  writeDurably(incoming, bytes);
+  try {
+    const check = integrityOk(incoming);
+    if (check !== 'ok') throw new Error(`db (node-sqlite): the new database failed its integrity check (${check}).`);
+    closeHandle();
+    const leftover = SIDE_FILES.map((s) => file + s).filter((p) => fs.existsSync(p));
+    if (leftover.length) {
+      throw new Error(`db (node-sqlite): ${leftover.map((p) => path.basename(p)).join(', ')} is still beside the database; it was not replaced.`);
+    }
+    fs.renameSync(incoming, file);
+    fsyncFolder(path.dirname(path.resolve(file)));
+  } catch (err) {
+    try { fs.unlinkSync(incoming); } catch { /* already renamed or never written */ }
+    throw err;
+  }
+}
+
+/** The real size of the database file on disk: the file plus any -journal or -wal. */
+export function databaseFileInfo(file) {
+  return { engine: 'node-sqlite', path: path.resolve(file), sizeBytes: [file, ...SIDE_FILES.map((s) => file + s)].reduce((n, p) => n + sizeOf(p), 0) };
+}
+
 /**
  * Open `file` (a path, or ':memory:') with node:sqlite. Options: { readOnly }.
  * Never point this at data/plannr.db from a test.
@@ -70,38 +118,13 @@ export function openNodeSqliteAdapter(file, { readOnly = false } = {}) {
     engine: 'node-sqlite',
     handle: () => current,
 
-    exportBytes() {
-      const tmp = path.join(os.tmpdir(), `plannr-export-${process.pid}-${crypto.randomBytes(6).toString('hex')}.db`);
-      try {
-        current.exec(`VACUUM INTO '${sqlPath(tmp)}'`);
-        return new Uint8Array(fs.readFileSync(tmp));
-      } finally {
-        for (const s of ['', ...SIDE_FILES]) { try { fs.unlinkSync(tmp + s); } catch { /* not there */ } }
-      }
-    },
+    exportBytes() { return exportFileBytes(current); },
 
     replaceWith(bytes) {
       if (inMemory) throw new Error('db (node-sqlite): replaceWith needs a database file, not :memory:.');
       if (readOnly) throw new Error('db (node-sqlite): the database was opened read-only.');
-      if (!(bytes instanceof Uint8Array) || !looksLikeSqlite(bytes)) {
-        throw new Error('db (node-sqlite): replaceWith was given something that is not a SQLite database.');
-      }
-      const incoming = `${file}.incoming-${crypto.randomBytes(6).toString('hex')}`;
-      writeDurably(incoming, bytes);
       try {
-        const check = integrityOk(incoming);
-        if (check !== 'ok') throw new Error(`db (node-sqlite): the new database failed its integrity check (${check}).`);
-        current.close();
-        current = null;
-        const leftover = SIDE_FILES.map((s) => file + s).filter((p) => fs.existsSync(p));
-        if (leftover.length) {
-          throw new Error(`db (node-sqlite): ${leftover.map((p) => path.basename(p)).join(', ')} is still beside the database; it was not replaced.`);
-        }
-        fs.renameSync(incoming, file);
-        fsyncFolder(path.dirname(path.resolve(file)));
-      } catch (err) {
-        try { fs.unlinkSync(incoming); } catch { /* already renamed or never written */ }
-        throw err;
+        replaceDatabaseFile(file, bytes, () => { current.close(); current = null; });
       } finally {
         if (!current) current = openHandle(file, false); // the new file, or the old one if the rename never happened
       }
@@ -112,7 +135,7 @@ export function openNodeSqliteAdapter(file, { readOnly = false } = {}) {
         const p = current.prepare('PRAGMA page_count').get().page_count * current.prepare('PRAGMA page_size').get().page_size;
         return { engine: 'node-sqlite', path: ':memory:', sizeBytes: p };
       }
-      return { engine: 'node-sqlite', path: path.resolve(file), sizeBytes: [file, ...SIDE_FILES.map((s) => file + s)].reduce((n, p) => n + sizeOf(p), 0) };
+      return databaseFileInfo(file);
     },
 
     close() {

@@ -17,8 +17,9 @@
 //     (host.database.exportBytes) encrypted (host.crypto.encrypt, PLBK version 1).
 //   - POST /api/backup/import-encrypted: decrypt, check it is a SQLite file, save a whole-database
 //     safety copy (host.snapshot.writeDatabase), replace (host.database.restore), refresh the
-//     category list. No safety copy, no restore. A platform without database.restore (the dev
-//     server until D1) answers 501 with a message that says what to do instead.
+//     category list. No safety copy, no restore. A platform without database.restore answers 501
+//     with a message that says what to do instead (the phone and the dev server have it since step
+//     1.4 D1).
 
 import * as backupFormat from '../../backup-format.js';
 import { parseIsoDate, base64ToBytes } from '../parsers.js';
