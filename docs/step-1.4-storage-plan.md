@@ -1485,3 +1485,34 @@ choices made on the way are in the session report's DECISIONS list.
     most 12.76 MB (10 MB for the old copy, an upper bound, plus the file and the marker).
   - Full suite: node 645 tests (642 pass, 3 skipped); phone pass 204 of 221, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C13 (2026-11-20): emulator E1, an update over the current version, then the move (plan §5.3).**
+  - **On the `plannr-test` emulator only, with test data only.** The build your phone has now
+    (9d7fd97, SHA-256 `7dc29db3…a2ef`, a byte-identical copy) was installed on a clean Plannr; the
+    full test fixture and 1,000 typical entries were saved through the app (1,218 rows in 13 tables;
+    `localStorage` 10.3% full). The new build (5736195) went over it with `adb install -r`.
+  - **Results (13 checks, all pass):**
+    - the update kept every row, on `localStorage`, and saw the storage plugins; no database file
+      and no marker yet;
+    - the move from the Data Backup page: the encrypted backup took 2.9 s, the move after its
+      confirmation 1.6 s; the page reopened on the file;
+    - the marker says `native-v1` (14 tables, 1,229 rows checked, counting `sqlite_sequence` and
+      the backup's own setting), with the old copy kept; the database file is there and no candidate
+      file is left;
+    - every table matches what was there before the move (read back from an encrypted backup of the
+      file, decrypted on the PC);
+    - a save goes to the file and leaves the old copy untouched; `/api/storage` says `file`; the
+      meter reads "Your data file is 0.4 MB. With the old copy (0.9 MB), Android's Google backup of
+      Plannr is about 1.4 MB of the 25 MB it allows (6%)."
+  - **The share sheet of the step-1 backup** was answered inside the page (decision 30): the app
+    still wrote the file and checked it; choosing where it goes is checked by hand on the real phone.
+  - **`scripts/phone-test.ps1` has a storage check (S)** that only reads: which storage the marker
+    names (none yet, the file, or moved back), the size of each data file, and whether a move's
+    candidate file was left behind. Check 2 accepts the file's meter text. On the emulator after the
+    move: S, 1, 2, 3, 4 (offline home and PDF) and 8 pass. On a fresh install: S says "localStorage
+    (not moved yet)" and passes. **Known positive:** with the marker file made unreadable, S fails
+    ("unreadable marker"); the marker was then put back byte for byte.
+  - Full suite: node 645 tests (642 pass, 3 skipped); phone pass 204 of 221, the 17 known
+    differences and nothing new; `test:slow` passes; every UI suite passes but one check of
+    storage-move-ui ("the prompt is back in a new session") failed once and passed 3 times out of 3
+    when run again. This part changes no code those suites run; the check reads the page before the
+    move panel has finished, and the next part fixes that wait.

@@ -18,6 +18,7 @@
       uninstalls nothing, and runs only the checks that change no ledger data.
   It never sends anything: when a share sheet opens, the only key it presses is BACK.
   Airplane mode is put back the way it was at the end, even after an error.
+  The storage check (S) only reads: the marker file and the size of each data file.
 
 .PARAMETER AllowExisting
   Run against a Plannr that is already installed. Nothing is installed or uninstalled.
@@ -280,6 +281,40 @@ try {
   }
   $shot = Save-Screenshot 'home'
 
+  # ---- S. Storage move (step 1.4): where the data is now. Reads only; changes nothing. ---------------
+  # The marker file says which storage is in use: none yet (localStorage, not moved), native-v1 (the
+  # database file) or localstorage-v1 (moved back). A move's candidate file left behind means a move
+  # was interrupted: the app offers to continue it.
+  if ($ls -match 'not debuggable|unknown package|run-as:') {
+    Add-Result 'S' 'Storage in use (marker and files)' 'SKIP' 'run-as works only with a debug build'
+  } else {
+    $markerText = Invoke-Shell "run-as $Pkg cat files/plannr-storage.json"
+    $dbList = Invoke-Shell "run-as $Pkg ls -l databases"
+    $oldKb = ((Invoke-Shell "run-as $Pkg du -sk 'app_webview/Default/Local Storage'") -split '\s+')[0]
+    $hasFile = $dbList -match '\splannrSQLite\.db(\s|$)'
+    $hasCandidate = $dbList -match 'plannr-movingSQLite\.db'
+    $sizes = @(($dbList -split "`n") | Where-Object { $_ -match 'plannr' } | ForEach-Object { $p = $_ -split '\s+'; "$($p[-1]) $($p[4]) bytes" }) -join ', '
+    $marker = $null
+    if ($markerText -notmatch 'No such file') { try { $marker = $markerText | ConvertFrom-Json } catch { $marker = $null } }
+    $res = 'FAIL'; $what = ''
+    if (-not $marker -and $markerText -match 'No such file') {
+      $what = 'localStorage (not moved yet)'
+      if (-not $hasFile -and -not $hasCandidate) { $res = 'PASS' }
+    } elseif ($marker -and $marker.storage -eq 'native-v1') {
+      $kept = 'deleted'; if ($marker.oldCopy -and $marker.oldCopy.kept) { $kept = 'kept' }
+      $rows = ''; if ($marker.check) { $rows = ", checked $($marker.check.rows) rows in $($marker.check.tables) tables" }
+      $what = "the database file since $($marker.movedAt)$rows; old copy $kept"
+      if ($hasFile -and -not $hasCandidate) { $res = 'PASS' }
+    } elseif ($marker -and $marker.storage -eq 'localstorage-v1') {
+      $what = 'localStorage (moved back)'; if ($marker.emergency) { $what = 'localStorage (the old copy, after a problem with the file)' }
+      if (-not $hasCandidate) { $res = 'PASS' }
+    } else {
+      $what = "unreadable marker: '$markerText'"
+    }
+    if ($hasCandidate) { $what += '; a move was interrupted (candidate file present)' }
+    Add-Result 'S' 'Storage in use (marker and files)' $res "$what. Files: $(if ($sizes) { $sizes } else { 'none' }); localStorage folder: $oldKb KB"
+  }
+
   # ---- 2. Storage meter ---------------------------------------------------------------------------
   [void](Assert-Unlocked)
   $doc = Open-Section 'DATA BACKUP' 'storageText'
@@ -287,7 +322,9 @@ try {
   $meter = ''
   if ($doc) { $n = Find-Node $doc 'storageText' $null; if ($n) { $meter = $n.GetAttribute('text') } }
   $shot = Save-Screenshot 'data-backup-meter'
-  Add-Result '2' 'Storage meter shown' ($(if ($meter -match 'Used .* of about .*MB') { 'PASS' } else { 'FAIL' })) "'$meter' ($shot)"
+  # Before the move: localStorage against its limit. After it: the file and Google backup's 25 MB.
+  $meterOk = ($meter -match '^Used .* of about .*MB') -or ($meter -match '^Your data file is .* MB\. .* of the 25 MB it allows')
+  Add-Result '2' 'Storage meter shown' ($(if ($meterOk) { 'PASS' } else { 'FAIL' })) "'$meter' ($shot)"
   Add-Result '2' 'Real localStorage limit' 'MANUAL' 'needs chrome://inspect and the console probe in the checklist'
 
   # ---- 3. JSON backup export: the share sheet opens, the file is written ---------------------------
