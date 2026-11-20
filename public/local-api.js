@@ -25,10 +25,10 @@
 // the plain-JSON ledger export/import above — a separate concern (raw database bytes, not the
 // ledger-table JSON), handled by backup-crypto.js + local-snapshot.js and just wired in here.
 
-import { db, isStorageFullError, rollbackQuietly, transaction, dbAdapter } from './db.js';
-import { encrypt, decrypt, looksLikeSqlite, MIN_PASSPHRASE_LEN } from './backup-crypto.js';
+import { db, isStorageFullError, rollbackQuietly, transaction, dbAdapter, usingOwnHandle } from './db.js';
+import { encrypt, decrypt } from './backup-crypto.js';
 import * as requestRules from './request-rules.js';
-import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } from './core/parsers.js';
+import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs, base64ToBytes } from './core/parsers.js';
 import { createLedgerIndex } from './core/ledger-index.js';
 import { checkHost, hostError } from './core/host.js';
 import { createRequestQueue, queuedRoutes } from './core/request-queue.js';
@@ -45,6 +45,7 @@ import * as overviewPdf from './core/overview-pdf.js';
 import * as pdfRoutes from './core/routes/pdf.js';
 import * as backupReminderRoutes from './core/routes/backup-reminder.js';
 import * as backupRoutes from './core/routes/backup.js';
+import * as storageRoutes from './core/routes/storage.js';
 import * as ledgerCrud from './core/ledger-crud.js';
 import { exportSnapshotBytes, restoreSnapshotBytes } from './local-snapshot.js';
 import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.js';
@@ -62,8 +63,7 @@ import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.j
 // The Android System WebView is Chromium too, so the phone is EXPECTED to have the same limit; that
 // part is an estimate until it is checked on a device (docs/PHONE-TEST-CHECKLIST.md).
 export const LOCALSTORAGE_LIMIT_CHARS = 5 * 1024 * 1024;
-export const STORAGE_WARN_AT = 0.7;   // "getting full"
-export const STORAGE_STRONG_AT = 0.9; // "export a backup now"
+// What localStorage holds now (the levels are core/routes/storage.js's: warn from 70%, strongly from 90%).
 export function measureStorage(storage = window.localStorage) {
   let chars = 0, databaseChars = 0;
   for (let i = 0; i < storage.length; i++) {
@@ -72,20 +72,24 @@ export function measureStorage(storage = window.localStorage) {
     chars += n;
     if (key.startsWith('kvvfs-local')) databaseChars += n;
   }
-  const fraction = chars / LOCALSTORAGE_LIMIT_CHARS;
-  return {
-    mode: 'phone',
-    usedBytes: chars * 2,
-    limitBytes: LOCALSTORAGE_LIMIT_CHARS * 2,
-    databaseBytes: databaseChars * 2,
-    fraction,
-    level: fraction >= STORAGE_STRONG_AT ? 'critical' : fraction >= STORAGE_WARN_AT ? 'warning' : 'ok',
-  };
+  return { usedBytes: chars * 2, limitBytes: LOCALSTORAGE_LIMIT_CHARS * 2, databaseBytes: databaseChars * 2 };
 }
 
-// "Storage is full" on the phone means Plannr's own space inside the app is used up, not the phone's
-// storage, so "free up space on your phone" would not help. Say what does.
-const storageFull = (what) => `Storage is full — ${what} Your saved data is safe. On the Data Backup page, export a backup, then permanently delete items you no longer need from the Recycle Bin to make room.`;
+// The phone's host.storage.info (step 1.4 C11). Before the move, localStorage and its limit. After it,
+// the database file (with its journal) and the phone's free space, plus the old localStorage copy
+// while it is kept (it counts toward Android's Google backup until it is deleted).
+export async function phoneStorageInfo() {
+  if (usingOwnHandle()) return { kind: 'localstorage', ...measureStorage() };
+  const file = await dbAdapter().info();
+  return { kind: 'file', databaseBytes: file.sizeBytes, freeBytes: file.freeBytes, oldCopyBytes: measureStorage().databaseBytes };
+}
+
+// "Storage is full" on the phone. Before the move it means Plannr's own space inside the app is used
+// up, not the phone's storage, so "free up space on your phone" would not help: say what does. After
+// the move (the data in its own file) it means the phone itself is full.
+const storageFull = (what) => (usingOwnHandle()
+  ? `Storage is full — ${what} Your saved data is safe. On the Data Backup page, export a backup, then permanently delete items you no longer need from the Recycle Bin to make room.`
+  : `Storage is full — ${what} Your saved data is safe. This phone is out of space: free up space on the phone (photos, videos, apps you no longer use), then try again.`);
 
 export function installFetchShim(repo) {
   const originalFetch = window.fetch.bind(window);
@@ -141,10 +145,15 @@ export function installFetchShim(repo) {
   // The platform services the core may call (core/host.js, step 1.4 A4): the phone's. The PDF goes
   // through the print-adapter plugin (renderPdfOnPhone, below); the safety copy before a JSON
   // restore goes into the app's private folder (safety-snapshots.js).
+  // Step 1.4 C11: the encrypted backup (export, safety copy, restore: local-snapshot.js and
+  // safety-snapshots.js, on localStorage or on the file) and what /api/storage reports.
   const host = checkHost({
     pdf: { render: (html, opts) => renderPdfOnPhone(html, opts) },
-    snapshot: { writeJson: (backup) => writeJsonSnapshot(backup) },
+    snapshot: { writeJson: (backup) => writeJsonSnapshot(backup), writeDatabase: () => writePreRestoreSnapshot() },
     now: () => new Date(),
+    crypto: { encrypt: (bytes, passphrase) => encrypt(bytes, passphrase), decrypt: (bytes, passphrase) => decrypt(bytes, passphrase) },
+    database: { exportBytes: async () => exportSnapshotBytes(), restore: (bytes) => restoreSnapshotBytes(bytes) },
+    storage: { info: () => phoneStorageInfo() },
   });
   // The core reaches the database only through `adapter` and `repo` (step 1.4 B16): no synchronous handle.
   const coreContext = {
@@ -199,13 +208,6 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   const { readPdfQuery, overviewPdfHtml } = overviewPdf.createOverviewPdf({ computeOverview, LEDGER_CRUDS, cashOutRow, CUSTOM_CODE, ledgerIndex });
 
-  function base64ToBytes(base64) {
-    const bin = atob(base64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-
   // Phase 6a follow-up — the print-adapter plugin's native call has no cancel API and, if the hidden
   // WebView it spins up never fires onPageFinished/onLayout, its PluginCall promise simply never
   // settles: no throw, no reject, nothing for a try/catch to catch. Without this, that hang is
@@ -256,76 +258,13 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   backupRoutes.register(localApp, { ...coreContext, CUSTOM_CODE });
 
-  // Storage meter on the Data Backup page (Phase 2, Step 3). See measureStorage() above.
-  localApp.get('/api/storage', (req, res) => { res.json(measureStorage()); });
+  // Storage meter on the Data Backup page (Phase 2, Step 3): core/routes/storage.js (step 1.4 C11),
+  // from phoneStorageInfo() above.
+  storageRoutes.register(localApp, coreContext);
 
-  // ---------------------------------------------------------------------------
-  // Phase 7 — encrypted full-snapshot backup. A different thing from the plain-JSON export/import
-  // above: this is the WHOLE database (every table, users/sessions included), byte-for-byte, the
-  // local-mode equivalent of backup-db.js's VACUUM INTO + backup-crypto.js encryption. The body carries
-  // the encrypted bytes as base64 (this is an in-process call through the fetch shim, not a real HTTP
-  // request, so there's no size pressure that would justify anything fancier than JSON + base64).
-  // ---------------------------------------------------------------------------
-  localApp.post('/api/backup/export-encrypted', async (req, res) => {
-    const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
-    if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
-    if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
-    try {
-      const plain = await exportSnapshotBytes();
-      const enc = await encrypt(plain, passphrase);
-      res.send(enc);
-    } catch (e) {
-      console.error('Encrypted export failed:', e);
-      res.status(500).json({ error: 'Could not build the encrypted backup: ' + e.message });
-    }
-  });
-
-  localApp.post('/api/backup/import-encrypted', async (req, res) => {
-    const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
-    const dataBase64 = typeof req.body.dataBase64 === 'string' ? req.body.dataBase64 : '';
-    if (!passphrase) return res.status(400).json({ error: 'Enter the passphrase this backup was encrypted with.' });
-    if (!dataBase64) return res.status(400).json({ error: 'Choose an encrypted backup file first.' });
-
-    let encBytes;
-    try {
-      const binary = atob(dataBase64);
-      encBytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) encBytes[i] = binary.charCodeAt(i);
-    } catch {
-      return res.status(400).json({ error: 'That file could not be read — choose a Plannr encrypted backup (.db.enc).' });
-    }
-
-    let plain;
-    try {
-      plain = await decrypt(encBytes, passphrase);
-    } catch (e) {
-      return res.status(400).json({ error: e.message });
-    }
-    if (!looksLikeSqlite(plain)) {
-      return res.status(400).json({ error: 'Decryption succeeded but the result does not look like a SQLite database — the file may be corrupt.' });
-    }
-
-    // Phase 2 (Step 4): a whole-database copy of the CURRENT data before the restore replaces it
-    // (safety-snapshots.js; inside the app's private folder, checked with stat). No copy, no restore.
-    let snapshot = null;
-    try {
-      snapshot = await writePreRestoreSnapshot();
-    } catch (e) {
-      console.error('Pre-restore snapshot failed:', e);
-      return res.status(500).json({ error: 'Could not write the safety snapshot, so the restore was not started — your current data is unchanged.' });
-    }
-
-    try {
-      await restoreSnapshotBytes(plain);
-    } catch (e) {
-      console.error('Encrypted import failed:', e);
-      if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
-      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the restore did not go through.') });
-      return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.', snapshot });
-    }
-    res.json({ ok: true, snapshot });
-  });
-
+  // Phase 7 — the encrypted full-snapshot backup (the WHOLE database, byte for byte) is in
+  // core/routes/backup.js since step 1.4 C11, through the host above. The body carries the encrypted
+  // bytes as base64 (an in-process call through the fetch shim, not a real HTTP request).
   // Phase 15 backup-overdue reminder (GET/PUT /api/backup/reminder, POST /api/backup/mark-exported):
   // core/routes/backup-reminder.js (step 1.4 A6). Its clock is host.now().
   backupReminderRoutes.register(localApp, coreContext);

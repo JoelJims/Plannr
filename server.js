@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const { db, init, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter } = require('./db');
-const { encrypt, MIN_PASSPHRASE_LEN } = require('./backup-crypto'); // the encrypted export (also the Ledger List import's safety backup)
+const { encrypt, decrypt } = require('./backup-crypto'); // host.crypto: the encrypted backup (core/routes/backup.js)
 
 // Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
 // upcoming-payment day counts. IST has no DST, so no seasonal complexity.
@@ -157,10 +157,15 @@ function currentUser(req) { return getOwner(); }
 const ledgerIndex = createLedgerIndex(repo);
 // The platform services the core may call (core/host.js, step 1.4 A4): this server's. Both are
 // defined further down: renderOverviewPdf (Playwright) and writeJsonSnapshotBesideDb.
+// Step 1.4 C11: the encrypted backup's crypto and database copy (vacuumSnapshotBytes), and what
+// /api/storage reports. No database.restore yet: the encrypted restore answers 501 here until D1.
 const host = checkHost({
   pdf: { render: (html) => renderOverviewPdf(html) },
   snapshot: { writeJson: async (backup) => writeJsonSnapshotBesideDb(backup) },
   now: () => new Date(),
+  crypto: { encrypt: (bytes, passphrase) => encrypt(bytes, passphrase), decrypt: (bytes, passphrase) => decrypt(bytes, passphrase) },
+  database: { exportBytes: async () => vacuumSnapshotBytes() },
+  storage: { info: async () => desktopStorageInfo() },
 });
 // One request at a time (core/request-queue.js, step 1.4 B5): every /api route is registered through
 // `api`, which runs its handler inside this queue. Pages and static files do not touch the database
@@ -357,13 +362,9 @@ const backupFormat = require('./backup-format');
 // is for the schema tests (app._assertImportOwnershipComplete).
 const assertImportOwnershipComplete = () => backupFormat.assertImportOwnershipComplete(dbAdapter()); // a Promise
 
-// Phase 10b — full encrypted database snapshot, added specifically so the Ledger List CSV import
-// (below) has something real to trigger as its non-negotiable pre-import restore point: server.js
-// never had an encrypted, user-downloadable backup route before (only the plain-JSON ledger export
-// above, and the unattended backup-db.js cron script, which writes to disk rather than the browser).
-// VACUUM INTO a temp file first (safe to run against a live DB — see backup-db.js's own header for
-// why), encrypt it, delete the temp file, return the bytes directly — same contract as local-api.js's
-// export-encrypted, so the client-side code that calls this works identically under either backend.
+// Phase 10b — the whole database for the encrypted backup (this server's host.database.exportBytes;
+// the route is core/routes/backup.js since step 1.4 C11). VACUUM INTO a temp file first (safe to run
+// against a live DB — see backup-db.js's own header for why), read it, delete the temp file.
 function vacuumSnapshotBytes() {
   const tmp = path.join(os.tmpdir(), `plannr-ledger-backup-${process.pid}-${crypto.randomBytes(6).toString('hex')}.db`);
   let handle;
@@ -383,42 +384,23 @@ function vacuumSnapshotBytes() {
     for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + s); } catch { /* ignore */ } }
   }
 }
-api.post('/api/backup/export-encrypted', requireApiAuth, async (req, res) => {
-  const passphrase = typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
-  if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
-  if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
-  try {
-    const plain = vacuumSnapshotBytes();
-    const enc = await encrypt(plain, passphrase); // a Buffer (backup-crypto.js -> core/backup-crypto.js)
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.send(enc);
-  } catch (e) {
-    if (!IS_PROD) console.error('Encrypted export failed:', e);
-    res.status(500).json({ error: 'Could not build the encrypted backup: ' + e.message });
-  }
-});
-
-// public/local-api.js has a real POST /api/backup/import-encrypted (Phase 7) — swapping the live
-// SQLite file out from under an in-memory browser DB is straightforward there. Doing the same under
-// server.js means safely closing/replacing/reopening a live node:sqlite handle shared by every route
-// above, which is real design work, not a one-line port. Until that's built, the shared data-backup.html
-// button must fail with a clear, specific message instead of Express's raw 404 (which the client's
-// res.json().catch(() => ({})) swallows into a generic, misleading "Restore failed" — see Phase 11 audit).
-api.post('/api/backup/import-encrypted', requireApiAuth, (req, res) => {
-  res.status(501).json({ error: 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.' });
-});
+// The encrypted backup routes are core/routes/backup.js (step 1.4 C11). This server supplies no
+// database.restore yet, so POST /api/backup/import-encrypted answers 501 with a clear message (not
+// Express's raw 404, which the page would swallow into a misleading "Restore failed"). Replacing the
+// live node:sqlite file is step 1.4 D1.
 
 // Phase 15 backup-overdue reminder (GET/PUT /api/backup/reminder, POST /api/backup/mark-exported):
 // core/routes/backup-reminder.js (step 1.4 A6). Its clock is host.now().
 require('./core/routes/backup-reminder.js').register(api, coreContext);
 
-// Storage meter on the Data Backup page (Phase 2, Step 3). The phone answers this from its app
-// storage limit (public/local-api.js measureStorage()); a desktop database file has no such limit.
-api.get('/api/storage', requireApiAuth, (req, res) => {
+// Storage meter on the Data Backup page (Phase 2, Step 3): core/routes/storage.js (step 1.4 C11).
+// This server's host.storage.info: a desktop database file, with no app storage limit.
+function desktopStorageInfo() {
   let databaseBytes = null;
   try { databaseBytes = fs.statSync(DB_PATH).size; } catch { /* reported as unknown */ }
-  res.json({ mode: 'desktop', databaseBytes, usedBytes: null, limitBytes: null, fraction: null, level: 'ok' });
-});
+  return { kind: 'desktop', databaseBytes };
+}
+require('./core/routes/storage.js').register(api, coreContext);
 
 // This server's snapshot.writeJson (core/host.js, step 1.4 A4): the safety copy before a JSON
 // restore goes in a file beside the DB, and the answer reports its path relative to the project.

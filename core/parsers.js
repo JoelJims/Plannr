@@ -58,6 +58,15 @@ export function parseLedgerFilters(req) {
   return { filters, active };
 }
 
+// Base64 text -> bytes (an encrypted backup sent to the restore route; the phone's PDF). Throws on
+// text that is not base64.
+export function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 // paise -> "₹12,34,567.89" (Indian grouping; exact integer math). The backends' twin of the
 // pages' formatPaise, used in messages and the PDF.
 export function fmtRs(paise) {

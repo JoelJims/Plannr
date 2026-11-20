@@ -136,6 +136,25 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       check('after a reload the save is still there (it reached the file)', (await storageOf(page)).use === 'native' && (await reasons(page)).includes('B: in the file'));
       const refused = await page.evaluate(async () => { try { (await import('/db.js')).useAdapter({}); return 'accepted'; } catch (e) { return e.message; } });
       check('useAdapter() after ready() is refused', /before ready\(\)/.test(refused), refused);
+
+      // Step 1.4 C11: /api/storage on the file, the meter's texts, and "Storage is full" on the file.
+      const st = await api(page, 'GET', '/api/storage');
+      const sizes = await page.evaluate((m) => ({ file: window.__plannrFakeFs.getFile(m).length, old: Object.keys(localStorage).filter((k) => k.startsWith('kvvfs-local')).reduce((n, k) => n + k.length + localStorage.getItem(k).length, 0) * 2 }), MAIN);
+      check('/api/storage on the file: its size, the old copy counted, the free space, against 25 MB', st.status === 200 && st.json.kind === 'file' && st.json.databaseBytes === sizes.file && sizes.old > 0 && st.json.backupBytes === sizes.file + sizes.old && st.json.backupLimitBytes === 25 * 1048576 && st.json.freeBytes === 8e9 && st.json.level === 'ok' && st.json.freeLow === false, JSON.stringify({ ...st.json, sizes }));
+      await page.waitForFunction(() => !/Checking/.test(document.getElementById('storageText').textContent)).catch(() => {});
+      const meter = await page.evaluate(() => ({ text: document.getElementById('storageText').textContent, msg: document.getElementById('storageMsg').textContent, label: document.getElementById('storageBar').getAttribute('aria-label'), hidden: document.getElementById('storageBar').hidden }));
+      check('the meter on the file: the file, the old copy, the Google backup estimate against 25 MB', /^Your data file is (?:under )?[\d.]+ MB\. With the old copy \((?:under )?[\d.]+ MB\), Android's Google backup of Plannr is about (?:under )?[\d.]+ MB of the 25 MB it allows \(\d+%\)\.$/.test(meter.text) && meter.msg === '' && meter.label === 'Google backup size' && !meter.hidden, JSON.stringify(meter));
+      await page.evaluate(() => sessionStorage.setItem('fakefs-free', String(50 * 1048576)));
+      await open(page);
+      await page.waitForFunction(() => /free/.test(document.getElementById('storageMsg').textContent)).catch(() => {});
+      const low = await page.evaluate(() => document.getElementById('storageMsg').textContent);
+      await page.evaluate(() => sessionStorage.removeItem('fakefs-free'));
+      check('low free space on the phone is said, with what to do', low === 'This phone has only 50 MB free. New entries cannot be saved once the phone is full: free up space on the phone.', low);
+      await page.evaluate(() => sessionStorage.setItem('fakefs-full', '1'));
+      const full = await addCashIn(page, 'D: the phone is full');
+      await page.evaluate(() => sessionStorage.removeItem('fakefs-full'));
+      check('"Storage is full" on the file says the phone is out of space', full.status === 500 && /^Storage is full — this change was not saved\. Your saved data is safe\. This phone is out of space: free up space on the phone/.test((full.json && full.json.error) || ''), JSON.stringify(full.json));
+      check('…and nothing was saved', !(await reasons(page)).includes('D: the phone is full') && !(await fileReasons(page)).includes('D: the phone is full'));
       enc = await exportEncrypted(page);
       check('an encrypted backup can be made from the file', Array.isArray(enc) && enc.length > 100);
       await addCashIn(page, 'C: after the backup');

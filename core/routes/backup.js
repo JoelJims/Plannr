@@ -11,11 +11,21 @@
 //     transaction, keeping ids and foreign keys. Nothing is deleted before the new data is proven
 //     valid, and any error rolls back.
 //
-// The encrypted whole-database backup is a different thing. It stays with each platform until the
-// database adapter can export and replace its own bytes (docs/step-1.4-storage-plan.md §4, stage B).
+//
+// The encrypted whole-database backup (Phase 7; here since step 1.4 C11, plan §4):
+//   - POST /api/backup/export-encrypted: the passphrase checked, the whole database
+//     (host.database.exportBytes) encrypted (host.crypto.encrypt, PLBK version 1).
+//   - POST /api/backup/import-encrypted: decrypt, check it is a SQLite file, save a whole-database
+//     safety copy (host.snapshot.writeDatabase), replace (host.database.restore), refresh the
+//     category list. No safety copy, no restore. A platform without database.restore (the dev
+//     server until D1) answers 501 with a message that says what to do instead.
 
 import * as backupFormat from '../../backup-format.js';
-import { parseIsoDate } from '../parsers.js';
+import { parseIsoDate, base64ToBytes } from '../parsers.js';
+import { MIN_PASSPHRASE_LEN, looksLikeSqlite } from '../backup-crypto.js';
+import { hostService } from '../host.js';
+
+export const RESTORE_UNAVAILABLE = 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.';
 
 export function register(app, ctx) {
   const { auth, adapter, atStart, host, logError, isStorageFullError, storageFull, ledgerIndex, CUSTOM_CODE } = ctx;
@@ -61,5 +71,68 @@ export function register(app, ctx) {
     await ledgerIndex.refresh(); // a v2 backup may have brought its own categories
 
     res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
+  });
+
+  app.post('/api/backup/export-encrypted', auth, async (req, res) => {
+    const passphrase = req.body && typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
+    if (!passphrase) return res.status(400).json({ error: 'Enter a passphrase to encrypt this backup.' });
+    if ([...passphrase].length < MIN_PASSPHRASE_LEN) return res.status(400).json({ error: `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.` });
+    try {
+      const plain = await host.database.exportBytes();
+      const enc = await host.crypto.encrypt(plain, passphrase);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.send(enc);
+    } catch (e) {
+      logError('Encrypted export failed:', e);
+      res.status(500).json({ error: 'Could not build the encrypted backup: ' + e.message });
+    }
+  });
+
+  app.post('/api/backup/import-encrypted', auth, async (req, res) => {
+    const restore = hostService(host, 'database.restore');
+    if (!restore) return res.status(501).json({ error: RESTORE_UNAVAILABLE });
+    const passphrase = req.body && typeof req.body.passphrase === 'string' ? req.body.passphrase : '';
+    const dataBase64 = req.body && typeof req.body.dataBase64 === 'string' ? req.body.dataBase64 : '';
+    if (!passphrase) return res.status(400).json({ error: 'Enter the passphrase this backup was encrypted with.' });
+    if (!dataBase64) return res.status(400).json({ error: 'Choose an encrypted backup file first.' });
+
+    let encBytes;
+    try {
+      encBytes = base64ToBytes(dataBase64);
+    } catch {
+      return res.status(400).json({ error: 'That file could not be read — choose a Plannr encrypted backup (.db.enc).' });
+    }
+
+    // 1. Decrypt and check: refuse before changing anything.
+    let plain;
+    try {
+      plain = await host.crypto.decrypt(encBytes, passphrase);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (!looksLikeSqlite(plain)) {
+      return res.status(400).json({ error: 'Decryption succeeded but the result does not look like a SQLite database — the file may be corrupt.' });
+    }
+
+    // 2. A whole-database copy of the current data first. No copy, no restore.
+    let snapshot = null;
+    try {
+      snapshot = await host.snapshot.writeDatabase();
+    } catch (e) {
+      logError('Pre-restore snapshot failed:', e);
+      return res.status(500).json({ error: 'Could not write the safety snapshot, so the restore was not started — your current data is unchanged.' });
+    }
+
+    // 3. Replace (checked before anything is replaced; a newer backup is refused unchanged).
+    try {
+      await restore(plain);
+    } catch (e) {
+      logError('Encrypted import failed:', e);
+      if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
+      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the restore did not go through.') });
+      return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.', snapshot });
+    }
+    await ledgerIndex.refresh(); // the restored database has its own categories
+    res.json({ ok: true, snapshot });
   });
 }

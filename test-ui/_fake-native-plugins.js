@@ -8,7 +8,8 @@
 // opened as an in-memory sqlite-wasm database (the app's own engine, db-engine.js) and written back to
 // its "file" after every statement that ends outside a transaction, so a reload in the middle of a
 // transaction loses it, as a killed app would. VACUUM INTO <path> is answered by writing the image to
-// that path. The free space comes from sessionStorage "fakefs-free" (default 8 GB).
+// that path. The free space comes from sessionStorage "fakefs-free" (default 8 GB); while
+// sessionStorage "fakefs-full" is "1", every INSERT, UPDATE and DELETE fails as on a full phone.
 // Behaves as the C1 spike measured the real plugin: run() refuses a statement that returns rows, and
 // reports changes as the total_changes() difference; execute() is refused.
 (() => {
@@ -134,6 +135,7 @@
       const c = conn('Run', database, readonly);
       const into = /^\s*VACUUM\s+INTO\s+'((?:[^']|'')*)'\s*;?\s*$/i.exec(statement);
       if (into) { putFile(norm(into[1].replace(/''/g, "'")), sqlite3.capi.sqlite3_js_db_export(c.db.pointer)); return { changes: { changes: 0, lastId: 0 } }; }
+      if (ss.getItem('fakefs-full') === '1' && /^\s*(?:INSERT|UPDATE|DELETE)\b/i.test(statement)) throw new Error('Run: database or disk is full (code 13 SQLITE_FULL)');
       let st;
       try {
         st = c.db.prepare(statement);

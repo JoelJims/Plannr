@@ -1648,6 +1648,8 @@ export function rollbackQuietly(dbh = db) {
 
 export function isStorageFullError(err) {
   const code = err && (err.errcode ?? err.resultCode);
-  if (typeof code === 'number' && (code & 0xff) === 10) return true;
-  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error/i.test(err.message));
+  // 10 = SQLITE_IOERR (kvvfs: localStorage over its limit); 13 = SQLITE_FULL (a database file on a
+  // full disk: the phone after the move, step 1.4 C11, and the desktop).
+  if (typeof code === 'number' && ((code & 0xff) === 10 || (code & 0xff) === 13)) return true;
+  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error|SQLITE_FULL|database or disk is full/i.test(err.message));
 }

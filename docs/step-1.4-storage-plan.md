@@ -1423,3 +1423,44 @@ choices made on the way are in the session report's DECISIONS list.
     seed-demo without its own file; a case-sensitive path check), each caught.
   - Full suite: node 624 tests (621 pass, 3 skipped); phone pass 203 of 220, the 17 known
     differences and nothing new; every UI suite and `test:slow` pass.
+- **C11 (2026-11-20): the encrypted backup and `/api/storage` in the core (plan §3.2, §4).**
+  - **`core/routes/storage.js` (new):** one answer for the three kinds of storage,
+    `{ mode, kind, databaseBytes, usedBytes, limitBytes, backupBytes, backupLimitBytes, freeBytes,
+    fraction, level, freeLow }`, from each platform's `host.storage.info()`.
+    - `localstorage` (the phone before the move, the browser preview): as since Phase 2 Step 3,
+      used against the limit, warning from 70%, strongly from 90%.
+    - `file` (the phone after the move): the real file size (with its journal), and Android's Google
+      backup estimate (the file, plus the old copy while it is kept) against 25 MB, warning from
+      20 MB and strongly from 23 MB (decision D5); under 100 MB free is said too.
+    - `desktop`: the file size, no limit.
+  - **The encrypted backup routes are in `core/routes/backup.js`.** The passphrase rules, the
+    decrypt-and-check, the whole-database safety copy (no copy, no restore), the replace and every
+    failure's answer are one copy for both platforms. Each platform supplies `host.crypto`
+    (`encrypt`, `decrypt`: scrypt-js on the phone, `node:crypto` on desktop) and
+    `host.database.exportBytes`. Only the phone supplies `database.restore` and
+    `snapshot.writeDatabase` (optional services in `core/host.js`, given together); without them
+    the route answers 501 with the same message as before (decision 25; D1 adds them on desktop).
+    The restore now refreshes the category list afterwards, as the JSON import does (decision 26).
+    One base64 decoder, `base64ToBytes` in `core/parsers.js`, serves the restore and the phone's PDF.
+  - **"Storage is full" for each kind:** `isStorageFullError` also recognises SQLITE_FULL (code 13,
+    "database or disk is full"), the error a full disk gives a database file (decision 24). On the
+    phone's file the message says the phone is out of space; on localStorage it keeps its advice
+    (export a backup, then empty the Recycle Bin).
+  - **The Data Backup page on the file:** "Your data file is <n> MB. With the old copy (<n> MB),
+    Android's Google backup of Plannr is about <n> MB of the 25 MB it allows (<n>%)." The meter is
+    that estimate; near the limit it says what to do (delete the old copy, empty the Recycle Bin, keep
+    saving encrypted backups), and it says when the phone has little free space (decision 27).
+  - **Tests:** `test/storage-route.test.js` (new, 5: the three kinds and every threshold, the route
+    and its failure, both platforms registering it); `test/backup-encrypted-route.test.js` (new, 7,
+    on a stand-in host: the passphrase rules, what is refused before anything changes, the order,
+    no safety copy no restore, each failure's answer, the 501 before anything is read);
+    `test/core-host.test.js` (+2 and updated: the new services, the optional pair, each platform's
+    host); `test/storage.test.js` (SQLITE_FULL; the desktop answer's kind; the desktop 501, express
+    only); `test/backup-routes.test.js` (the core registers four backup routes now); `test-ui/storage-startup.js` (+5 checks on the file: `/api/storage`, the meter's text, low
+    free space, "Storage is full" saying the phone is full and nothing saved). The stand-in plugin
+    can now act as a full phone (`fakefs-full`).
+    **Known positives:** 16 mutations, each caught.
+  - Full suite: node 644 tests (641 pass, 3 skipped); phone pass 204 of 221, the 17 known
+    differences and nothing new; every UI suite and `test:slow` pass. One static-hosting check
+    failed once (the browser's "wasm streaming compile failed: Failed to fetch" on one page, then
+    its own fallback); the suite passed 3 times out of 3 when run again (noted for the review).

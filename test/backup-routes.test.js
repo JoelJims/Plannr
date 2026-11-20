@@ -66,9 +66,10 @@ async function coreApp({ writeJson }) {
   return { routes, call, logged };
 }
 
-test('core: registers exactly the JSON export and import, each behind auth', async () => {
+test('core: registers exactly the JSON and the encrypted export and import, each behind auth', async () => {
   const { routes } = await coreApp({ writeJson: async () => 'x' });
-  assert.deepStrictEqual(Object.keys(routes).sort(), ['GET /api/backup/export', 'POST /api/backup/import']);
+  // The encrypted two since step 1.4 C11 (test/backup-encrypted-route.test.js).
+  assert.deepStrictEqual(Object.keys(routes).sort(), ['GET /api/backup/export', 'POST /api/backup/export-encrypted', 'POST /api/backup/import', 'POST /api/backup/import-encrypted']);
 });
 
 test('core: a file that fails the checks is refused before the safety copy is made', async () => {

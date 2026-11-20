@@ -406,6 +406,31 @@
         const fill = document.getElementById('storageFill');
         const box = document.getElementById('storageMsg');
         section.hidden = false;
+        // Step 1.4 C11: after the move the data is in its own file, which grows with the phone's free
+        // space. What can run out is Android's Google backup, which skips Plannr over 25 MB: the meter
+        // shows its estimate (the file, plus the old copy while it is kept), and low free space.
+        if (s.kind === 'file') {
+          const pct = Math.min(100, Math.round(s.fraction * 100));
+          const oldCopy = Math.max(0, s.backupBytes - s.databaseBytes);
+          const limit = mb(s.backupLimitBytes);
+          text.textContent = `Your data file is ${mb(s.databaseBytes)} MB. `
+            + (oldCopy > 0 ? `With the old copy (${mb(oldCopy)} MB), Android's Google backup of Plannr is about ${mb(s.backupBytes)} MB` : `Android's Google backup of Plannr is about ${mb(s.backupBytes)} MB`)
+            + ` of the ${limit} MB it allows (${pct}%).`;
+          bar.hidden = false;
+          bar.setAttribute('aria-label', 'Google backup size');
+          bar.setAttribute('aria-valuenow', String(pct));
+          bar.setAttribute('aria-valuetext', `${pct}% of the Google backup limit`);
+          fill.style.width = pct + '%';
+          fill.className = 'st-fill ' + s.level;
+          const todo = (oldCopy > 0 ? 'Delete the old copy below if you no longer need it, ' : '') + 'permanently delete items you no longer need from the Recycle Bin, and keep saving encrypted backups.';
+          const lines = [];
+          if (s.level === 'critical') lines.push(`Your data is close to the ${limit} MB that Android's Google backup allows (${pct}%). Plannr keeps saving, but over it Android stops backing Plannr up. ${todo[0].toUpperCase()}${todo.slice(1)}`);
+          else if (s.level === 'warning') lines.push(`Your data is getting near the ${limit} MB that Android's Google backup allows (${pct}%). ${todo[0].toUpperCase()}${todo.slice(1)}`);
+          if (s.freeLow) lines.push(`This phone has only ${mb(s.freeBytes)} MB free. New entries cannot be saved once the phone is full: free up space on the phone.`);
+          box.className = lines.length ? 'msg show error' + (s.level === 'critical' ? ' st-critical' : '') : 'msg';
+          box.textContent = lines.join(' ');
+          return;
+        }
         if (s.mode !== 'phone' || !s.limitBytes) {
           document.getElementById('storageTag').textContent = 'Desktop';
           text.textContent = s.databaseBytes != null
