@@ -1,8 +1,9 @@
 # Step 1.4: storage plan
 
-Status: **plan only, nothing built.** Written 2026-11-16. No code starts until the owner says OK.
-Nothing in this plan moves the owner's real data. That needs a separate OK, after the real-phone
-check in §5.4 passes.
+Status: **stages A–C built and checked on the `plannr-test` emulator (2026-11-20); stage D next.**
+Written 2026-11-16; the owner said OK to build it. The work log is §8. Nothing in this plan moves
+the owner's real data. That needs a separate OK, after the real-phone check in §5.4 passes
+(`docs/PHONE-TEST-CHECKLIST.md`, check 9).
 
 ## 0. How this fits the main plan
 
@@ -1609,4 +1610,25 @@ choices made on the way are in the session report's DECISIONS list.
     save is in the file when it answers. In run 2 the kill also took the save made a second before
     it, which the next check needed; the script now waits 8 s after that save and checks "every row"
     and "with the save" separately (decision 34), and E6 was run again in full.
+  - Documents only: the code is that of 0539d5e, whose full suite passed (decision 32).
+- **C16 (2026-11-20): the checklist and this plan (doc review).**
+  - `docs/PHONE-TEST-CHECKLIST.md`:
+    - the automated part lists check S;
+    - check 1: where the data is after the move, and what to look for;
+    - check 2: the meter after the move (the Google backup estimate, warning from 20 MB, strongly
+      from 23 MB, low free space under 100 MB);
+    - check 6: the safety snapshots no longer come back (decision D2); after the move, the file,
+      the marker and the old copy do;
+    - **new check 9, the storage move:** what to check with test data, then **"Moving your real
+      data"** in six steps: back up first (both backups off the phone, the encrypted one opened on
+      the PC with `decrypt-db.js` into a temporary file), install over it and never uninstall, check
+      before moving, move, verify, and keep the old copy at least a week before deleting it, after a
+      new encrypted backup;
+    - the known limit: measured again in E3; after the move it no longer applies;
+    - the results of E1–E6 and of `phone-test.ps1` on the emulator, what still needs the real phone,
+      and rows S and 9 in the owner's table.
+  - Every on-screen text the checklist quotes was checked against the code (`public/storage-move-ui.js`,
+    `core/storage-check.js`, `core/routes/storage.js`, `scripts/phone-test.ps1`).
+  - This plan's status line: stages A–C built and checked on the emulator; stage D next; the real
+    data still needs a separate OK.
   - Documents only: the code is that of 0539d5e, whose full suite passed (decision 32).

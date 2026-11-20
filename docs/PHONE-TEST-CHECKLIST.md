@@ -73,8 +73,9 @@ does not prove a particular phone maker's WebView or a real Google Drive backup;
 
 ### The automated part: `scripts/phone-test.ps1`
 
-Checks 0, 1, 2 (the meter), 3 (the JSON backup's share sheet), 4 (airplane mode, the PDF's share
-sheet) and 8 (a share sheet left open 25 seconds) run on their own over adb:
+Checks 0, 1, S (which storage is in use: step 1.4), 2 (the meter), 3 (the JSON backup's share
+sheet), 4 (airplane mode, the PDF's share sheet) and 8 (a share sheet left open 25 seconds) run on
+their own over adb:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\phone-test.ps1
@@ -119,9 +120,24 @@ adb shell run-as com.plannr.app du -sh app_webview "app_webview/Default/Local St
       is anywhere else, the rules must change.
 - [ ] Note the sizes.
 
+After the storage move (check 9), the data is in its own file, and a small marker file says so:
+
+```sh
+adb shell run-as com.plannr.app ls -la databases files
+adb shell run-as com.plannr.app cat files/plannr-storage.json
+```
+
+- [ ] `databases/plannrSQLite.db` is there, and no `plannr-movingSQLite.db` (a move's unfinished
+      copy). The marker says `"storage":"native-v1"`, with the date of the move and whether the old
+      copy is kept. `phone-test.ps1` check S reads the same, and changes nothing.
+
 ## 2. Storage meter, and the real limit ⚠ (fills storage — test install only)
 
-1. Data Backup page: note the storage line ("… of about 10 MB") and the bar.
+1. Data Backup page: note the storage line and the bar. Before the move it is the WebView's storage
+   ("Used … MB of about 10 MB (…%)"). After the move (check 9) the file has no such limit; the line
+   is Android's Google backup estimate instead: "Your data file is … MB. With the old copy (… MB),
+   Android's Google backup of Plannr is about … MB of the 25 MB it allows (…%)." It warns from
+   20 MB, strongly from 23 MB, and says so when the phone has under 100 MB free.
 2. On a **fresh test install with no real data**, measure the real limit. Connect the phone, open
    `chrome://inspect` in desktop Chrome, inspect the Plannr WebView, and run in its console:
 
@@ -224,7 +240,11 @@ adb install android/app/build/outputs/apk/debug/Plannr-debug.apk
 - [ ] After reinstalling, Plannr opens with the data restored (Android restores the backup during
       the install). If it does not, check that the reinstalled APK is the same kind of build
       (debug/release) as the one backed up.
-- [ ] The safety snapshots came back too (`run-as … ls files/safety-snapshots`).
+- [ ] The safety snapshots did **not** come back (`run-as … ls files/safety-snapshots` finds
+      nothing). Since step 1.4 they stay on the phone and are left out of Auto Backup (decision D2);
+      the data itself is not affected.
+- [ ] After the storage move (check 9): `databases/plannrSQLite.db`, `files/plannr-storage.json`
+      and, while it is kept, the old copy come back, and Plannr opens on the file with everything.
 
 If the data does not come back, restore the exported backup on the Data Backup page.
 
@@ -251,6 +271,65 @@ automated tests). Two things to look at:
 - [ ] **Restores still fit.** Restores now have a 20 MB limit (the app's whole storage is about
       10 MB, so a real backup is far below it). In check 3, note the encrypted file's size; the
       encrypted restore must still work.
+
+## 9. The storage move (step 1.4) ⚠ test data first
+
+From step 1.4, the Data Backup page has a section **Where your data is kept**. It moves Plannr's
+data out of the WebView's storage (full at about 2.8 MB of data) into a database file of its own on
+the phone. The move starts with an encrypted backup that you save and confirm, then a safety copy
+on the phone. It copies the data, checks every table against the original, and switches only if
+all of it matches. The old copy stays until you delete it, and **Move data back** returns to it.
+
+**On a test install, with test data only** (the emulator ran all of this: results below):
+
+1. Install the build over the previous version, as in check 5, so that the data is still there.
+2. Data Backup → **Where your data is kept**: type a passphrase twice, tap **Move to the new
+   storage**. Save the encrypted backup where you choose (off the phone), check that it is there,
+   then tap **I have the backup — continue**. Plannr reopens.
+- [ ] The section says "Your data is in its own file on this phone since <date>. All <n> tables
+      match (<n> rows)." and "Old copy kept (from <date>, <n> MB). Nothing deletes it unless you do."
+- [ ] Every total on the Overview is the same as before.
+- [ ] The meter shows the Google backup estimate (check 2), and check 1's files are there.
+- [ ] `phone-test.ps1 -AllowExisting`: check S passes ("the database file since …, checked … rows in … tables; old copy kept").
+- [ ] Add an entry, close Plannr (swipe it away), open it: the entry is there.
+- [ ] **Move data back**: Plannr reopens on the old storage, everything there; the section says
+      "Your data was moved back to the old storage on <date>. The database file is kept." Then move
+      again.
+- [ ] **Delete the old copy** asks for an encrypted backup saved after the move first; after one, it
+      asks to confirm, deletes it, and the meter no longer counts an old copy.
+- [ ] If Plannr is closed during the move (swipe it away while "Moving your data…" shows), it
+      reopens on the old storage with everything, and offers **Continue** or **Not now**.
+
+**Moving your real data** comes only after the test above passes on your phone, and after you say
+OK. Do it in this order, and do not skip a step:
+
+1. **Back up first, in the app you have now.** Data Backup → **Download encrypted backup** and
+   **Download JSON backup**. Save both off the phone (on the PC, or in Drive), then check on the PC
+   that the encrypted one opens. In PowerShell, in the Plannr folder:
+
+   ```powershell
+   $env:PLANNR_BACKUP_PASSPHRASE = Read-Host 'Passphrase'
+   node decrypt-db.js <the .db.enc file> $env:TEMP\plannr-check.db
+   Remove-Item Env:PLANNR_BACKUP_PASSPHRASE
+   ```
+
+   It prints the sizes and writes a readable copy; it refuses to write over `data/plannr.db`. Delete
+   `plannr-check.db` afterwards (it is your data, unencrypted). Note the totals on the Overview (or
+   take a screenshot).
+2. **Install over it, never uninstall.** `adb install -r <the new APK>`. Uninstalling deletes the
+   data. If Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, stop: the phone has a build signed
+   with another key.
+3. **Check before moving.** Plannr opens with all your data, still in the old storage (the section
+   offers **Move to the new storage**); the totals are the same as in step 1.
+4. **Move.** As in the test: passphrase twice, save the step-1 backup off the phone, check it is
+   there, confirm. Wait until Plannr reopens.
+5. **Verify.** The section says all tables match; the totals are the same as in step 1; check S
+   passes (`phone-test.ps1 -AllowExisting`, read only).
+6. **Keep the old copy** for at least a week of normal use. Only then: save a new encrypted backup
+   off the phone, and only after that tap **Delete the old copy**.
+
+If anything looks wrong at step 3 or 5, stop and do not delete anything: the old copy and both
+backups from step 1 are still there, and **Move data back** returns to the old storage.
 
 ## Results
 
@@ -283,7 +362,10 @@ automated tests). Two things to look at:
   25 s, then closed, for the JSON backup, the encrypted backup and the PDF).
 
 **Known limit (measured):** a save made less than about a second before Android kills the app can be
-lost; the database stays consistent (`docs/storage-proposal.md`).
+lost; the database stays consistent (`docs/storage-proposal.md`). Measured again on 2026-11-20 (E3
+below): the WebView writes `localStorage` to disk a few seconds late, so a kill can lose the last few
+seconds of saves. **After the storage move (check 9) this no longer applies:** a save is in the
+database file when it answers.
 
 ### Emulator, 2026-11-15 evening: debug build from `2d5fda8` (steps 1.3a–c)
 
@@ -318,6 +400,30 @@ screenshots show the share sheet opened in airplane mode and closed with BACK, t
 shared…". Airplane mode was back off afterwards. A second run with `-AllowExisting -SkipAirplane`
 installed nothing and passed too.
 
+### Emulator, 2026-11-20: debug build from `5736195` (step 1.4, the storage move)
+
+The `plannr-test` emulator (Android 16, Google APIs image), test data only. Each run starts clean:
+the build your phone has now (`9d7fd97`, a byte-identical copy of `7dc29db3…a2ef`) with test data,
+then this build over it with `adb install -r`, as on the phone. The share sheet of the step-1
+backup was answered inside the page; choosing where the file goes is checked by hand on the phone.
+Details: `docs/step-1.4-storage-plan.md` §5.3.
+
+| Run | What | Result | Numbers / notes |
+|---|---|---|---|
+| E1 | Update, then the move (1,000 typical entries) | Pass (13) | Every row kept by the update, on `localStorage`. Encrypted backup 2.9 s, move 1.6 s; marker `native-v1`, 1,229 rows checked; every table matches; a save goes to the file. Meter: "Your data file is 0.4 MB. With the old copy (0.9 MB)… about 1.4 MB of the 25 MB it allows (6%)." |
+| E2 | Near the old limit (12,800 entries, `localStorage` 95.9% full) | Pass (13) | Backup 4.3 s, move 7.7 s, file 2.2 MB, every table matches. Meter: "…about 9.9 MB of the 25 MB it allows (40%)." |
+| E3 | Killed inside each of the move's 11 steps | Pass (96) | Killed before the marker: reopens on `localStorage`, every row, no move file left; "Continue" finishes in 2.8–5.4 s, "Not now" keeps working. Killed after it: on the file, every row. |
+| E4 | Low space | Pass (15) | 12 MB free: refused before the backup ("needs about 21 MB free… has 7 MB"), nothing changed. 60 MB free: the low-space warning. Phone full: a save says the phone is out of space and saves nothing; saving works again once space is freed; `integrity_check` ok. |
+| E5 | Auto Backup after the move (`bmgr backupnow`, uninstall, install) | Pass | Included files 0.44 MB; Android's backup 477,184 bytes (25 MB allowed). Restored on install: the database file, the marker and the old copy (41 pages); the safety snapshots are not (decision D2). Opens on the file, every row; a save works. Transport put back to Google's. |
+| E6 | Move back, move again, delete the old copy | Pass (27) | Moved back: on `localStorage`, every row, the file kept, the page says so; a save works. Moved again: every row, the save included. Deleting the old copy is refused until an encrypted backup is saved after the move; then it is deleted, and the estimate is the file alone (0.3 MB, 1%). A save then a kill at once: lost on `localStorage` in 2 of 3 runs, kept on the file in 3 of 3. |
+
+`scripts/phone-test.ps1` (check S added): after the move, S, 1, 2, 3, 4 (offline home and PDF) and 8
+pass; on a fresh install S says "localStorage (not moved yet)" and passes; with the marker made
+unreadable S fails (proof), and the marker was put back byte for byte.
+
+**Still needs the real phone (step 1.4):** check 9 with test data, then the real data with the
+steps in "Moving your real data", after checks 0, 2, 3, 5 and 6 pass on this build.
+
 ### The owner's phone: debug build from `9d7fd97` (SHA-256 `7dc29db3…a2ef`)
 
 Not yet run. At least checks 0, 2, 3, 5 and 6 must pass here before the real data moves. Test
@@ -336,3 +442,5 @@ Date tested:
 | 6 | Auto Backup (`bmgr backupnow`, uninstall, reinstall) | | |
 | 7 | Without INTERNET | skipped | the permission stays (decision, 2026-11-15) |
 | 8 | This build's changes (PDF total row, restores still fit) | | |
+| S | Storage check (`phone-test.ps1`): which storage, file sizes | | |
+| 9 | The storage move, test data (then real data, its own steps) | | |
