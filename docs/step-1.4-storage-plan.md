@@ -1583,3 +1583,30 @@ choices made on the way are in the session report's DECISIONS list.
       freed, saving worked again, and after a restart `PRAGMA integrity_check` said `ok`. This is
       the real disk-full error on a real file, the one decision 24 relies on.
   - Documents only: the code is that of 0539d5e, whose full suite passed (decision 32).
+- **C15, part 2 (2026-11-20): emulator E5 (Auto Backup) and E6 (the way back) (plan §5.3).**
+  - **On the `plannr-test` emulator only, with test data only**, each run starting as in part 1
+    (the 9d7fd97 build with test data, then the new build over it with `adb install -r`).
+  - **E5, Auto Backup after the move (all pass).** After the move, a safety snapshot
+    (`plannr-pre-move-….db.gz`) was on the phone before the step-1 backup. The files the rules include
+    came to 0.44 MB. With the emulator's local backup transport, `bmgr backupnow` backed Plannr up:
+    477,184 bytes, against Android's 25 MB. After `adb uninstall` and `adb install`, Android restored
+    the database file and the marker; the safety snapshots were not restored (decision D2). The app
+    opened on the file with every row as before the backup, the old copy came back too (41 pages, as
+    before), and a save went through. The transport was put back to Google's afterwards. (The app is
+    started, not force-stopped, before `backupnow`: Android refuses to back up a stopped app.)
+  - **E6, the way back (27 checks, all pass).** From the Data Backup page: moved to the file; then
+    **Move back**: the app reopened on `localStorage` with every row, the marker says
+    `localstorage-v1` with the time, the database file is kept, the page says "Your data was moved
+    back to the old storage on 20 Nov 2026. The database file is kept.", and a save went to
+    `localStorage`. **Move** again: on the file, every row, the save made after moving back
+    included, the old copy kept. **Delete the old copy** was refused until an encrypted backup was
+    saved after the move ("Save an encrypted backup first: none has been saved since the move on
+    20 Nov 2026."), and the old copy stayed; after one was saved, it deleted it ("The old copy was
+    deleted (0.4 MB freed).", no `localStorage` copy left, the marker records the time), and the
+    Google backup estimate became the file alone (0.3 MB, 1%). Reopened: on the file, every row.
+  - **Measured in E6: a save, then the app killed at once.** On `localStorage` the save was lost in 2
+    of 3 runs (the WebView's delayed write, found in E3); on the file it was kept in 3 of 3, because a
+    save is in the file when it answers. In run 2 the kill also took the save made a second before
+    it, which the next check needed; the script now waits 8 s after that save and checks "every row"
+    and "with the save" separately (decision 34), and E6 was run again in full.
+  - Documents only: the code is that of 0539d5e, whose full suite passed (decision 32).
