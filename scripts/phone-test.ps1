@@ -130,18 +130,25 @@ $ScreenSize = @(1080, 2400)
 if ((Invoke-Shell 'wm size') -match '(\d+)x(\d+)\s*$') { $ScreenSize = @([int]$matches[1], [int]$matches[2]) }
 
 # Waits until the element is on screen (scrolling down if needed), then taps it. Returns $true if tapped.
+# It taps only when the element is at the same place in two screen reads in a row: a page that is
+# still loading can move it (Home's "Back up now" banner pushes the section buttons down), and a tap
+# at the old place misses (seen on a slow emulator, 2026-11-21).
 function Invoke-Tap([string]$Id, [string]$Text, [int]$TimeoutSec = 20) {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   $scrolls = 0
+  $lastAt = ''
   while ((Get-Date) -lt $deadline) {
     $doc = Get-Screen
     $node = Find-Node $doc $Id $Text
     if ($node) {
       $c = Get-Center $node
       if ($c -and $c[1] -gt 150 -and $c[1] -lt ($script:ScreenSize[1] - 150)) {
+        $at = "$($c[0]),$($c[1])"
+        if ($at -ne $lastAt) { $lastAt = $at; Start-Sleep -Milliseconds 700; continue }
         [void](Invoke-Shell "input tap $($c[0]) $($c[1])")
         return $true
       }
+      $lastAt = ''
       if ($c -and $scrolls -lt 8) {
         $x = [int]($script:ScreenSize[0] / 2)
         if ($c[1] -ge ($script:ScreenSize[1] - 150)) { [void](Invoke-Shell "input swipe $x $([int]($script:ScreenSize[1] * 0.75)) $x $([int]($script:ScreenSize[1] * 0.35)) 300") }
@@ -184,13 +191,20 @@ function Close-ShareSheet {
 function Start-Plannr {
   [void](Invoke-Shell "am force-stop $Pkg")
   [void](Invoke-Shell "monkey -p $Pkg -c android.intent.category.LAUNCHER 1")
-  return (Wait-ForScreen { param($d) [bool](Find-Node $d 'notifAddBtn' $null) -or [bool](Find-Node $d $null 'Sections') } 30)
+  return (Wait-ForScreen { param($d) [bool](Find-Node $d 'notifAddBtn' $null) -or [bool](Find-Node $d $null 'Sections') } 60)
 }
 function Open-Section([string]$SectionText, [string]$ReadyId) {
   $homeScreen = Start-Plannr
   if (-not $homeScreen) { return $null }
-  if (-not (Invoke-Tap -Text $SectionText)) { return $null }
-  return (Wait-ForScreen { param($d) [bool](Find-Node $d $ReadyId $null) } 30)
+  # Up to 3 taps: if the section has not opened after 20 s and Home's button is still there, the tap
+  # missed (the page was still moving); tapping a section button again changes nothing else.
+  for ($try = 1; $try -le 3; $try++) {
+    if (-not (Invoke-Tap -Text $SectionText)) { return $null }
+    $doc = Wait-ForScreen { param($d) [bool](Find-Node $d $ReadyId $null) } 20
+    if ($doc) { return $doc }
+    if (-not (Find-Node (Get-Screen) $null $SectionText)) { break }
+  }
+  return (Wait-ForScreen { param($d) [bool](Find-Node $d $ReadyId $null) } 20)
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -318,7 +332,8 @@ try {
   # ---- 2. Storage meter ---------------------------------------------------------------------------
   [void](Assert-Unlocked)
   $doc = Open-Section 'DATA BACKUP' 'storageText'
-  $doc = Wait-ForScreen { param($d) $n = Find-Node $d 'storageText' $null; $n -and ($n.GetAttribute('text') -notmatch 'Checking') } 20
+  # The page reads the database and the file sizes before it fills the meter (13-15 s on a slow emulator).
+  $doc = Wait-ForScreen { param($d) $n = Find-Node $d 'storageText' $null; $n -and ($n.GetAttribute('text') -notmatch 'Checking') } 60
   $meter = ''
   if ($doc) { $n = Find-Node $doc 'storageText' $null; if ($n) { $meter = $n.GetAttribute('text') } }
   $shot = Save-Screenshot 'data-backup-meter'
@@ -359,7 +374,7 @@ try {
       $doc = Open-Section 'OVERVIEW' 'ovPdfBtn'
       $sheet = $false
       if ($doc -and (Invoke-Tap -Id 'ovPdfBtn')) {
-        [void](Invoke-Tap -Text 'Light' -TimeoutSec 10)
+        [void](Invoke-Tap -Text 'Light' -TimeoutSec 30)
         $sheet = Wait-ShareSheet 40
       }
       if ($sheet) { $shot = Save-Screenshot 'offline-pdf-share-sheet' } else { $shot = Save-Screenshot 'offline-pdf-no-sheet' }
@@ -375,7 +390,7 @@ try {
   $doc = Open-Section 'OVERVIEW' 'ovPdfBtn'
   $sheet = $false
   if ($doc -and (Invoke-Tap -Id 'ovPdfBtn')) {
-    [void](Invoke-Tap -Text 'Light' -TimeoutSec 10)
+    [void](Invoke-Tap -Text 'Light' -TimeoutSec 30)
     $sheet = Wait-ShareSheet 40
   }
   $stillOpen = $false
