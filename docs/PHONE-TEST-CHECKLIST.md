@@ -18,21 +18,23 @@ cd android && ./gradlew assembleDebug     # -> android/app/build/outputs/apk/deb
 Write the result of each check (pass/fail, numbers, phone model, Android and WebView version) in
 the table at the end.
 
-## The build for this round (real phone, 2026-11-15)
+## The build for this round (real phone): the step 1.4 RC, 2026-11-21
 
 | | |
 |---|---|
-| Branch / commit | `plannr-phase2`, built from `9d7fd97` (cross-platform plan steps 1.1 and 1.2) |
-| File | `android/app/build/outputs/apk/debug/Plannr-debug.apk` |
-| Size | 5,974,512 bytes |
-| SHA-256 | `7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef` |
-| Version | versionCode 1, versionName 1.0; debug-signed |
+| Branch / commit | `plannr-phase2`, built from `53db636` (step 1.4: the storage move, stages A–D) |
+| File | `D:\Backups\plannr\Plannr-debug-rc-53db636.apk` |
+| Size | 15,087,178 bytes |
+| SHA-256 | `1c54c4c889dec806fcadfdb79c50ea2be6c6429f0b07f2ad817a00cd1990e1f0` |
+| Version | versionCode 1, versionName 1.0; debug-signed with the same key as `9d7fd97`, so it installs over it with `adb install -r` |
+| Permissions | as `9d7fd97`, plus `USE_BIOMETRIC` and `USE_FINGERPRINT`, which the storage plugin (`@capacitor-community/sqlite` 8.1.1) declares; Plannr never asks for them and Android does not prompt for them |
 | INTERNET permission | present, and it stays (offline first: the core never uses it; see `CONTRIBUTING.md`) |
 
-The file at that path was rebuilt from the same commit on 2026-11-15 at 20:26. An emulator build of a
-later commit had overwritten the first one (5,988,128 bytes, SHA-256 `5e304ebd…a1af`). The rebuild
-has the same files; only the zip bytes differ. If you already copied the first file, it is the same
-code and is fine to use.
+The APK is larger than `9d7fd97`'s (5,974,512 bytes) because of the storage plugin's native SQLite
+library. The previous build for this round, `9d7fd97` (5,974,512 bytes, SHA-256
+`7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef`), is still at
+`android/app/build/outputs/apk/debug/Plannr-debug.apk` and in `D:\Backups\plannr\`; the
+emulator's update tests start from it, since it is the build your phone has.
 
 **This round uses test data only.** Do not restore your real backup on the phone yet; that comes
 after these checks pass and you approve it.
@@ -44,7 +46,7 @@ Install it:
    asked.
 2. On the PC, `adb devices` lists the phone as `device` (not `unauthorized`). `adb` is in the
    Android SDK's `platform-tools` folder.
-3. `adb install -r android/app/build/outputs/apk/debug/Plannr-debug.apk`
+3. `adb install -r D:\Backups\plannr\Plannr-debug-rc-53db636.apk`
 
 If Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a Plannr signed with another key (a
 release build) is already on the phone. Uninstalling it deletes its data: if it holds anything you
@@ -424,7 +426,15 @@ unreadable S fails (proof), and the marker was put back byte for byte.
 **Still needs the real phone (step 1.4):** check 9 with test data, then the real data with the
 steps in "Moving your real data", after checks 0, 2, 3, 5 and 6 pass on this build.
 
-### The owner's phone: debug build from `9d7fd97` (SHA-256 `7dc29db3…a2ef`)
+### Emulator, 2026-11-21: the step 1.4 RC, debug build from `53db636`
+
+Same emulator and method as above, with the RC (`1c54c4c8…e1f0`).
+
+| Run | What | Result | Numbers / notes |
+|---|---|---|---|
+| E1 | Update from `9d7fd97` with 1,000 typical entries, then the move | Pass (16) | Every row kept by the update, on `localStorage`; encrypted backup 12.3 s, move 10.3 s; marker `native-v1`, 1,229 rows checked; every table matches; a save goes to the file and not to the old copy; the meter and the panel as in the 5736195 run. The Data Backup page took 13.8 s to fill after a reload; the 5736195 build took 13–15 s on the same data that day, so the emulator was slow, not the RC (the first run read the page at 2.5 s and failed those two checks; the script now waits for the page). |
+
+### The owner's phone: the step 1.4 RC, debug build from `53db636` (SHA-256 `1c54c4c8…e1f0`)
 
 Not yet run. At least checks 0, 2, 3, 5 and 6 must pass here before the real data moves. Test
 data only.
