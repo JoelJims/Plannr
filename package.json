@@ -5,7 +5,7 @@
   "description": "Plannr — a single-user offline construction-spend ledger, built as an Android app with Capacitor",
   "main": "server.js",
   "author": "Joel Jims (https://github.com/JoelJims)",
-  "license": "Unlicense",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/JoelJims/plannr"
