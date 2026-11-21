@@ -52,7 +52,8 @@ test('server.js marks its pages and API answers as the dev server', async () => 
   }
 });
 
-function waitFor(proc, re, ms = 20000) {
+// 60 s: a GitHub Windows runner took over 20 s to start server.js while the other test files ran.
+function waitFor(proc, re, ms = 60000) {
   return new Promise((resolve, reject) => {
     let out = '';
     const timer = setTimeout(() => reject(new Error(`timed out waiting for ${re}; output so far:\n${out}`)), ms);
