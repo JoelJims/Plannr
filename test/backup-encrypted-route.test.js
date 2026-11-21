@@ -138,14 +138,30 @@ test('import-encrypted: each restore failure gets its own answer', async () => {
   let h = await fail(tooNew);
   let r = await h.call('POST /api/backup/import-encrypted', restoreBody());
   assert.deepStrictEqual([r.statusCode, r.body], [400, { error: 'This backup was made by a newer version of Plannr.' }]);
+  const SNAP = 'a file inside the app (plannr-pre-restore.db)';
   h = await fail(new Error('database or disk is full'));
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: "Storage is full — the restore did not go through. (the platform's text)" }]);
-  h = await fail(new Error('foreign_key_check failed'));
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: "Storage is full — the restore did not go through, and nothing was changed. (the platform's text)", snapshot: SNAP }]);
+  // S3/Q6: every other failure left the data as it was (refused before the replace, or put back after it).
+  h = await fail(new Error('not a SQLite database'));
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.strictEqual(r.statusCode, 500);
-  assert.match(r.body.error, /^Restore failed partway through: foreign_key_check failed Reload the page/);
-  assert.strictEqual(r.body.snapshot, 'a file inside the app (plannr-pre-restore.db)');
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: 'This backup could not be restored. Nothing was changed: your data is as it was before. Reason: not a SQLite database', snapshot: SNAP }]);
+  const undone = Object.assign(new Error('put back'), { code: 'RESTORE_UNDONE', cause: new Error('foreign_key_check failed') });
+  h = await fail(undone);
+  r = await h.call('POST /api/backup/import-encrypted', restoreBody());
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: 'This backup could not be restored. Nothing was changed: your data is as it was before. Reason: foreign_key_check failed', snapshot: SNAP }]);
+  assert.ok(!h.names().includes('refresh'));
+  const undoneFull = Object.assign(new Error('put back'), { code: 'RESTORE_UNDONE', cause: new Error('database or disk is full') });
+  h = await fail(undoneFull);
+  r = await h.call('POST /api/backup/import-encrypted', restoreBody());
+  assert.deepStrictEqual([r.statusCode, r.body.error], [500, "Storage is full — the restore did not go through, and nothing was changed. (the platform's text)"]);
+  const undoFailed = Object.assign(new Error('The restore failed (x), and putting the data back failed too (y).'), { code: 'RESTORE_UNDO_FAILED' });
+  h = await fail(undoFailed);
+  r = await h.call('POST /api/backup/import-encrypted', restoreBody());
+  assert.deepStrictEqual([r.statusCode, r.body], [500, {
+    error: `The restore failed, and putting your data back failed too. Make no changes: restore the safety copy (${SNAP}) or your latest backup. The restore failed (x), and putting the data back failed too (y).`,
+    snapshot: SNAP,
+  }]);
   assert.ok(!h.names().includes('refresh'));
 });
 

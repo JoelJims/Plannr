@@ -124,14 +124,24 @@ export function register(app, ctx) {
       return res.status(500).json({ error: 'Could not write the safety snapshot, so the restore was not started — your current data is unchanged.' });
     }
 
-    // 3. Replace (checked before anything is replaced; a newer backup is refused unchanged).
+    // 3. Replace, all or nothing (S3/Q6): checked before anything is replaced (a newer backup is
+    //    refused unchanged), and if a check after the replace fails, the data from just before it is
+    //    put back (db.js undoFailedRestore). So every failure leaves the data as it was, except the
+    //    one where putting it back failed too: then the safety copy from step 2 is the way back.
     try {
       await restore(plain);
     } catch (e) {
       logError('Encrypted import failed:', e);
       if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
-      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the restore did not go through.') });
-      return res.status(500).json({ error: 'Restore failed partway through: ' + e.message + ' Reload the page to see the current state before continuing.', snapshot });
+      if (e && e.code === 'RESTORE_UNDO_FAILED') {
+        return res.status(500).json({
+          error: `The restore failed, and putting your data back failed too. Make no changes: restore the safety copy${snapshot ? ` (${snapshot})` : ''} or your latest backup. ${e.message}`,
+          snapshot,
+        });
+      }
+      const cause = e && e.code === 'RESTORE_UNDONE' ? e.cause : e;
+      if (isStorageFullError(cause)) return res.status(500).json({ error: storageFull('the restore did not go through, and nothing was changed.'), snapshot });
+      return res.status(500).json({ error: `This backup could not be restored. Nothing was changed: your data is as it was before. Reason: ${cause && cause.message}`, snapshot });
     }
     await ledgerIndex.refresh(); // the restored database has its own categories
     res.json({ ok: true, snapshot });

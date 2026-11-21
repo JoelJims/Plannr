@@ -159,6 +159,42 @@ function sameDb(name, actual, expected) {
     });
     check('…foreign keys are on again and the database is intact', afterFailed.fk === 1 && afterFailed.integrity === 'ok', JSON.stringify(afterFailed));
 
+    // ---- A backup that copies in but fails the foreign-key check after it is undone (S3/Q6) ----
+    // The rebuild above commits; the checks run after it. A failure there used to leave the backup's
+    // data live behind an error. Now the data from just before the restore is put back.
+    const fkBackup = await page.evaluate(async (pp) => {
+      const { getSqlite3 } = await import('/db-engine.js');
+      const { encrypt } = await import('/backup-crypto.js');
+      const { exportSnapshotBytes } = await import('/local-snapshot.js');
+      const sqlite3 = getSqlite3();
+      const bytes = await exportSnapshotBytes();
+      const d = new sqlite3.oo1.DB(':memory:', 'c');
+      const p = sqlite3.wasm.allocFromTypedArray(bytes);
+      sqlite3.capi.sqlite3_deserialize(d.pointer, 'main', p, bytes.length, bytes.length,
+        sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE);
+      try {
+        d.exec('PRAGMA foreign_keys = OFF');
+        d.exec("INSERT INTO cash_in (amount_paise, tx_date, by_type, by_label, reason) VALUES (100, '2026-11-20', 'relative', 'D1', 'only in the bad backup')");
+        d.exec("INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (999999, '2026-12-01')"); // no such contract
+        const enc = await encrypt(sqlite3.capi.sqlite3_js_db_export(d.pointer), pp);
+        let binary = '';
+        for (let i = 0; i < enc.length; i += 0x8000) binary += String.fromCharCode.apply(null, enc.subarray(i, i + 0x8000));
+        return btoa(binary);
+      } finally { d.close(); }
+    }, pass);
+    await api('POST', '/api/cash-in', { amountRupees: '5.00', txDate: '2026-11-20', byType: 'relative', byLabel: 'D1', reason: 'made before the bad restore' });
+    const beforeFk = await dump();
+    const fkRestore = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64: fkBackup });
+    sameDb('a backup that fails its foreign-key check after it is copied in is undone: the data is exactly as before', await dump(), beforeFk);
+    check('…and the answer says nothing was changed, and why', fkRestore.status === 500
+      && /^This backup could not be restored\. Nothing was changed: your data is as it was before\. Reason: .*foreign_key_check/.test(fkRestore.json.error || ''),
+    `${fkRestore.status} ${JSON.stringify(fkRestore.json).slice(0, 300)}`);
+    const afterFk = await page.evaluate(async () => {
+      const { db } = await import('/db.js');
+      return { fk: db.prepare('PRAGMA foreign_keys').get().foreign_keys, violations: db.prepare('PRAGMA foreign_key_check').all().length, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check };
+    });
+    check('…foreign keys on, no violations, the database intact', afterFk.fk === 1 && afterFk.violations === 0 && afterFk.integrity === 'ok', JSON.stringify(afterFk));
+
     // ---- An encrypted backup made by an OLD Plannr (schema v1) comes back upgraded (step 1.4 B17) ----
     // The restore copies the backup's PRAGMA user_version (it is not in any table), so init() sees v1
     // and runs the old upgrade steps: here, dropping the per-household tenant_id columns. Without the
