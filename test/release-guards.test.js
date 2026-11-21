@@ -55,3 +55,19 @@ test('the release key and its passwords are git-ignored and not tracked', () => 
   const tracked = git.stdout.split('\n').filter((f) => /(\.keystore|\.jks|keystore\.properties)$/i.test(f));
   assert.deepStrictEqual(tracked, []);
 });
+
+// Review S9: other key and certificate files, per-environment .env files, and what the app exports or
+// a phone pull brings back (they hold ledger data) are git-ignored too, and git really ignores them.
+test('other keys, .env variants and exported data files are git-ignored', () => {
+  const ignore = read('.gitignore').split(/\r?\n/);
+  for (const p of ['*.jks', '*.p12', '*.pem', '.env.*', 'plannr-backup-*.json', 'plannr-*.csv', 'plannr-overview-*.pdf', '*.db.gz', 'auto-snapshot-before-import-*.json']) {
+    assert.ok(ignore.includes(p), `.gitignore lists ${p}`);
+  }
+  const samples = ['upload.jks', 'cert.p12', 'key.pem', '.env.local', 'plannr-backup-2026-11-21.json', 'plannr-cash-outflow-2026-11-21.csv',
+    'plannr-overview-full-2026-11-21.pdf', 'pulled.db.gz', 'auto-snapshot-before-import-2026-11-21T10-00-00.json'];
+  const git = spawnSync('git', ['check-ignore', '--no-index', ...samples], { cwd: ROOT, encoding: 'utf8' });
+  if (git.status !== 0 && git.status !== 1) return; // no git or not a checkout: the list check above still ran
+  assert.deepStrictEqual(git.stdout.split(/\r?\n/).filter(Boolean).sort(), [...samples].sort());
+  const keep = spawnSync('git', ['check-ignore', '--no-index', '.env.example'], { cwd: ROOT, encoding: 'utf8' });
+  assert.strictEqual(keep.status, 1, '.env.example stays committable');
+});

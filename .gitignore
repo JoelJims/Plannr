@@ -61,6 +61,19 @@ PLANNR-AUDIT-LIVE.md
 
 *.keystore
 keystore.properties
+# other signing keys and certificates, and per-environment .env files (review S9)
+*.jks
+*.p12
+*.pem
+.env.*
+!.env.example
+# what the app exports or a phone pull brings back: plain JSON backups, CSV and PDF exports,
+# compressed databases, the import's automatic snapshot (they hold ledger data)
+plannr-backup-*.json
+plannr-*.csv
+plannr-overview-*.pdf
+*.db.gz
+auto-snapshot-before-import-*.json
 
 # The owner's personal notes and interview prep (kept next to the code, never committed).
 /Interview_Prep_Plannr.pdf
