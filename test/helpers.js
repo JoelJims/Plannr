@@ -58,6 +58,13 @@ function startApp() {
       base = `http://127.0.0.1:${server.address().port}`;
       resolve({ base, server });
     });
+    // No idle timeout on this server's keep-alive sockets. It shares one event loop with the fetch that
+    // drives it, so a stall (a CPU-starved CI runner) between the client writing a request on a reused
+    // socket and the server reading it could outlast the idle deadline: the server then destroyed a
+    // socket holding an unread request and the test failed with "read ECONNRESET" (the Windows CI
+    // flake; test/keepalive-stall.test.js). The client still closes idle sockets itself, and
+    // server.close() in stopApp closes any left. server.js's own keep-alive settings are unchanged.
+    server.keepAliveTimeout = 0;
   }));
 }
 async function stopApp() {
