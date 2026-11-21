@@ -1,0 +1,69 @@
+name: Tests
+
+# Runs the same checks as a local full run, minus the slow suite and the emulator:
+# `npm test` (the desktop pass and the phone-code pass) on Ubuntu and Windows, and every
+# Playwright UI suite on Ubuntu. Read-only: the workflow cannot push, comment or change anything.
+
+on:
+  push:
+    branches: [main, plannr-phase2]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: npm test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run sync:public-modules
+      - name: npm test (desktop pass, then the phone-code pass)
+        run: npm test
+
+  ui:
+    name: UI suites (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run sync:public-modules
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Every UI suite (each `test:*` script except test:slow)
+        shell: bash
+        run: |
+          fail=0
+          suites=$(node -e "const s=require('./package.json').scripts; console.log(Object.keys(s).filter((k) => k.startsWith('test:') && k !== 'test:slow').join(' '))")
+          for s in $suites; do
+            echo "::group::$s"
+            if npm run -s "$s"; then echo "PASS $s"; else echo "::error::$s failed"; fail=1; fi
+            echo "::endgroup::"
+          done
+          exit $fail
