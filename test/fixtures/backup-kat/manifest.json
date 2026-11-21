@@ -1,0 +1,28 @@
+{
+  "about": "Known-answer files for the encrypted backup format (PLBK version 1). Made once, on 2026-11-16, by the two encryption versions in use before step 1.4 (both last changed in a3d5571). Never remake them: every later version must still open these exact files (test/backup-kat.test.js, test-ui/backup-crypto.js). The files end in .plbk, not .db.enc, because .gitignore keeps real encrypted backups (*.db.enc) out of git.",
+  "passphrase": "Plannr KAT ✓ ünïcödé 2026",
+  "passphraseNote": "A TEST value (KAT = known-answer test), used only to make and open these fixture files. It is not, and must never be, a real backup passphrase. test/backup-kat.test.js checks it appears in no other file.",
+  "plaintext": {
+    "file": "plain.bin",
+    "bytes": 2048,
+    "sha256": "df3c573fde49ca8050b7d44869d0d6d01610f70f5d6e157edbb6e8411d83f12c"
+  },
+  "files": [
+    {
+      "file": "node-v1.plbk",
+      "bytes": 2097,
+      "sha256": "23a0a1aff78384021ddb9bdc39d9a86efc58ff3b4815a3c987a679a374fd5fda",
+      "madeBy": "backup-crypto.js (node:crypto)",
+      "engine": "Node v24.18.0",
+      "commit": "9a12ae8"
+    },
+    {
+      "file": "browser-v1.plbk",
+      "bytes": 2097,
+      "sha256": "a0c5987db1e01d67cb577a217e18f3a0ea11b7eed6a7d396a867cf4cdbdb3a81",
+      "madeBy": "public/backup-crypto.js (WebCrypto + scrypt-js 3.0.1)",
+      "engine": "Chromium 149.0.7827.55 (Playwright)",
+      "commit": "9a12ae8"
+    }
+  ]
+}

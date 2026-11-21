@@ -11,8 +11,12 @@ const assert = require('node:assert');
 
 // --- env, set BEFORE any require of ./db or ./server ---------------------------------------------
 process.env.PLANNR_TEST = '1';                       // structural: makeTransport() -> null
+// Each test file gets its own temp folder: init() may write a safety snapshot beside the database
+// (safety-snapshots/), and that must never land in the shared temp folder.
+let TEST_DIR = null;
 if (!process.env.PLANNR_DB) {
-  process.env.PLANNR_DB = path.join(os.tmpdir(), `plannr-test-${process.pid}-${crypto.randomBytes(4).toString('hex')}.db`);
+  TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), `plannr-test-${process.pid}-${crypto.randomBytes(4).toString('hex')}-`));
+  process.env.PLANNR_DB = path.join(TEST_DIR, 'plannr.db');
 }
 const TEST_DB = process.env.PLANNR_DB;
 // Defensive: never let a test touch the live DB even if something is misconfigured.
@@ -20,7 +24,24 @@ const LIVE_DB = path.resolve(__dirname, '..', 'data', 'plannr.db');
 assert.notStrictEqual(path.resolve(TEST_DB).toLowerCase(), LIVE_DB.toLowerCase(), 'test DB must not be the live DB');
 
 const app = require('../server'); // requires ./db (binds prepared statements to TEST_DB) with side effects gated off
-const { db } = require('../db');
+// db.js's handle is read at the time of use (dbModule.db): restoring an encrypted backup on the dev
+// server replaces the database file and swaps the handle (step 1.4 D1).
+const dbModule = require('../db');
+// server.js sets the test database up with the async init() as its first start job (step 1.4 B17):
+// until app._ready resolves the file may have no tables yet. startApp() waits for it; a file that
+// only seeds or reads the database awaits H.ready in its first before() hook.
+const ready = app._ready;
+let isReady = false;
+ready.then(() => { isReady = true; }, () => {});
+function assertReady() {
+  if (!isReady) throw new Error('the test database is not set up yet: await H.startApp() or H.ready in a before() hook first');
+}
+
+// Which API code the requests below reach (cross-platform plan, step 1.1):
+// 'express' (default): server.js over real HTTP. 'shim': the phone's public/local-api.js, in-process,
+// through the same fetch shim the app uses (test/shim-target.js). run-tests.js runs both.
+const TARGET = process.env.PLANNR_TEST_TARGET === 'shim' ? 'shim' : 'express';
+const shim = TARGET === 'shim' ? require('./shim-target') : null;
 
 // No login exists; password_hash is a placeholder, reused for every seeded user via direct INSERT.
 const SEED_PW = 'TestPass123!aa';
@@ -29,13 +50,15 @@ const SEED_HASH = 'seed-no-auth';
 // --- app lifecycle (ephemeral port; drive over real HTTP) ----------------------------------------
 let server = null, base = null;
 function startApp() {
+  // The phone's code opens the same test file: it starts once server.js has set it up, as before B17.
+  if (shim) return ready.then(() => shim.start()).then(() => ({ base: '', server: null }));
   if (base) return Promise.resolve({ base, server });
-  return new Promise((resolve) => {
+  return app._ready.then(() => new Promise((resolve) => { // the ledger list is read first (step 1.4 B10)
     server = app.listen(0, '127.0.0.1', () => {
       base = `http://127.0.0.1:${server.address().port}`;
       resolve({ base, server });
     });
-  });
+  }));
 }
 async function stopApp() {
   // Close a Playwright PDF browser that a GET /overview may have warmed — its open handles would
@@ -46,6 +69,7 @@ async function stopApp() {
 
 // --- HTTP (Node fetch has no cookie jar — thread set-cookie manually) -----------------------------
 async function req(method, urlPath, { cookie, body, headers } = {}) {
+  if (shim) return shim.request(method, urlPath, { body });
   const h = Object.assign({}, headers || {});
   if (cookie) h.Cookie = cookie;
   let payload;
@@ -57,6 +81,25 @@ async function req(method, urlPath, { cookie, body, headers } = {}) {
   if (ct.includes('application/json')) { json = await r.json().catch(() => null); } else { text = await r.text().catch(() => null); }
   return { status: r.status, json, text, headers: r.headers, setCookie, cookie: setCookie.map((c) => c.split(';')[0]).join('; ') };
 }
+// A request whose answer may be binary (an encrypted backup). Works on both targets.
+async function raw(method, urlPath, body) {
+  const init = { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) };
+  if (shim) {
+    const r = await shim.fetchRaw(urlPath, init);
+    return { status: r.status, json: () => r.json(), bytes: async () => Buffer.from(await (await r.blob()).arrayBuffer()) };
+  }
+  const r = await fetch(base + urlPath, init);
+  return { status: r.status, json: () => r.json(), bytes: async () => Buffer.from(await r.arrayBuffer()) };
+}
+// The HTML page the Overview PDF is made from, built by the target's own code: server.js's builder
+// (app._overviewPdfHtml), or on the phone target the page its PDF route hands to the PDF plugin.
+// Only the parts the PDF route offers on both.
+async function pdfHtml({ part = 'full', theme = 'light', range = { start: null, end: null } } = {}) {
+  if (!['full', 'pie', 'table', 'ledger'].includes(part)) throw new Error(`the PDF route has no part "${part}"`);
+  return shim ? shim.pdfHtml({ part, theme, range }) : app._overviewPdfHtml({ part, theme, range });
+}
+// Phone target only: requests the phone code sent past its /api router (on a phone: the network).
+const outsideRequests = () => (shim ? shim.outsideRequests.slice() : []);
 const get = (p, o) => req('GET', p, o);
 const post = (p, body, o) => req('POST', p, Object.assign({ body }, o));
 const put = (p, body, o) => req('PUT', p, Object.assign({ body }, o));
@@ -68,11 +111,12 @@ let userSeq = 0;
 // picks the lowest id). Mirror that here — if a row already exists, every caller gets THAT SAME
 // row back, whatever name/opts it asked for, instead of fabricating a second identity.
 function seedUser(opts = {}) {
-  const existing = db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1').get();
+  assertReady();
+  const existing = dbModule.db.prepare('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1').get();
   if (existing) return { id: existing.id, username: existing.username, displayName: existing.displayName, password: SEED_PW };
   const username = opts.username || `user${++userSeq}`;
   const displayName = opts.displayName || username;
-  const info = db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)').run(username, displayName, SEED_HASH);
+  const info = dbModule.db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)').run(username, displayName, SEED_HASH);
   return { id: Number(info.lastInsertRowid), username, displayName, password: SEED_PW };
 }
 // No sessions table and no cookie check exist anymore — every request resolves to the fixed
@@ -86,7 +130,8 @@ function seedLoggedIn(opts) { const user = seedUser(opts); return { user, cookie
 
 // Phase 2 dropped tenant_id from every ledger table — these seed helpers no longer stamp one.
 function seedContract(opts = {}) {
-  const info = db.prepare(
+  assertReady();
+  const info = dbModule.db.prepare(
     `INSERT INTO contract (contractor_name, area_of_work, ledger_code, price_of_contract_paise, date_signed, deleted_at)
      VALUES (?, ?, ?, ?, ?, ?)`
   ).run(opts.contractorName || 'ACME', opts.areaOfWork || 'Foundation', opts.ledgerCode || '5.0',
@@ -94,12 +139,14 @@ function seedContract(opts = {}) {
   return Number(info.lastInsertRowid);
 }
 function seedPayment(opts = {}) {
-  const info = db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at) VALUES (?, ?, ?, ?)')
+  assertReady();
+  const info = dbModule.db.prepare('INSERT INTO contractor_payments (contract_id, pay_date, amount_paise, deleted_at) VALUES (?, ?, ?, ?)')
     .run(opts.contractId, opts.payDate || '2026-07-10', opts.amountPaise == null ? 4000000 : opts.amountPaise, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
 }
 function seedCashOut(opts = {}) {
-  const info = db.prepare(
+  assertReady();
+  const info = dbModule.db.prepare(
     `INSERT INTO cash_out (amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code, contract_scope, contract_stated_paise, deleted_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.txDate || '2026-07-12', opts.byType || 'user',
@@ -108,7 +155,8 @@ function seedCashOut(opts = {}) {
   return Number(info.lastInsertRowid);
 }
 function seedCashIn(opts = {}) {
-  const info = db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at) VALUES (?, ?, ?, ?, ?, ?)')
+  assertReady();
+  const info = dbModule.db.prepare('INSERT INTO cash_in (amount_paise, by_type, by_user_id, by_label, reason, deleted_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(opts.amountPaise == null ? 100000 : opts.amountPaise, opts.byType || 'user', opts.byUserId == null ? null : opts.byUserId,
       opts.byLabel || null, opts.reason || null, opts.deletedAt || null);
   return Number(info.lastInsertRowid);
@@ -117,15 +165,18 @@ function seedCashIn(opts = {}) {
 // Clear ledger + config state between tests in a file (users/sessions kept). Lets each test start
 // from a clean slate without a fresh DB per test.
 function clearLedger() {
-  for (const t of ['cash_out', 'cash_in', 'contractor_payments', 'contract', 'loans']) { try { db.exec(`DELETE FROM ${t}`); } catch { /* table may not exist */ } }
-  try { db.prepare("DELETE FROM settings WHERE key IN ('budget_paise','daily_report_recipients','daily_report_whatsapp','daily_report_times','daily_report_time','daily_report_whatsapp_times','daily_report_email_last_success','daily_report_email_last_catchup','daily_report_whatsapp_last_success','daily_report_whatsapp_last_catchup','daily_report_email_attempts','daily_report_whatsapp_attempts','daily_report_whatsapp_alert_last','daily_report_email_last_snapshot','daily_report_whatsapp_last_snapshot','auth_events','auth_events_unknown')").run(); } catch { /* ignore */ }
+  for (const t of ['cash_out', 'cash_in', 'contractor_payments', 'contract', 'loans']) { try { dbModule.db.exec(`DELETE FROM ${t}`); } catch { /* table may not exist */ } }
+  try { dbModule.db.prepare("DELETE FROM settings WHERE key IN ('budget_paise','daily_report_recipients','daily_report_whatsapp','daily_report_times','daily_report_time','daily_report_whatsapp_times','daily_report_email_last_success','daily_report_email_last_catchup','daily_report_whatsapp_last_success','daily_report_whatsapp_last_catchup','daily_report_email_attempts','daily_report_whatsapp_attempts','daily_report_whatsapp_alert_last','daily_report_email_last_snapshot','daily_report_whatsapp_last_snapshot','auth_events','auth_events_unknown')").run(); } catch { /* ignore */ }
 }
 
 // Best-effort cleanup of the temp DB when the file's process exits.
-process.on('exit', () => { for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } } });
+process.on('exit', () => {
+  for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(TEST_DB + s); } catch { /* ignore */ } }
+  if (TEST_DIR) { try { dbModule.db.close(); } catch { /* ignore */ } try { fs.rmSync(TEST_DIR, { recursive: true, force: true }); } catch { /* ignore */ } }
+});
 
 module.exports = {
-  app, db, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH,
-  startApp, stopApp, req, get, post, put, del, clearLedger,
+  app, get db() { return dbModule.db; }, ready, TEST_DB, LIVE_DB, SEED_PW, SEED_HASH, TARGET,
+  startApp, stopApp, req, raw, pdfHtml, outsideRequests, get, post, put, del, clearLedger,
   seedUser, seedSession, seedLoggedIn, seedContract, seedPayment, seedCashOut, seedCashIn,
 };

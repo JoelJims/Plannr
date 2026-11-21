@@ -28,52 +28,59 @@ if (!process.argv.includes('--confirm')) {
 
 const { db, init } = require('./db');
 
-init(); // make sure the schema exists before counting/deleting
-
-// SINGLE SOURCE OF TRUTH: every real table, straight from the catalogue.
-const TABLES = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
-
-const count = () => Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n]));
-const before = count();
-
-// Disable foreign keys for the wipe so deletion ORDER stops mattering (no parent-
-// before-child ordering, no accidental cascade). CRITICAL: PRAGMA foreign_keys is a
-// NO-OP inside a transaction, so it MUST be set BEFORE BEGIN and restored AFTER COMMIT.
-db.exec('PRAGMA foreign_keys = OFF');
-// Verify empirically that enforcement is actually OFF now — don't assume the statement
-// took (if we were somehow mid-transaction it would silently stay ON).
-const fkDuringWipe = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
-if (fkDuringWipe !== 0) {
-  console.error(`reset-db: refused — foreign keys are still ENFORCED (PRAGMA foreign_keys = ${fkDuringWipe}) after asking to disable them. Aborting to avoid an order-dependent partial wipe.`);
+// Make sure the schema exists before counting/deleting. init() is async (step 1.4 B17).
+init().then(wipe, (e) => {
+  console.error('reset-db: could not open or upgrade the database —', e && e.message ? e.message : e);
+  try { db.close(); } catch { /* ignore */ }
   process.exit(1);
+});
+
+function wipe() {
+  // SINGLE SOURCE OF TRUTH: every real table, straight from the catalogue.
+  const TABLES = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
+
+  const count = () => Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n]));
+  const before = count();
+
+  // Disable foreign keys for the wipe so deletion ORDER stops mattering (no parent-
+  // before-child ordering, no accidental cascade). CRITICAL: PRAGMA foreign_keys is a
+  // NO-OP inside a transaction, so it MUST be set BEFORE BEGIN and restored AFTER COMMIT.
+  db.exec('PRAGMA foreign_keys = OFF');
+  // Verify empirically that enforcement is actually OFF now — don't assume the statement
+  // took (if we were somehow mid-transaction it would silently stay ON).
+  const fkDuringWipe = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+  if (fkDuringWipe !== 0) {
+    console.error(`reset-db: refused — foreign keys are still ENFORCED (PRAGMA foreign_keys = ${fkDuringWipe}) after asking to disable them. Aborting to avoid an order-dependent partial wipe.`);
+    process.exit(1);
+  }
+
+  db.exec('BEGIN');
+  for (const t of TABLES) db.exec(`DELETE FROM ${t}`); // any order — FKs are off
+  // Reset AUTOINCREMENT counters (only AUTOINCREMENT tables appear here) → ids restart at 1.
+  try { db.exec('DELETE FROM sqlite_sequence'); } catch { /* table absent if no autoincrement rows ever existed */ }
+  db.exec('COMMIT');
+
+  db.exec('PRAGMA foreign_keys = ON'); // restore enforcement
+  // Prove the wipe left NO dangling foreign key (empty tables can't, but assert it rather
+  // than trust it — this is the real check that FK-off didn't hide an integrity problem).
+  const fkViolations = db.prepare('PRAGMA foreign_key_check').all();
+
+  const after = count();
+
+  const pad = (s, n) => String(s).padEnd(n);
+  console.log('\n  Plannr data wipe — per-table row counts:\n');
+  console.log('  ' + pad('table', 24) + pad('before', 9) + 'after');
+  console.log('  ' + '-'.repeat(40));
+  for (const t of TABLES) console.log('  ' + pad(t, 24) + pad(before[t], 9) + after[t]);
+
+  const remaining = TABLES.reduce((a, t) => a + after[t], 0);
+  const clean = remaining === 0 && fkViolations.length === 0;
+  console.log('\n  foreign_keys during wipe: OFF (verified) — post-wipe foreign_key_check: ' +
+    (fkViolations.length === 0 ? 'clean' : `${fkViolations.length} violation(s) — ${JSON.stringify(fkViolations)}`));
+  console.log('  ' + (clean
+    ? '✓ all tables empty; schema intact; AUTOINCREMENT ids reset to start at 1.'
+    : (remaining > 0 ? '✗ ' + remaining + ' rows remain (unexpected).' : '✗ foreign key check failed after wipe.')));
+
+  try { db.close(); } catch { /* ignore */ }
+  process.exit(clean ? 0 : 1);
 }
-
-db.exec('BEGIN');
-for (const t of TABLES) db.exec(`DELETE FROM ${t}`); // any order — FKs are off
-// Reset AUTOINCREMENT counters (only AUTOINCREMENT tables appear here) → ids restart at 1.
-try { db.exec('DELETE FROM sqlite_sequence'); } catch { /* table absent if no autoincrement rows ever existed */ }
-db.exec('COMMIT');
-
-db.exec('PRAGMA foreign_keys = ON'); // restore enforcement
-// Prove the wipe left NO dangling foreign key (empty tables can't, but assert it rather
-// than trust it — this is the real check that FK-off didn't hide an integrity problem).
-const fkViolations = db.prepare('PRAGMA foreign_key_check').all();
-
-const after = count();
-
-const pad = (s, n) => String(s).padEnd(n);
-console.log('\n  Plannr data wipe — per-table row counts:\n');
-console.log('  ' + pad('table', 24) + pad('before', 9) + 'after');
-console.log('  ' + '-'.repeat(40));
-for (const t of TABLES) console.log('  ' + pad(t, 24) + pad(before[t], 9) + after[t]);
-
-const remaining = TABLES.reduce((a, t) => a + after[t], 0);
-const clean = remaining === 0 && fkViolations.length === 0;
-console.log('\n  foreign_keys during wipe: OFF (verified) — post-wipe foreign_key_check: ' +
-  (fkViolations.length === 0 ? 'clean' : `${fkViolations.length} violation(s) — ${JSON.stringify(fkViolations)}`));
-console.log('  ' + (clean
-  ? '✓ all tables empty; schema intact; AUTOINCREMENT ids reset to start at 1.'
-  : (remaining > 0 ? '✗ ' + remaining + ' rows remain (unexpected).' : '✗ foreign key check failed after wipe.')));
-
-try { db.close(); } catch { /* ignore */ }
-process.exit(clean ? 0 : 1);

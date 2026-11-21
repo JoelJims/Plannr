@@ -9,7 +9,12 @@
 // real cross-tenant leak. It is not weakened, just relocated: run SERIALLY via `npm run test:slow` it
 // passes reliably (the behaviour is unchanged — the timing dependency simply belongs where nothing
 // else is competing for the CPU/Chromium at the same moment).
-process.env.PLANNR_PDF_IDLE_MS = '1500';
+//
+// The idle timer is armed when the Overview visit starts the launch, not when Chromium is ready. With
+// a 1.5 s window, a slow start under load could close the browser before the test looked (seen once in
+// a full run, 2026-11-19). The window is 5 s now, and the test waits for the close instead of sleeping.
+const IDLE_MS = 5000;
+process.env.PLANNR_PDF_IDLE_MS = String(IDLE_MS);
 const H = require('../helpers');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -21,12 +26,15 @@ after(async () => { await H.stopApp(); });
 
 test('the app idle-closes the PDF browser on its own after PDF_IDLE_MS of no activity', async () => {
   assert.strictEqual(H.app._pdfBrowserActive(), false, 'no browser before any Overview visit');
-  await H.get('/overview', { cookie });                 // warmPdfBrowser() -> ASYNC launch + arm idle timer
-  // warmPdfBrowser launches Chromium in the background, so "active" becomes true shortly AFTER the GET
-  // returns — poll briefly instead of checking synchronously, which raced under full-suite CPU load.
-  // The idle window (1.5s) starts only once it's warm, so it stays active well within this poll.
-  for (let i = 0; i < 50 && !H.app._pdfBrowserActive(); i++) await sleep(100);
+  const visited = Date.now();
+  await H.get('/overview', { cookie });                 // warmPdfBrowser(): starts the launch, arms the idle timer
+  // The launch starts during the visit, so the browser counts as active once the GET returns; poll
+  // briefly anyway. This is well inside the 5 s window, so it cannot race the close.
+  for (let i = 0; i < 20 && !H.app._pdfBrowserActive(); i++) await sleep(100);
   assert.strictEqual(H.app._pdfBrowserActive(), true, 'warmed by the Overview visit');
-  await sleep(6000);                                    // > PDF_IDLE_MS (1.5s) + launch + close margin
+  // Then wait (up to 30 s) for the app to close it by itself, and check it waited out the window.
+  while (H.app._pdfBrowserActive() && Date.now() - visited < 30000) await sleep(100);
+  const closedAfter = Date.now() - visited;
   assert.strictEqual(H.app._pdfBrowserActive(), false, 'the app closed it itself (idle timer), not stopApp');
+  assert.ok(closedAfter >= IDLE_MS - 100, `closed by the idle timer, not before it (after ${closedAfter} ms)`);
 });

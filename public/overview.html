@@ -868,8 +868,14 @@
             const written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the PDF file');
             // Both `url` and `files` set to the same file:// URI — some Android/OEM combinations have
             // only honoured one or the other for attaching an actual file (vs. sharing a link).
-            await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: 'Share report' }), 20000, 'Opening the share sheet');
-          } catch (err) { ovMsg.show('Generated the PDF but could not share it: ' + errText(err), 'error'); }
+            // No timeout here: Share.share() resolves only once the user has chosen where the PDF goes,
+            // which can take any length of time (a 20 s timeout reported failure while the sheet was
+            // still open — seen on the emulator, Phase 2 Step 9). Closing the sheet is not an error.
+            await Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: 'Share report' });
+          } catch (err) {
+            if (/cancel/i.test(errText(err))) ovMsg.show('PDF not shared: the share sheet was closed. Tap the button again to share it.', 'info');
+            else ovMsg.show('Generated the PDF but could not share it: ' + errText(err), 'error');
+          }
           return;
         }
 

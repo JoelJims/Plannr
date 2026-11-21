@@ -87,6 +87,24 @@
     }
     .bk-section h2 .tag.muted { color: var(--text-dim); border-color: var(--line-strong); background: rgba(255,255,255,0.04); }
     .bk-section p { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; max-width: 54ch; }
+    /* Phase 2 (Step 3): storage meter */
+    .st-bar { height: 10px; max-width: 54ch; background: var(--panel-2); border: 1px solid var(--line-strong); margin: 0 0 14px; }
+    .st-fill { height: 100%; width: 0; background: var(--text-dim); transition: width .3s; }
+    .st-fill.warning, .st-fill.critical { background: var(--accent); }
+    .msg.st-critical { font-weight: 600; }
+    /* Step 1.4 C10: the move to the phone's own database file */
+    .mv-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 12px; }
+    .mv-overlay { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 24px 16px; background: rgba(0,0,0,0.78); }
+    .mv-overlay[hidden] { display: none; }
+    .mv-box { width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line-strong); padding: 20px; }
+    .mv-box h2 { font-family: var(--font-head); font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text); margin: 0 0 8px; }
+    .mv-box h2:focus { outline: none; }
+    .mv-box p { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 12px; }
+    .mv-steps { margin: 0 0 12px; padding-left: 22px; color: var(--text-faint); font-size: 13.5px; line-height: 1.7; }
+    .mv-steps li[data-state="done"] { color: var(--text-dim); }
+    .mv-steps li[data-state="done"]::after { content: " \2713"; color: var(--accent); }
+    .mv-steps li[data-state="now"] { color: var(--text); font-weight: 600; }
+    .mv-steps li[data-state="now"]::after { content: " \2026"; }
     .bk-note { color: var(--text-faint); font-size: 12px; line-height: 1.45; margin: 12px 0 0; }
     .bk-warn { color: #ffb020; font-size: 12.5px; line-height: 1.45; margin: 0 0 12px; } /* amber-only (was coral) */
     .ledger-csv-errors { color: #f87171; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-width: 54ch; }
@@ -192,10 +210,55 @@
         <p class="lead">Save a copy of your ledger, restore it, or export it for Excel.</p>
       </div>
 
+      <!-- 0. Storage used (Phase 2, Step 3) — filled in from /api/storage -->
+      <section class="bk-section" id="storageSection" hidden>
+        <h2>Storage <span class="tag muted" id="storageTag">This phone</span></h2>
+        <p id="storageText">Checking…</p>
+        <div class="st-bar" id="storageBar" role="meter" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="st-fill" id="storageFill"></div></div>
+        <div id="storageMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- Step 1.4 C10: the move to the phone's own database file (docs/step-1.4-storage-plan.md §2).
+           Shown only in a build with the storage plugins; filled in by storage-move-ui.js. -->
+      <section class="bk-section" id="moveSection" hidden>
+        <h2>Where your data is kept <span class="tag muted" id="moveTag">This phone</span></h2>
+        <div id="moveInterrupted" hidden>
+          <p class="bk-warn" role="alert">The move to the new storage was interrupted. Your data is still in the old storage, and nothing was lost.</p>
+          <div class="mv-actions">
+            <button type="button" id="moveContinueBtn" class="btn primary">Continue</button>
+            <button type="button" id="moveNotNowBtn" class="btn ghost">Not now</button>
+          </div>
+        </div>
+        <div id="moveStart" hidden>
+          <p id="moveStateText">Plannr keeps your data inside the app's web storage, which is full at about 2.8 MB. The new storage is a database file of its own on this phone, with room for years of entries.</p>
+          <details class="wt">
+            <summary>What happens</summary>
+            <div class="wt-body">
+              <p>First an encrypted backup of everything is saved where you choose, then a safety copy on the phone. The data is then copied into the new file and every table is checked against the original. Only if all of it matches does Plannr switch.</p>
+              <p>The old copy is kept, unchanged, until you delete it here. You can also move your data back.</p>
+            </div>
+          </details>
+          <label for="movePass">Passphrase for the encrypted backup</label>
+          <input type="password" id="movePass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
+          <label for="movePass2">Type the passphrase again</label>
+          <input type="password" id="movePass2" autocomplete="new-password" placeholder="The same passphrase">
+          <button type="button" id="moveBtn" class="btn primary">Move to the new storage</button>
+        </div>
+        <div id="oldCopyPanel" hidden>
+          <p id="moveDoneText"></p>
+          <p id="oldCopyText"></p>
+          <div class="mv-actions">
+            <button type="button" id="deleteOldCopyBtn" class="btn ghost">Delete the old copy</button>
+            <button type="button" id="moveBackBtn" class="btn ghost">Move data back</button>
+          </div>
+        </div>
+        <div id="moveMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
       <!-- 1. JSON backup (restorable) -->
       <section class="bk-section">
         <h2>JSON backup <span class="tag">Restorable</span></h2>
-        <p>Your whole ledger, deleted entries included, as one <code>.json</code> file — the one to restore from.</p>
+        <p>Everything in Plannr — entries (deleted ones too), categories, people and settings — as one <code>.json</code> file. Restoring it on a new phone rebuilds the app exactly.</p>
         <label class="bk-optin"><input type="checkbox" id="includeContactsChk"> Include Daily Report contacts (Gmail addresses &amp; WhatsApp numbers)</label>
         <p class="bk-note">Off by default, so a backup you share carries no contact details.</p>
         <details class="wt">
@@ -235,13 +298,15 @@
         </details>
         <div id="encExportMsg" class="msg" role="status" aria-live="polite"></div>
         <label for="encExportPass">Passphrase</label>
-        <input type="password" id="encExportPass" autocomplete="new-password" placeholder="Choose a passphrase">
+        <input type="password" id="encExportPass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
+        <label for="encExportPass2">Type the passphrase again</label>
+        <input type="password" id="encExportPass2" autocomplete="new-password" placeholder="The same passphrase">
         <button type="button" id="encExportBtn" class="btn primary">Download encrypted backup</button>
       </section>
 
       <section class="bk-section">
         <h2>Restore from encrypted backup <span class="tag">Replaces data</span></h2>
-        <p class="bk-warn">Restores a <code>.db.enc</code> backup: replaces the entire database and can't be undone.</p>
+        <p class="bk-warn">Restores a <code>.db.enc</code> backup: replaces the entire database and can't be undone from this screen. Inside the app, a copy of your current data is saved first (the newest 3 copies are kept).</p>
         <div id="encImportMsg" class="msg" role="status" aria-live="polite"></div>
         <input type="file" id="encImportFile" class="file-input" accept=".enc" aria-label="Choose a Plannr encrypted backup to restore">
         <label for="encImportPass">Passphrase</label>
@@ -282,7 +347,9 @@
         <p class="bk-warn">Importing replaces the category list. An encrypted safety backup is saved first, and the import only runs if it succeeds.</p>
         <input type="file" id="ledgerCsvFile" class="file-input" accept="text/csv,.csv" aria-label="Choose an edited Ledger List CSV to import">
         <label for="ledgerCsvBackupPass">Passphrase for the safety backup</label>
-        <input type="password" id="ledgerCsvBackupPass" autocomplete="new-password" placeholder="Choose a passphrase">
+        <input type="password" id="ledgerCsvBackupPass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
+        <label for="ledgerCsvBackupPass2">Type the passphrase again</label>
+        <input type="password" id="ledgerCsvBackupPass2" autocomplete="new-password" placeholder="The same passphrase">
         <button type="button" id="importLedgerCsvBtn" class="btn ghost">Import Ledger List</button>
         <div id="ledgerCsvErrors" class="ledger-csv-errors" hidden></div>
       </section>
@@ -298,6 +365,16 @@
     </main>
   </div>
 
+  <!-- Step 1.4 C10: shown while a move runs; the rest of the page is inert (storage-move-ui.js). -->
+  <div id="moveOverlay" class="mv-overlay" role="dialog" aria-modal="true" aria-labelledby="moveOverlayTitle" hidden>
+    <div class="mv-box">
+      <h2 id="moveOverlayTitle" tabindex="-1">Moving your data…</h2>
+      <p>Keep Plannr open. Nothing can be changed until this finishes.</p>
+      <ol id="moveSteps" class="mv-steps" aria-live="polite"></ol>
+      <div id="moveOverlayMsg" class="msg" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
   <script src="/plannr-ui.js"></script>
   <!-- Phase 7: scrypt-js, a UMD build (no ES export — see backup-crypto.js's header), for the
        encrypted-backup key derivation. Only needed on this page. -->
@@ -311,6 +388,74 @@
       const { paiseToInput, formatDate: fmtDate, makeMsg, confirmModal } = window.PlannrUI;
 
       const jsonMsg = makeMsg(document.getElementById('jsonMsg'));
+
+      // Storage meter (Phase 2, Step 3). On the phone Plannr's data has a fixed amount of room inside
+      // the app (see measureStorage() in local-api.js); warn at 70%, and at 90% tell the user to export
+      // a backup before new entries start failing to save.
+      const mb = (bytes) => (bytes < 0.1 * 1048576 ? 'under 0.1' : (bytes / 1048576).toFixed(1).replace(/\.0$/, ''));
+      async function refreshStorage() {
+        let s;
+        try {
+          const r = await fetch('/api/storage');
+          if (!r.ok) return;
+          s = await r.json();
+        } catch { return; }
+        const section = document.getElementById('storageSection');
+        const text = document.getElementById('storageText');
+        const bar = document.getElementById('storageBar');
+        const fill = document.getElementById('storageFill');
+        const box = document.getElementById('storageMsg');
+        section.hidden = false;
+        // Step 1.4 C11: after the move the data is in its own file, which grows with the phone's free
+        // space. What can run out is Android's Google backup, which skips Plannr over 25 MB: the meter
+        // shows its estimate (the file, plus the old copy while it is kept), and low free space.
+        if (s.kind === 'file') {
+          const pct = Math.min(100, Math.round(s.fraction * 100));
+          const oldCopy = Math.max(0, s.backupBytes - s.databaseBytes);
+          const limit = mb(s.backupLimitBytes);
+          text.textContent = `Your data file is ${mb(s.databaseBytes)} MB. `
+            + (oldCopy > 0 ? `With the old copy (${mb(oldCopy)} MB), Android's Google backup of Plannr is about ${mb(s.backupBytes)} MB` : `Android's Google backup of Plannr is about ${mb(s.backupBytes)} MB`)
+            + ` of the ${limit} MB it allows (${pct}%).`;
+          bar.hidden = false;
+          bar.setAttribute('aria-label', 'Google backup size');
+          bar.setAttribute('aria-valuenow', String(pct));
+          bar.setAttribute('aria-valuetext', `${pct}% of the Google backup limit`);
+          fill.style.width = pct + '%';
+          fill.className = 'st-fill ' + s.level;
+          const todo = (oldCopy > 0 ? 'Delete the old copy below if you no longer need it, ' : '') + 'permanently delete items you no longer need from the Recycle Bin, and keep saving encrypted backups.';
+          const lines = [];
+          if (s.level === 'critical') lines.push(`Your data is close to the ${limit} MB that Android's Google backup allows (${pct}%). Plannr keeps saving, but over it Android stops backing Plannr up. ${todo[0].toUpperCase()}${todo.slice(1)}`);
+          else if (s.level === 'warning') lines.push(`Your data is getting near the ${limit} MB that Android's Google backup allows (${pct}%). ${todo[0].toUpperCase()}${todo.slice(1)}`);
+          if (s.freeLow) lines.push(`This phone has only ${mb(s.freeBytes)} MB free. New entries cannot be saved once the phone is full: free up space on the phone.`);
+          box.className = lines.length ? 'msg show error' + (s.level === 'critical' ? ' st-critical' : '') : 'msg';
+          box.textContent = lines.join(' ');
+          return;
+        }
+        if (s.mode !== 'phone' || !s.limitBytes) {
+          document.getElementById('storageTag').textContent = 'Desktop';
+          text.textContent = s.databaseBytes != null
+            ? `Desktop dev server: the database file is ${mb(s.databaseBytes)} MB. There is no app storage limit here (the phone app has one).`
+            : 'Desktop dev server: there is no app storage limit here (the phone app has one).';
+          bar.hidden = true;
+          return;
+        }
+        const pct = Math.min(100, Math.round(s.fraction * 100));
+        text.textContent = `Used ${mb(s.usedBytes)} MB of about ${mb(s.limitBytes)} MB (${pct}%).`;
+        bar.setAttribute('aria-valuenow', String(pct));
+        bar.setAttribute('aria-valuetext', `${pct}% used`);
+        fill.style.width = pct + '%';
+        fill.className = 'st-fill ' + s.level;
+        box.className = 'msg';
+        box.textContent = '';
+        if (s.level === 'critical') {
+          box.className = 'msg show error st-critical';
+          box.textContent = `Storage is almost full (${pct}%). Export a backup now: new entries may soon fail to save. Then permanently delete items you no longer need from the Recycle Bin below to make room.`;
+        } else if (s.level === 'warning') {
+          box.className = 'msg show error';
+          box.textContent = `Storage is getting full (${pct}%). Export a backup soon, and permanently delete items you no longer need from the Recycle Bin below.`;
+        }
+      }
+      refreshStorage();
       const importMsg = makeMsg(document.getElementById('importMsg'));
       const csvMsg = makeMsg(document.getElementById('csvMsg'));
 
@@ -329,11 +474,23 @@
 
       const errText = (err) => (err && err.message) ? err.message : String(err);
 
+      // A new encrypted backup's passphrase is typed twice: one typo in a passphrase typed once makes
+      // the backup impossible to open, and nobody finds out until they need it. The length rule is
+      // also enforced by the export route (MIN_PASSPHRASE_LEN in backup-crypto.js; keep the two equal).
+      const MIN_PASSPHRASE_LEN = 10;
+      function newPassphraseProblem(pass, again) {
+        if (!pass) return 'Enter a passphrase first.';
+        if ([...pass].length < MIN_PASSPHRASE_LEN) return `Use a passphrase of at least ${MIN_PASSPHRASE_LEN} characters. A short one can be guessed by anyone who gets the file.`;
+        if (pass !== again) return "The two passphrases don't match. Type them again.";
+        return null;
+      }
+
       // Phase 11 audit — confirmed via overview.html's PDF share path (Phase 6a, verified on-device):
       // a plain <a download> click is a dead end on Android's WebView (no visible effect), so a blob
       // download alone is not a real delivery path there. Capacitor's Filesystem+Share is the only one
-      // that works — reused here verbatim (same plugin calls, same timeouts) for every file this page
-      // produces, so a failure is always reported rather than silently doing nothing on-device.
+      // that works — reused here (same plugin calls) for every file this page produces, so a failure is
+      // always reported rather than silently doing nothing on-device. withTimeout guards the file
+      // write and check only; the share sheet waits for the user, however long they take.
       function withTimeout(promise, ms, label) {
         let timer;
         const timeout = new Promise((_, reject) => {
@@ -364,8 +521,9 @@
       // Phase 15: an encrypted full backup (fname ends ".db.enc" — the main "Download encrypted
       // backup" button AND the Ledger List CSV import's automatic safety backup both produce one, and
       // both are equally real, restorable snapshots) marks /api/backup/mark-exported right at the
-      // point each path treats the file as actually existing — post-Filesystem.stat() on native, post-
-      // download-trigger in the browser fallback (there's no stat to wait for there). Best-effort: a
+      // point each path treats the file as actually handed over — on native, only after Share.share()
+      // resolves (a file left in the app's cache folder is not a backup the user has); in the browser
+      // fallback, after the download is triggered (there's nothing further to wait for). Best-effort: a
       // failed recording must never fail an otherwise-successful backup.
       const markBackupExported = () => fetch('/api/backup/mark-exported', { method: 'POST' }).catch(() => {});
       async function saveFile(blob, fname, dialogTitle, msg) {
@@ -424,11 +582,26 @@
         catch (err) { bail('could not verify the file exists after writing (Filesystem.stat failed)', err); }
         if (!info || typeof info.size !== 'number') bail('Filesystem.stat returned no usable size (got ' + JSON.stringify(info) + ')');
         ok(`file verified on disk: ${info.size} bytes`);
-        if (fname.endsWith('.db.enc')) await markBackupExported();
 
-        try { await withTimeout(Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }), 20000, 'Opening the share sheet'); }
-        catch (err) { bail('Share.share threw', err); }
+        // No timeout on Share.share(): it resolves only when the user has picked where the file goes,
+        // and choosing can take longer than any limit (a 20 s timeout used to report "timed out" while
+        // the sheet was still open — seen on the emulator, Phase 2 Step 9). Closing the sheet without
+        // choosing is the user's call, not an error: say so plainly, and still don't count it as saved.
+        const stillWaiting = setTimeout(() => ok('waiting for you to choose where to save it (if no share sheet is on screen, go back and tap the button again)'), 20000);
+        try { await Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }); }
+        catch (err) {
+          if (/cancel/i.test(errText(err))) {
+            steps.push('– Not saved: the share sheet was closed without choosing where to keep the file. Tap the button again to save it.');
+            report('info');
+            const e = new Error('share cancelled');
+            e.alreadyShown = true;
+            e.cancelled = true;
+            throw e;
+          }
+          bail('Share.share threw', err);
+        } finally { clearTimeout(stillWaiting); }
         ok('share sheet invoked');
+        if (fname.endsWith('.db.enc')) await markBackupExported();
 
         report('success');
       }
@@ -438,13 +611,12 @@
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
       };
 
-      // Phase 10C — deleted_at is stored UTC (SQLite datetime('now')). Convert to the IST calendar
-      // date for display; otherwise a row deleted between 00:00 and 05:30 IST reads a day early.
-      const istDate = (utc) => {
-        if (!utc) return '';
-        const d = new Date(String(utc).replace(' ', 'T') + 'Z'); // parse the stored value as UTC
-        return isNaN(d) ? String(utc).slice(0, 10) : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
-      };
+      // Step 1.4 C10: the move to the new storage (storage-move-ui.js). Its step-1 backup is saved by
+      // this page's own saveFile(), the same as "Download encrypted backup". Only in a build with the
+      // storage plugins; anywhere else the section stays hidden.
+      import('/storage-move-ui.js')
+        .then((m) => m.initMovePanel({ makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText }))
+        .catch((err) => console.error('[data-backup] the storage move panel could not start:', err));
 
       // ---- 1. Download JSON backup ------------------------------------------
       const downloadJsonBtn = document.getElementById('downloadJsonBtn');
@@ -470,10 +642,13 @@
       const TABLE_LABEL = {
         cash_in: 'inflow', cash_out: 'outflow', loans: 'loan',
         contract: 'contract row', contract_payment_dates: 'payment date', contractor_payments: 'contractor payment', settings: 'setting',
+        ledger_mains: 'category', ledger_subs: 'sub-category',
       };
       function summariseCounts(imported) {
         // e.g. "3 inflows, 1 outflow, 0 loans, ..." in a fixed, readable order.
-        return ['cash_in', 'cash_out', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments', 'settings']
+        // Categories only appear for a v2 backup (a v1 file leaves this phone's categories as they are).
+        return ['cash_in', 'cash_out', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments', 'settings', 'ledger_mains', 'ledger_subs']
+          .filter((t) => t in imported)
           .map((t) => {
             const n = imported[t] || 0;
             const w = TABLE_LABEL[t];
@@ -521,11 +696,13 @@
       // ---- Encrypted full backup (Phase 7) -----------------------------------
       const encExportMsg = makeMsg(document.getElementById('encExportMsg'));
       const encExportPass = document.getElementById('encExportPass');
+      const encExportPass2 = document.getElementById('encExportPass2');
       const encExportBtn = document.getElementById('encExportBtn');
       encExportBtn.addEventListener('click', async () => {
         encExportMsg.clear();
         const passphrase = encExportPass.value;
-        if (!passphrase) { encExportMsg.show('Enter a passphrase first.', 'error'); return; }
+        const problem = newPassphraseProblem(passphrase, encExportPass2.value);
+        if (problem) { encExportMsg.show(problem, 'error'); return; }
         encExportBtn.disabled = true;
         try {
           const res = await fetch('/api/backup/export-encrypted', {
@@ -541,6 +718,7 @@
           const blob = await res.blob();
           await saveFile(blob, `plannr-backup-${today()}.db.enc`, 'Save encrypted backup', encExportMsg);
           encExportPass.value = '';
+          encExportPass2.value = '';
         } catch (err) {
           if (!err.alreadyShown) encExportMsg.show('Could not save the encrypted backup: ' + errText(err), 'error');
         } finally {
@@ -579,7 +757,7 @@
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
-            encImportMsg.show('Restored ✓ — reloading…', 'success');
+            encImportMsg.show(data.snapshot ? `Restored ✓ — your previous data was saved to ${data.snapshot}. Reloading…` : 'Restored ✓ — reloading…', 'success');
             setTimeout(() => location.reload(), 800);
           } else {
             encImportMsg.show(data.error || 'Restore failed. Your current data may be unchanged.', 'error');
@@ -711,6 +889,7 @@
       const downloadLedgerCsvBtn = document.getElementById('downloadLedgerCsvBtn');
       const ledgerCsvFile = document.getElementById('ledgerCsvFile');
       const ledgerCsvBackupPass = document.getElementById('ledgerCsvBackupPass');
+      const ledgerCsvBackupPass2 = document.getElementById('ledgerCsvBackupPass2');
       const importLedgerCsvBtn = document.getElementById('importLedgerCsvBtn');
       const ledgerCsvErrorsEl = document.getElementById('ledgerCsvErrors');
 
@@ -744,6 +923,8 @@
         if (!file) { ledgerCsvMsg.show('Choose an edited Ledger List CSV first.', 'error'); return; }
         const passphrase = ledgerCsvBackupPass.value;
         if (!passphrase) { ledgerCsvMsg.show('Enter a passphrase for the automatic safety backup first.', 'error'); return; }
+        const problem = newPassphraseProblem(passphrase, ledgerCsvBackupPass2.value);
+        if (problem) { ledgerCsvMsg.show(problem, 'error'); return; }
         if (!window.confirm("Replace the ledger category list? This can't be undone in the app.")) return;
 
         importLedgerCsvBtn.disabled = true;
@@ -771,7 +952,8 @@
           try {
             await saveFile(backupBlob, backupFname, 'Save safety backup', ledgerCsvMsg);
           } catch (err) {
-            if (!err.alreadyShown) ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
+            if (err.cancelled) ledgerCsvMsg.show('Import stopped: the safety backup was not saved, so nothing was imported. Tap Import again and choose where to keep the backup.', 'info');
+            else if (!err.alreadyShown) ledgerCsvMsg.show('Safety backup could not be saved — import aborted: ' + errText(err), 'error');
             return;
           }
 
@@ -794,6 +976,7 @@
           const data = await res.json().catch(() => ({}));
           if (res.ok) {
             ledgerCsvBackupPass.value = '';
+            ledgerCsvBackupPass2.value = '';
             ledgerCsvFile.value = '';
             ledgerCsvMsg.show('Ledger List imported ✓. Keep the safety backup\'s passphrase somewhere separate from the file.', 'success');
           } else {
@@ -821,6 +1004,16 @@
       const msg = makeMsg(document.getElementById('trashMsg'));
       const body = document.getElementById('trashBody');
       const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      // Phase 10C — deleted_at is stored UTC (SQLite datetime('now')). Convert to the IST calendar
+      // date for display; otherwise a row deleted between 00:00 and 05:30 IST reads a day early.
+      // It must live in THIS script block: it used to be defined inside the previous <script>'s
+      // function, so render() threw a ReferenceError for any deleted row and the catch below showed
+      // "Network error loading the Recycle Bin." (found on the emulator, Phase 2 Step 9).
+      const istDate = (utc) => {
+        if (!utc) return '';
+        const d = new Date(String(utc).replace(' ', 'T') + 'Z'); // parse the stored value as UTC
+        return isNaN(d) ? String(utc).slice(0, 10) : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+      };
       const LABELS = { cash_out: 'Cash outflow', cash_in: 'Cash inflow', loans: 'Loans', contract: 'Contracts', contractor_payments: 'Contractor payments' };
       const ORDER = ['cash_out', 'cash_in', 'loans', 'contract', 'contractor_payments'];
 
@@ -859,7 +1052,11 @@
           const r = await fetch('/api/trash');
           if (!r.ok) { body.innerHTML = '<p class="rb-empty">Could not load the Recycle Bin.</p>'; return; }
           render((await r.json()).trash || {});
-        } catch { body.innerHTML = '<p class="rb-empty">Network error loading the Recycle Bin.</p>'; }
+        } catch (e) {
+          // Not necessarily the network: on the phone there is none, so a rendering bug also lands here.
+          console.error('[recycle bin]', e);
+          body.innerHTML = '<p class="rb-empty">Could not show the Recycle Bin. Restart Plannr and try again.</p>';
+        }
       }
 
       body.addEventListener('click', async (ev) => {

@@ -38,8 +38,13 @@ requests changes:
 | Mode | What answers requests | Where the data lives | When you'd use it |
 |---|---|---|---|
 | **The Android app** | `public/local-api.js` — code that answers requests locally instead of over a network | a database that runs inside the app | the actual product |
-| **`node server.js`** | a real web server | an ordinary database file, `data/plannr.db` | desktop development; what most tests use |
+| **`node server.js`** | a real web server (dev and tests only; prints `DEV MODE – not used by the phone app`) | an ordinary database file, `data/plannr.db` | desktop development; what most tests use |
 | **`node local-server.js`** | the same local code the Android app uses | the same in-app database, in a plain browser tab | testing the exact setup the app uses, without building an APK |
+
+Which one a page uses is decided by `public/runtime-mode.js`: inside the Android app it is
+always the in-app database, with no probe request at all; in a desktop browser it is
+`server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Server: 1` header
+(`npm run test:runtime-mode` drives all four combinations in a browser).
 
 Because `local-api.js` and `server.js` answer the same set of requests, every page behaves
 the same whichever is underneath. They are deliberately separate files rather than one
@@ -226,6 +231,11 @@ going over an allowance is a normal thing to happen, not an error.
   Two things protect the real database: each test file points `PLANNR_DB` at its own
   temporary database before anything loads, and the runner checks `data/plannr.db`'s
   timestamp before and after the whole run and fails if it changed.
+  It runs in two passes. The first runs every test file against `server.js`. The second runs
+  the 28 files that use `test/helpers.js` again, against the phone's own API code
+  (`public/local-api.js`, loaded in Node by `test/shim-target.js`). Tests that are known to
+  differ on the phone are listed, each with a reason, in `test/phone-code-differences.json`;
+  any other failure fails the run, and so does a listed test that starts passing.
 - **`npm run test:ui`** — visual checks against `server.js`: chart colours, table layout,
   large amounts not being cut off, and saving with no changes doing nothing.
 - **`npm run test:static-hosting`** — runs a real `local-server.js` process against an empty
@@ -234,6 +244,21 @@ going over an allowance is a normal thing to happen, not an error.
   and import round trip including every rejection case, and the save/confirm flow on all
   four file-producing paths in Data Backup.
 - **`npm run test:backup-crypto`** — round-trips the encrypted backup through the real code.
+- **`npm run test:offline`** — offline first: every page in a real browser with no connection
+  (outside requests blocked and recorded, `navigator.onLine` false). Logs, edits and deletes an
+  entry, downloads both backups and presses the PDF button; fails on any outside request.
+  `test/offline.test.js` (in `npm test`, both passes) covers the same at the code level.
+- **`npm run test:db-adapter-kvvfs`** — the database adapter contract suite
+  (`test/adapter-contract.mjs`) on the phone's sqlite-wasm/localStorage adapter in Chromium, plus
+  a replaced database surviving a reopen and a refused replace leaving localStorage untouched.
+  The same cases run on the Node adapter in `npm test` (step 1.4 B1–B2).
+- **`npm run test:backup-roundtrip`** — the phone's backups rebuild the app exactly: fill with
+  the fixture, back up (JSON and encrypted), wipe, restore, compare every table row by row;
+  the Recycle Bin then lists the fixture's deleted rows.
+- **`npm run test:storage-limit`** — the phone's storage limit, measured in Chromium (the
+  phone's database lives in WebView localStorage: about 10 MB, roughly 12,000 entries), the
+  storage meter on Data Backup (warnings at 70% and 90%), and "Storage is full" (never
+  "Something went wrong") when a save hits the limit, with the data left intact.
 - **`npm run test:palette`** — renders the real Overview chart, reads the colours back out
   of it, and checks every pair is far enough apart to tell apart. It replaced a check that
   only compared colour *names*, and so passed while two pale greens sat side by side in the
@@ -252,6 +277,40 @@ going over an allowance is a normal thing to happen, not an error.
 - **`npm run test:contract-phase-a`** — Contract Details in a real browser: the worked-out
   total appearing and disabling the typed field, the expected completion date, entering
   allowances by hand, and recording spending against one. Fails on any console error.
+- **`npm run test:runtime-mode`** — which backend answers `/api` in each of the four cases
+  (in the app or a browser, `server.js` or plain files): inside the app always the in-app
+  database, with no probe request.
+- **Database upgrades from every past version** (part of `npm test`, step 1.4 B4).
+  `test/fixtures/schema-history/` holds one small database for every schema `db.js` has ever
+  built (8 of them, user_version 1 and 2, made-up rows only), plus the old migration runner
+  (`db.js` and `ledgers.js` exactly as at 0e7b70b). `test/migration-equivalence.test.js`
+  upgrades each one with the old runner and the new `await init()`, and compares
+  the results: schema, user_version and a checksum of every table.
+  Both also make the same writes in the same order (step 1.4 B5).
+  `test/migration-legacy-shapes.test.js` does the same for made-up databases in shapes older than
+  any in git history (user_version 0, and 1 with a second household; `test/fixtures/legacy-shapes/`,
+  made by `make-legacy-shapes.js`), which reach the oldest parts of `legacyInit()` (step 1.4 B6, B8).
+  `test/migration-faults.test.js` makes each upgrade fail at every write and checks the data is
+  unchanged, the safety snapshot is there and the next start finishes. The fixtures are made by
+  `node test/fixtures/schema-history/make-fixtures.js` (by hand, from git history; see its
+  header); a fixture file that changes fails the tests.
+- **One request at a time** (part of `npm test`, step 1.4 B5). `test/request-queue-wiring.test.js`
+  (both passes): every `/api` route goes through the request queue except the Overview PDF's render,
+  a request waits while the queue is held, and an error in a route still gets its usual answer.
+  `test/request-queue.test.js` covers the wiring itself and the PDF split; `test/db-init-async.test.js`
+  that `init()` really awaits its database calls. `npm run test:backup-roundtrip` sends a write
+  during an encrypted restore on the phone code: it must wait and be kept.
+- **`npm run test:slow`** — the same failure check for the user_version 1 fixtures (about 350
+  failure points, half a minute), including several starts after each failure. It pins the one
+  known limit of the old upgrade code (§8). `test/upgrade-retry.test.js` (in `npm test`) checks
+  the two fixes it led to directly.
+- **Safe updates** (part of `npm test`): `test/release-guards.test.js` fails if the app id or
+  the page origin (`https://localhost`) would change — either would open an empty database
+  after an update — or if the release key could be committed. `npm run release:android` runs
+  all of the above before it builds a release (`docs/RELEASE.md`).
+- **On a phone:** what no browser test can prove (where the WebView keeps the data, the real
+  storage limit, Auto Backup, airplane mode, updating over the old version) is a manual
+  checklist: `docs/PHONE-TEST-CHECKLIST.md`.
 
 ---
 
@@ -262,6 +321,19 @@ going over an allowance is a normal thing to happen, not an error.
   checks the whole file first, takes a snapshot of what's there, then replaces everything in
   one step — and rolls back if anything fails. For a single row, the recycle bin restores
   it.
+- **Safety snapshots on the phone.** Before a JSON restore, an encrypted restore or a database
+  upgrade, the app copies the current data into its private folder,
+  `Directory.Data/safety-snapshots/` (`public/safety-snapshots.js`), and checks the copy before
+  going ahead. Only the newest 3 are kept; older ones are deleted only after the new one is
+  safely written. The one taken before an upgrade that has not finished (it failed, and the app
+  is being started again) is never deleted until an upgrade finishes; it is named in
+  `safety-snapshots/plannr-upgrade-pending.json`. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
+  no screen to restore one: they are for recovery with `adb` on a debug build, or from Android's
+  Auto Backup.
+- **Android Auto Backup** is on, limited to the ledger (the WebView's localStorage) and the
+  safety snapshots (`android/app/src/main/res/xml/backup_rules.xml` for Android 6-11,
+  `data_extraction_rules.xml` for 12+; keep them identical). Worst case with storage full is
+  about 12 MB, under Android's 25 MB limit (`npm run test:storage-limit` measures it).
 - **A category edit gone wrong.** Every category CSV import forces an encrypted backup
   first, and you have to confirm you have it — a dialog names the exact file — before the
   import will run. An import that would remove a category still used by recorded spending is
@@ -282,8 +354,11 @@ going over an allowance is a normal thing to happen, not an error.
 
 ### The five kinds of file `/data-backup` produces
 
-- **Full backup (JSON)** — every table, including deleted rows, with the links between them
-  preserved. The only format you can restore everything from.
+- **Full backup (JSON)** — every table (entries including deleted rows, categories, saved
+  custom names, people, settings) plus the next-id counters, with the links between them
+  preserved; format v2, defined once in `backup-format.js` for both backends. Restoring it on a
+  new phone rebuilds the app exactly. Older v1 files (no categories or people) still restore
+  and leave the phone's own categories as they are. Old login password hashes are never exported.
 - **Encrypted backup** — the same thing, encrypted with AES-256-GCM under a passphrase you
   choose (`backup-crypto.js`). On Android
   both saving and restoring go through the system share sheet; in a browser it is a plain
@@ -371,6 +446,12 @@ There is deliberately **no reset button inside the app**.
 - **The category list is data, not code.** `ledgers.js` only supplies the starting values;
   the database is what everything reads, specifically so the owner can change categories over
   the life of a real project without anyone editing code.
+- **One request at a time.** Every `/api` request runs through one queue (`core/request-queue.js`,
+  step 1.4 B5), on the dev server and in the app. The database calls are becoming async, and two
+  requests running into each other can lose a write: one landing inside another's transaction and
+  rolled back with it, or a save wiped by a restore running at the same time. There is one user, so
+  waiting costs nothing that matters. The one exception is the Overview PDF: its page is built inside
+  the queue and rendered outside it, so a PDF does not hold up the next request.
 - **`server.js` and `public/local-api.js` are deliberately separate.** They answer the same
   requests as two independent files rather than sharing one, so the Android app depends on no
   Node code at all. `repo.js` is the single exception, shared and copied into `public/`,
@@ -383,11 +464,23 @@ There is deliberately **no reset button inside the app**.
 
 - **`server.js` is one very large file.** It has grown well past a comfortable size and has
   not been split up. It works and it is tested, but it is the main thing that needs tidying.
-- **The save-and-share path on Android has not been tested on a real device.** It was
-  written to match the PDF sharing path, which has been tested on a device, and it passes
-  every test that can run in a browser — but a browser always reports itself as non-native,
-  so the Android-specific branch is never exercised. Try it on real hardware before putting
-  real data in.
+- **Phase 2's phone-only checks passed on an Android 16 emulator, not yet on the user's
+  phone**: the save-and-share path for backups and the PDF, the WebView storage folder and
+  real limit, safety snapshots in the app's folder, updating over the old version, Auto Backup
+  and restore, airplane mode, and a build without the INTERNET permission. Results and what to
+  repeat on the phone: `docs/PHONE-TEST-CHECKLIST.md`.
+- **The phone database is limited to about 10 MB of `localStorage`,** and a save made less than
+  about a second before Android kills the app can be lost (measured on the emulator; the
+  database stays consistent). Moving it is proposed, not done: `docs/storage-proposal.md`.
+- **A database made before 2026-08-23 (user_version 1) whose upgrade fails in its last steps
+  needs two starts.** The next start shows an error once ("no such column:
+  contract_allowance_id"); the start after that finishes the upgrade. Nothing is lost, and the
+  safety snapshot from before the upgrade is kept until it finishes. Databases made since then
+  (every phone install) are not affected. Pinned by `npm run test:slow`; making those steps safe
+  to run again is still to do (`docs/step-1.4-storage-plan.md`, B4).
+- **Reminders arrive late unless "Alarms & reminders" is allowed** for Plannr (off by default on
+  Android 14+). Home offers a button for it when a reminder time is added, and again each time
+  Home opens while it is not allowed. Plannr never opens that settings screen by itself.
 
 ---
 

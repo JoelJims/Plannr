@@ -36,17 +36,17 @@ test('foreign_key_check is clean after a full seed-and-delete cycle', async () =
   assert.strictEqual(violations.length, 0, 'no FK violations: ' + JSON.stringify(violations));
 });
 
-test('assertImportOwnershipComplete() passes on the real schema', () => {
-  assert.doesNotThrow(() => H.app._assertImportOwnershipComplete(), 'the shipped schema is ownership-complete');
+test('assertImportOwnershipComplete() passes on the real schema', async () => {
+  await assert.doesNotReject(H.app._assertImportOwnershipComplete(), 'the shipped schema is ownership-complete');
 });
 
-test('assertImportOwnershipComplete() THROWS when a table with a FK into an owned table is not itself owned', () => {
+test('assertImportOwnershipComplete() REJECTS when a table with a FK into an owned table is not itself owned', async () => {
   // Create a table with a foreign key INTO an owned table (cash_out) that is NOT in IMPORT_OWNED_TABLES.
   H.db.exec('CREATE TABLE zzz_fk_probe (id INTEGER PRIMARY KEY, co INTEGER REFERENCES cash_out(id))');
   try {
-    assert.throws(() => H.app._assertImportOwnershipComplete(), /IMPORT_OWNED_TABLES is incomplete/);
+    await assert.rejects(H.app._assertImportOwnershipComplete(), /IMPORT_OWNED_TABLES is incomplete/);
   } finally {
     H.db.exec('DROP TABLE zzz_fk_probe');
   }
-  assert.doesNotThrow(() => H.app._assertImportOwnershipComplete(), 'clean again after dropping the probe');
+  await assert.doesNotReject(H.app._assertImportOwnershipComplete(), 'clean again after dropping the probe');
 });

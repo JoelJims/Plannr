@@ -7,35 +7,40 @@
 // them took), so route handlers in server.js didn't need to change their call shape beyond
 // dropping that one argument.
 //
-// db.init() must have run before this module is required (server.js requires it right after init()).
-//
-// Phase 4c: this module is now an ES module and imports `db` directly from db.js — every statement
-// below is prepared eagerly, at THIS module's own top level, against whatever `db` is at that moment.
-// Under Node that's always already open (db.js's Node path is synchronous), so nothing here changed
-// behaviorally. A future browser entry point must `await` db.js's `ready()` and only import this
-// module afterward (e.g. via a dynamic `import('./repo.js')`) — importing it eagerly, before `db` is
-// open, would throw the moment any statement below tries to `db.prepare(...)` against a not-yet-open
-// connection.
+// Every function here reads or writes through db.js's async database interface and returns a
+// Promise (step 1.4 B10-B12). Nothing is prepared at import, so this module may be imported before
+// the database is open; init() must have run before the first call (the tables must exist).
 
-import { db } from './db.js';
+import { dbAdapter, transaction } from './db.js';
+import { statementOn } from './core/db-adapter.js';
+
+// Step 1.4 B10-B12: repo.js moves to the async database interface (core/db-adapter.js), one group of
+// statements per part. S(sql) looks like a prepared statement (get/all/run with positional params),
+// but every call returns a Promise, so every caller awaits it. The adapter prepares each SQL text on
+// first use and keeps it; it also resolves the connection at call time, so these need no open
+// database at import. Converted: overview, ledgerCustoms, ledgers, authoredCount (B10); contract (B11); crud, trash,
+// backup (B12). Nothing here prepares a statement on the synchronous handle any more.
+const S = (sql) => statementOn(dbAdapter(), sql);
 
 // ── generic CRUD (used by makeLedgerCrud) ────────────────────────────────────────────────────────
 // config: { table, select, listWhere, byIdWhere, columns, alias } — alias is the table alias used in
 // `select`/`listWhere`/`byIdWhere` ('c', 'cp', or '' for none).
+// Every runner returns a Promise (step 1.4 B12).
 function crud({ table, select, listWhere, byIdWhere, columns, alias = '', searchCols = null }) {
   const a = alias ? alias + '.' : '';
-  const listStmt = db.prepare(`${select} ${listWhere}`);
-  const byIdStmt = db.prepare(`${select} ${byIdWhere}`);
-  const existsStmt = db.prepare(`SELECT 1 FROM ${table} WHERE id = ? AND deleted_at IS NULL`);
-  const fullRowStmt = db.prepare(`SELECT * FROM ${table} WHERE id = ?`);
-  const liveCountStmt = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE deleted_at IS NULL`);
-  const insertStmt = db.prepare(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`);
-  const updateStmt = db.prepare(`UPDATE ${table} SET ${columns.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`);
-  const softDeleteStmt = db.prepare(`UPDATE ${table} SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL`);
+  const listStmt = S(`${select} ${listWhere}`);
+  const byIdStmt = S(`${select} ${byIdWhere}`);
+  const existsStmt = S(`SELECT 1 FROM ${table} WHERE id = ? AND deleted_at IS NULL`);
+  const fullRowStmt = S(`SELECT * FROM ${table} WHERE id = ?`);
+  const liveCountStmt = S(`SELECT COUNT(*) AS n FROM ${table} WHERE deleted_at IS NULL`);
+  const insertStmt = S(insertSqlFor(table, columns));
+  const updateStmt = S(updateSqlFor(table, columns));
+  const softDeleteStmt = S(`UPDATE ${table} SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL`);
 
   // Part A — SQL-side filtered search (opt-in via searchCols). Builds ONLY the active predicates so
-  // the planner can use the right index per combination. Prepared statements are cached by filter
-  // SHAPE. searchCols maps filter -> column(s): { date, amount, ledger, subledger, text: [cols] }.
+  // the planner can use the right index per combination. The SQL is cached by filter SHAPE (and the
+  // adapter prepares each text once). searchCols maps filter -> column(s): { date, amount, ledger,
+  // subledger, text: [cols] }.
   let search = null;
   if (searchCols) {
     const searchCache = new Map();
@@ -46,10 +51,8 @@ function crud({ table, select, listWhere, byIdWhere, columns, alias = '', search
       if (shape.includes('l')) clauses.push(`${a}${searchCols.ledger} = ?`);
       if (shape.includes('s')) clauses.push(`${a}${searchCols.subledger} = ?`);
       if (shape.includes('q')) clauses.push('(' + searchCols.text.map((c) => `${a}${c} LIKE ?`).join(' OR ') + ')');
-      const sql = `${select} WHERE ${clauses.join(' AND ')} ORDER BY ${a}id ASC`;
-      return db.prepare(sql);
+      return S(`${select} WHERE ${clauses.join(' AND ')} ORDER BY ${a}id ASC`);
     };
-    buildSearch(''); // pre-build the base (no-filter) shape at boot
     // filters: { start, end, min, max, ledger, subledger, q } — any subset.
     search = (f = {}) => {
       const shape = [], params = [];
@@ -67,9 +70,9 @@ function crud({ table, select, listWhere, byIdWhere, columns, alias = '', search
   return {
     list: () => listStmt.all(),
     getById: (id) => byIdStmt.get(id),
-    existsLive: (id) => !!existsStmt.get(id),
+    existsLive: async (id) => !!(await existsStmt.get(id)),
     fullRow: (id) => fullRowStmt.get(id),
-    liveCount: () => liveCountStmt.get().n,
+    liveCount: async () => (await liveCountStmt.get()).n,
     insert: (vals) => insertStmt.run(...vals),
     update: (id, vals) => updateStmt.run(...vals, id),
     softDelete: (id) => softDeleteStmt.run(id),
@@ -79,16 +82,17 @@ function crud({ table, select, listWhere, byIdWhere, columns, alias = '', search
 
 // ── Recycle Bin (per-table) ──────────────────────────────────────────────────────────────────────
 // config: { table, select, alias } — `select` is the resource's live SELECT (reused so trash labels
-// match the live list). Returns runners for the deleted-only list + find/restore/hard-delete.
+// match the live list). Returns runners for the deleted-only list + find/restore/hard-delete, each
+// returning a Promise (step 1.4 B12).
 function trash({ table, select, alias = '' }) {
   const a = alias ? alias + '.' : '';
   // A `SELECT *` already carries deleted_at; otherwise expose it explicitly so the shaper + handler
   // can read it (matches the pre-Phase-3 trash selects exactly).
   const withDeleted = /^\s*SELECT\s+\*/i.test(select) ? select : select.replace(/^\s*SELECT /i, `SELECT ${a}deleted_at AS deleted_at, `);
-  const listStmt = db.prepare(`${withDeleted} WHERE ${a}deleted_at IS NOT NULL ORDER BY ${a}deleted_at DESC`);
-  const findStmt = db.prepare(`SELECT id FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
-  const restoreStmt = db.prepare(`UPDATE ${table} SET deleted_at = NULL, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NOT NULL`);
-  const hardDeleteStmt = db.prepare(`DELETE FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
+  const listStmt = S(`${withDeleted} WHERE ${a}deleted_at IS NOT NULL ORDER BY ${a}deleted_at DESC`);
+  const findStmt = S(`SELECT id FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
+  const restoreStmt = S(`UPDATE ${table} SET deleted_at = NULL, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NOT NULL`);
+  const hardDeleteStmt = S(`DELETE FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`);
   return {
     listDeleted: () => listStmt.all(),
     find: (id) => findStmt.get(id),
@@ -104,20 +108,21 @@ const ov = {
   // The 'included'-debit cumulative scan that fed the Phase 5E reimbursement offset (and its
   // missing-offset reconciliation check) is gone with the offset itself — nothing reads
   // cash_out.contract_stated_paise any more, so there is no aggregate over it here.
-  contracts: db.prepare(
+  contracts: S(
     `SELECT id, contractor_name, area_of_work, ledger_code, subledger_code, ledger_custom_name, subledger_custom_name, price_of_contract_paise,
             rate_per_sqft_paise, measured_area_milli_sqft
        FROM contract WHERE deleted_at IS NULL ORDER BY id ASC`
   ),
-  paidByContract: db.prepare('SELECT contract_id, COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL GROUP BY contract_id'),
-  outsAll: db.prepare(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL`),
-  outsRange: db.prepare(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL AND tx_date >= ? AND tx_date <= ?`),
-  paymentsAll: db.prepare(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL`),
-  paymentsRange: db.prepare(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL AND pay_date >= ? AND pay_date <= ?`),
-  loansSum: db.prepare('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM loans WHERE deleted_at IS NULL'),
+  paidByContract: S('SELECT contract_id, COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL GROUP BY contract_id'),
+  outsAll: S(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL`),
+  outsRange: S(`SELECT ${OV_OUTS_COLS} FROM cash_out WHERE deleted_at IS NULL AND tx_date >= ? AND tx_date <= ?`),
+  paymentsAll: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL`),
+  paymentsRange: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL AND pay_date >= ? AND pay_date <= ?`),
+  loansSum: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM loans WHERE deleted_at IS NULL'),
   // Part B — cash_out logged (created) since the last report's boundary timestamp (created_at is UTC ISO).
-  outsSince: db.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
+  outsSince: S("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
 };
+// Each returns a Promise (step 1.4 B10).
 const overview = {
   contracts: () => ov.contracts.all(),
   paidByContract: () => ov.paidByContract.all(),
@@ -131,60 +136,60 @@ const overview = {
 
 // ── Contract + services + payment dates ───────────────────────────────────────────────────────────
 const cStmt = {
-  list: db.prepare('SELECT * FROM contract WHERE deleted_at IS NULL ORDER BY id ASC'),
-  getLive: db.prepare('SELECT * FROM contract WHERE id = ? AND deleted_at IS NULL'),
-  existsLive: db.prepare('SELECT 1 FROM contract WHERE id = ? AND deleted_at IS NULL'),
-  liveCount: db.prepare('SELECT COUNT(*) AS n FROM contract WHERE deleted_at IS NULL'),
-  deletedAt: db.prepare('SELECT deleted_at FROM contract WHERE id = ?'),
-  softDelete: db.prepare("UPDATE contract SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL"),
-  payDatesFor: db.prepare('SELECT pay_date FROM contract_payment_dates WHERE contract_id = ? ORDER BY pay_date ASC, id ASC'),
-  delPayDates: db.prepare('DELETE FROM contract_payment_dates WHERE contract_id = ?'),
-  insPayDate: db.prepare('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?, ?)'),
-  servicesFor: db.prepare('SELECT id, name FROM contract_services WHERE contract_id = ? AND deleted_at IS NULL ORDER BY id ASC'),
-  serviceLive: db.prepare('SELECT * FROM contract_services WHERE id = ? AND deleted_at IS NULL'),
-  serviceForContract: db.prepare('SELECT * FROM contract_services WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
-  insService: db.prepare('INSERT INTO contract_services (contract_id, name) VALUES (?, ?)'),
-  updService: db.prepare("UPDATE contract_services SET name = ?, updated_at = datetime('now') WHERE id = ?"),
-  delService: db.prepare("UPDATE contract_services SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"),
-  livePaymentsFor: db.prepare('SELECT COUNT(*) AS n FROM contractor_payments WHERE contract_id = ? AND deleted_at IS NULL'),
+  list: S('SELECT * FROM contract WHERE deleted_at IS NULL ORDER BY id ASC'),
+  getLive: S('SELECT * FROM contract WHERE id = ? AND deleted_at IS NULL'),
+  existsLive: S('SELECT 1 FROM contract WHERE id = ? AND deleted_at IS NULL'),
+  liveCount: S('SELECT COUNT(*) AS n FROM contract WHERE deleted_at IS NULL'),
+  deletedAt: S('SELECT deleted_at FROM contract WHERE id = ?'),
+  softDelete: S("UPDATE contract SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL"),
+  payDatesFor: S('SELECT pay_date FROM contract_payment_dates WHERE contract_id = ? ORDER BY pay_date ASC, id ASC'),
+  delPayDates: S('DELETE FROM contract_payment_dates WHERE contract_id = ?'),
+  insPayDate: S('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?, ?)'),
+  servicesFor: S('SELECT id, name FROM contract_services WHERE contract_id = ? AND deleted_at IS NULL ORDER BY id ASC'),
+  serviceLive: S('SELECT * FROM contract_services WHERE id = ? AND deleted_at IS NULL'),
+  serviceForContract: S('SELECT * FROM contract_services WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
+  insService: S('INSERT INTO contract_services (contract_id, name) VALUES (?, ?)'),
+  updService: S("UPDATE contract_services SET name = ?, updated_at = datetime('now') WHERE id = ?"),
+  delService: S("UPDATE contract_services SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"),
+  livePaymentsFor: S('SELECT COUNT(*) AS n FROM contractor_payments WHERE contract_id = ? AND deleted_at IS NULL'),
   // Part C — best-effort overdue heuristic: is there a LIVE payment recorded on exactly this scheduled
   // (contract_id, pay_date)? There is no schedule↔payment FK, so this exact-date match is the only signal.
-  paymentOnDate: db.prepare('SELECT 1 FROM contractor_payments WHERE contract_id = ? AND pay_date = ? AND deleted_at IS NULL LIMIT 1'),
-  paymentsForAny: db.prepare('SELECT COUNT(*) AS n FROM contractor_payments WHERE contract_id = ?'),
-  paymentContractId: db.prepare('SELECT contract_id FROM contractor_payments WHERE id = ?'),
+  paymentOnDate: S('SELECT 1 FROM contractor_payments WHERE contract_id = ? AND pay_date = ? AND deleted_at IS NULL LIMIT 1'),
+  paymentsForAny: S('SELECT COUNT(*) AS n FROM contractor_payments WHERE contract_id = ?'),
+  paymentContractId: S('SELECT contract_id FROM contractor_payments WHERE id = ?'),
   // cash_out.contract_service_id -> contract_services(id) has NO ON DELETE action, so hard-deleting a
   // contract (which CASCADEs into its contract_services) throws a raw FK error if any cash_out row —
   // live OR in the Recycle Bin, since FK checks don't know about deleted_at — still points at one of
   // those services. Counted the same way as paymentsForAny, so the route can guard it the same way.
-  cashOutReferencingServices: db.prepare(
+  cashOutReferencingServices: S(
     'SELECT COUNT(*) AS n FROM cash_out WHERE contract_service_id IN (SELECT id FROM contract_services WHERE contract_id = ?)'
   ),
   // One-live-debit-per-service guard (the safety-critical pair). Contract Phase A: this used to
   // be serviceLivePriced and also returned price_paise, because only a PRICED service could be
   // linked. Services carry no price now, so the question it answers is simply "is this a live
   // service on the live contract" - the price half of the old rule went out with the column.
-  serviceLinkable: db.prepare('SELECT cs.id FROM contract_services cs JOIN contract c ON c.id = cs.contract_id WHERE cs.id = ? AND cs.deleted_at IS NULL AND c.deleted_at IS NULL'),
-  serviceClaimedByOther: db.prepare('SELECT id, tx_date, amount_paise FROM cash_out WHERE contract_service_id = ? AND deleted_at IS NULL AND id != ?'),
-  cashOutServiceId: db.prepare('SELECT contract_service_id FROM cash_out WHERE id = ?'),
+  serviceLinkable: S('SELECT cs.id FROM contract_services cs JOIN contract c ON c.id = cs.contract_id WHERE cs.id = ? AND cs.deleted_at IS NULL AND c.deleted_at IS NULL'),
+  serviceClaimedByOther: S('SELECT id, tx_date, amount_paise FROM cash_out WHERE contract_service_id = ? AND deleted_at IS NULL AND id != ?'),
+  cashOutServiceId: S('SELECT contract_service_id FROM cash_out WHERE id = ?'),
 
   // Contract Phase A - allowance caps. Same shape as the service statements above, with two
   // differences that matter: an allowance is NOT tenant-scoped (the column was never added,
   // post-collapse), and its spend is a SUM over many debits rather than a one-to-one link.
-  allowancesFor: db.prepare('SELECT id, name, cap_kind, cap_paise, cap_rate_per_sqft_paise, area_milli_sqft, sort_order FROM contract_allowances WHERE contract_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC'),
-  allowanceLive: db.prepare('SELECT * FROM contract_allowances WHERE id = ? AND deleted_at IS NULL'),
+  allowancesFor: S('SELECT id, name, cap_kind, cap_paise, cap_rate_per_sqft_paise, area_milli_sqft, sort_order FROM contract_allowances WHERE contract_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC'),
+  allowanceLive: S('SELECT * FROM contract_allowances WHERE id = ? AND deleted_at IS NULL'),
   // Mirror of serviceLinkable: is this a live allowance on the LIVE contract? (No uniqueness
   // check to go with it - many debits may draw against one cap; that is what a cap is.)
-  allowanceLinkable: db.prepare('SELECT ca.id FROM contract_allowances ca JOIN contract c ON c.id = ca.contract_id WHERE ca.id = ? AND ca.deleted_at IS NULL AND c.deleted_at IS NULL'),
-  allowanceForContract: db.prepare('SELECT * FROM contract_allowances WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
-  allowanceCount: db.prepare('SELECT COUNT(*) AS n FROM contract_allowances WHERE contract_id = ? AND deleted_at IS NULL'),
-  allowanceMaxOrder: db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM contract_allowances WHERE contract_id = ?'),
-  insAllowance: db.prepare('INSERT INTO contract_allowances (contract_id, name, cap_kind, cap_paise, cap_rate_per_sqft_paise, area_milli_sqft, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'),
-  updAllowance: db.prepare("UPDATE contract_allowances SET name = ?, cap_kind = ?, cap_paise = ?, cap_rate_per_sqft_paise = ?, area_milli_sqft = ?, updated_at = datetime('now') WHERE id = ?"),
-  delAllowance: db.prepare("UPDATE contract_allowances SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"),
+  allowanceLinkable: S('SELECT ca.id FROM contract_allowances ca JOIN contract c ON c.id = ca.contract_id WHERE ca.id = ? AND ca.deleted_at IS NULL AND c.deleted_at IS NULL'),
+  allowanceForContract: S('SELECT * FROM contract_allowances WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
+  allowanceCount: S('SELECT COUNT(*) AS n FROM contract_allowances WHERE contract_id = ? AND deleted_at IS NULL'),
+  allowanceMaxOrder: S('SELECT COALESCE(MAX(sort_order), -1) AS m FROM contract_allowances WHERE contract_id = ?'),
+  insAllowance: S('INSERT INTO contract_allowances (contract_id, name, cap_kind, cap_paise, cap_rate_per_sqft_paise, area_milli_sqft, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+  updAllowance: S("UPDATE contract_allowances SET name = ?, cap_kind = ?, cap_paise = ?, cap_rate_per_sqft_paise = ?, area_milli_sqft = ?, updated_at = datetime('now') WHERE id = ?"),
+  delAllowance: S("UPDATE contract_allowances SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"),
   // Running spend per allowance: LIVE cash_out rows only, one grouped pass for the whole
   // contract (idx_cash_out_allowance_live). Soft-deleting a debit releases its draw, exactly as
   // it does for every other figure in the app.
-  allowanceSpendFor: db.prepare(
+  allowanceSpendFor: S(
     'SELECT co.contract_allowance_id AS id, COALESCE(SUM(co.amount_paise), 0) AS s, COUNT(*) AS c '
     + 'FROM cash_out co JOIN contract_allowances ca ON ca.id = co.contract_allowance_id '
     + 'WHERE ca.contract_id = ? AND co.deleted_at IS NULL AND co.contract_allowance_id IS NOT NULL '
@@ -193,80 +198,69 @@ const cStmt = {
   // Mirror of cashOutReferencingServices: contract_allowances CASCADEs off a hard-deleted
   // contract, but cash_out.contract_allowance_id has no ON DELETE action, so the same raw FK
   // crash is possible and gets the same pre-flight count.
-  cashOutReferencingAllowances: db.prepare(
+  cashOutReferencingAllowances: S(
     'SELECT COUNT(*) AS n FROM cash_out WHERE contract_allowance_id IN (SELECT id FROM contract_allowances WHERE contract_id = ?)'
   ),
 };
+// Every function returns a Promise (step 1.4 B11). writePayDates is two or more statements and, as
+// before, not one transaction: the request queue keeps any other request from running in between.
 const contract = {
   list: () => cStmt.list.all(),
-  getLive: (id) => cStmt.getLive.get(id) || null,
-  existsLive: (id) => !!cStmt.existsLive.get(id),
-  liveCount: () => cStmt.liveCount.get().n,
+  getLive: async (id) => (await cStmt.getLive.get(id)) || null,
+  existsLive: async (id) => !!(await cStmt.existsLive.get(id)),
+  liveCount: async () => (await cStmt.liveCount.get()).n,
   deletedAt: (id) => cStmt.deletedAt.get(id),
   softDelete: (id) => cStmt.softDelete.run(id),
-  insert: (cols, vals) => insertInto('contract', cols, vals),
-  update: (id, cols, vals) => updateBy('contract', id, cols, vals),
-  payDatesFor: (cid) => cStmt.payDatesFor.all(cid).map((r) => r.pay_date),
-  writePayDates: (cid, dates) => { cStmt.delPayDates.run(cid); for (const d of dates) cStmt.insPayDate.run(cid, d); },
+  insert: (cols, vals) => S(insertSqlFor('contract', cols)).run(...vals),
+  update: (id, cols, vals) => S(updateSqlFor('contract', cols)).run(...vals, id),
+  payDatesFor: async (cid) => (await cStmt.payDatesFor.all(cid)).map((r) => r.pay_date),
+  writePayDates: async (cid, dates) => { await cStmt.delPayDates.run(cid); for (const d of dates) await cStmt.insPayDate.run(cid, d); },
   servicesFor: (cid) => cStmt.servicesFor.all(cid),
-  serviceLive: (id) => cStmt.serviceLive.get(id) || null,
-  serviceForContract: (cid, sid) => cStmt.serviceForContract.get(sid, cid) || null,
+  serviceLive: async (id) => (await cStmt.serviceLive.get(id)) || null,
+  serviceForContract: async (cid, sid) => (await cStmt.serviceForContract.get(sid, cid)) || null,
   insertService: (cid, name) => cStmt.insService.run(cid, name),
   updateService: (id, name) => cStmt.updService.run(name, id),
   softDeleteService: (id) => cStmt.delService.run(id),
-  livePaymentsFor: (cid) => cStmt.livePaymentsFor.get(cid).n,
-  paymentOnDate: (cid, payDate) => !!cStmt.paymentOnDate.get(cid, payDate), // Part C
+  livePaymentsFor: async (cid) => (await cStmt.livePaymentsFor.get(cid)).n,
+  paymentOnDate: async (cid, payDate) => !!(await cStmt.paymentOnDate.get(cid, payDate)), // Part C
 
-  paymentsForAny: (cid) => cStmt.paymentsForAny.get(cid).n,
+  paymentsForAny: async (cid) => (await cStmt.paymentsForAny.get(cid)).n,
   paymentContractId: (id) => cStmt.paymentContractId.get(id),
-  cashOutReferencingServices: (cid) => cStmt.cashOutReferencingServices.get(cid).n,
+  cashOutReferencingServices: async (cid) => (await cStmt.cashOutReferencingServices.get(cid)).n,
   serviceLinkable: (sid) => cStmt.serviceLinkable.get(sid),
   serviceClaimedByOther: (sid, excludeId) => cStmt.serviceClaimedByOther.get(sid, excludeId),
   cashOutServiceId: (id) => cStmt.cashOutServiceId.get(id),
 
   // Contract Phase A - allowance caps
   allowancesFor: (cid) => cStmt.allowancesFor.all(cid),
-  allowanceLive: (id) => cStmt.allowanceLive.get(id) || null,
+  allowanceLive: async (id) => (await cStmt.allowanceLive.get(id)) || null,
   allowanceLinkable: (aid) => cStmt.allowanceLinkable.get(aid),
-  allowanceForContract: (cid, aid) => cStmt.allowanceForContract.get(aid, cid) || null,
-  allowanceCount: (cid) => cStmt.allowanceCount.get(cid).n,
+  allowanceForContract: async (cid, aid) => (await cStmt.allowanceForContract.get(aid, cid)) || null,
+  allowanceCount: async (cid) => (await cStmt.allowanceCount.get(cid)).n,
   insertAllowance: (cid, v) => cStmt.insAllowance.run(cid, v.name, v.cap_kind, v.cap_paise, v.cap_rate_per_sqft_paise, v.area_milli_sqft, v.sort_order),
   updateAllowance: (id, v) => cStmt.updAllowance.run(v.name, v.cap_kind, v.cap_paise, v.cap_rate_per_sqft_paise, v.area_milli_sqft, id),
   softDeleteAllowance: (id) => cStmt.delAllowance.run(id),
-  nextAllowanceOrder: (cid) => cStmt.allowanceMaxOrder.get(cid).m + 1,
+  nextAllowanceOrder: async (cid) => (await cStmt.allowanceMaxOrder.get(cid)).m + 1,
   // -> Map(allowanceId -> { spentPaise, entryCount }); absent = no live spend against it yet.
-  allowanceSpendFor: (cid) => new Map(cStmt.allowanceSpendFor.all(cid).map((r) => [r.id, { spentPaise: r.s, entryCount: r.c }])),
-  cashOutReferencingAllowances: (cid) => cStmt.cashOutReferencingAllowances.get(cid).n,
+  allowanceSpendFor: async (cid) => new Map((await cStmt.allowanceSpendFor.all(cid)).map((r) => [r.id, { spentPaise: r.s, entryCount: r.c }])),
+  cashOutReferencingAllowances: async (cid) => (await cStmt.cashOutReferencingAllowances.get(cid)).n,
 };
 
-// Column-list INSERT/UPDATE (contract) — statements built ONCE at boot via configure(); keyed by
-// table|cols. Building a same-key statement later just reuses the cached one.
-const _insCache = new Map(), _updCache = new Map();
-function insertStmtFor(table, cols) {
-  const key = table + '|' + cols.join(',');
-  let stmt = _insCache.get(key);
-  if (!stmt) { stmt = db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`); _insCache.set(key, stmt); }
-  return stmt;
-}
-function updateStmtFor(table, cols) {
-  const key = table + '|' + cols.join(',');
-  let stmt = _updCache.get(key);
-  if (!stmt) { stmt = db.prepare(`UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`); _updCache.set(key, stmt); }
-  return stmt;
-}
-function insertInto(table, cols, vals) { return insertStmtFor(table, cols).run(...vals); }
-function updateBy(table, id, cols, vals) { return updateStmtFor(table, cols).run(...vals, id); }
+// Column-list INSERT/UPDATE (contract). Since step 1.4 B11 these build the SQL text only: the adapter
+// prepares each text once.
+const insertSqlFor = (table, cols) => `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`;
+const updateSqlFor = (table, cols) => `UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`;
 
 // ── Per-user custom ledger names ──────────────────────────────────────────────────────────────────
 const lcStmt = {
-  list: db.prepare('SELECT name FROM ledger_customs ORDER BY name COLLATE NOCASE ASC'),
-  save: db.prepare('INSERT OR IGNORE INTO ledger_customs (name) VALUES (?)'),
+  list: S('SELECT name FROM ledger_customs ORDER BY name COLLATE NOCASE ASC'),
+  save: S('INSERT OR IGNORE INTO ledger_customs (name) VALUES (?)'),
   // Part 4 (Phase 11B): prune a name from the pick-list. Denormalised — cash_out rows keep their
   // stored ledger_custom_name copy, so this only shrinks the autocomplete list, never rewrites past debits.
-  remove: db.prepare('DELETE FROM ledger_customs WHERE name = ?'),
+  remove: S('DELETE FROM ledger_customs WHERE name = ?'),
 };
-const ledgerCustoms = {
-  list: () => lcStmt.list.all().map((r) => r.name),
+const ledgerCustoms = { // each returns a Promise (step 1.4 B10)
+  list: async () => (await lcStmt.list.all()).map((r) => r.name),
   save: (name) => lcStmt.save.run(name),
   remove: (name) => lcStmt.remove.run(name),
 };
@@ -275,12 +269,8 @@ const ledgerCustoms = {
 // `code` IS the identity (no separate internal id); a rename keeps the same code so historical
 // cash_out/contract/contractor_payments rows never orphan. ────────────────────────────────────────
 const ledgerStmt = {
-  mains: db.prepare('SELECT code, name FROM ledger_mains ORDER BY sort_order ASC'),
-  allSubs: db.prepare('SELECT code, main_code AS mainCode, name FROM ledger_subs ORDER BY sort_order ASC'),
-  deleteMains: db.prepare('DELETE FROM ledger_mains'),
-  deleteSubs: db.prepare('DELETE FROM ledger_subs'),
-  insMain: db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)'),
-  insSub: db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)'),
+  mains: S('SELECT code, name FROM ledger_mains ORDER BY sort_order ASC'),
+  allSubs: S('SELECT code, main_code AS mainCode, name FROM ledger_subs ORDER BY sort_order ASC'),
 };
 
 const MAIN_CODE_RE = /^\d+\.0$/;
@@ -291,9 +281,9 @@ const LEDGER_CSV_HEADER = ['Code', 'Main ledger', 'Sub-code', 'Sub-ledger'];
 // travels with the file itself, not just the in-app copy on Data Backup.
 const LEDGER_CSV_NOTE = '# Do not edit the Code / Sub-code column — it is the permanent identity Plannr matches rows by. Only the Main ledger / Sub-ledger name text may be changed.';
 
-function ledgerList() {
-  const subs = ledgerStmt.allSubs.all();
-  return ledgerStmt.mains.all().map((m) => ({
+async function ledgerList() {
+  const subs = await ledgerStmt.allSubs.all();
+  return (await ledgerStmt.mains.all()).map((m) => ({
     code: m.code, name: m.name,
     subLedgers: subs.filter((s) => s.mainCode === m.code).map((s) => ({ code: s.code, name: s.name })),
   }));
@@ -303,31 +293,27 @@ function ledgerList() {
 // counting EVERY row, not just live ones: a soft-deleted row can be restored later, so its stored
 // code still has to resolve to something real. contract_services has no ledger_code column at all,
 // so it is not part of this check.
-function ledgerUsageCounts(codes) {
+async function ledgerUsageCounts(codes) {
   const counts = {};
   if (!codes.length) return counts;
   const placeholders = codes.map(() => '?').join(',');
   for (const table of ['cash_out', 'contract', 'contractor_payments']) {
     for (const col of ['ledger_code', 'subledger_code']) {
-      const rows = db.prepare(`SELECT ${col} AS code, COUNT(*) AS n FROM ${table} WHERE ${col} IN (${placeholders}) GROUP BY ${col}`).all(...codes);
+      const rows = await dbAdapter().all(`SELECT ${col} AS code, COUNT(*) AS n FROM ${table} WHERE ${col} IN (${placeholders}) GROUP BY ${col}`, codes);
       for (const r of rows) counts[r.code] = (counts[r.code] || 0) + r.n;
     }
   }
   return counts;
 }
 
+// One transaction (db.js transaction(): any error rolls the whole list back and is passed on).
 function ledgerReplaceAll(mains, subs) {
-  db.exec('BEGIN');
-  try {
-    ledgerStmt.deleteSubs.run();
-    ledgerStmt.deleteMains.run();
-    mains.forEach((m, i) => ledgerStmt.insMain.run(m.code, m.name, i));
-    subs.forEach((s, i) => ledgerStmt.insSub.run(s.code, s.mainCode, s.name, i));
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
+  return transaction(async (tx) => {
+    await tx.run('DELETE FROM ledger_subs');
+    await tx.run('DELETE FROM ledger_mains');
+    for (const [i, m] of mains.entries()) await tx.run('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)', [m.code, m.name, i]);
+    for (const [i, s] of subs.entries()) await tx.run('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)', [s.code, s.mainCode, s.name, i]);
+  });
 }
 
 function ledgerToCsv(list) {
@@ -362,9 +348,10 @@ function parseLedgerCsv(text) {
 }
 
 // Validates a full Ledger List CSV against every rule in Phase 10b's spec and returns either
-// { ok:true, mains, subs } (ready for ledgerReplaceAll) or { ok:false, error, rowErrors }. The
-// WHOLE file is rejected on any failure — this never does a partial import.
-function validateLedgerCsv(csvText) {
+// { ok:true, mains, subs } (ready for ledgerReplaceAll) or { ok:false, error, rowErrors }, as a
+// Promise (it reads the codes in use). The WHOLE file is rejected on any failure — this never does a
+// partial import.
+async function validateLedgerCsv(csvText) {
   let rows;
   try { rows = parseLedgerCsv(csvText); } catch (e) { return { ok: false, error: 'Could not parse the file as CSV: ' + e.message, rowErrors: [] }; }
   if (!rows.length) return { ok: false, error: 'The file is empty.', rowErrors: [] };
@@ -423,10 +410,10 @@ function validateLedgerCsv(csvText) {
 
   // The critical check: a code missing from the new file must not still be in use.
   const newCodes = new Set([...mains.map((m) => m.code), ...subs.map((s) => s.code)]);
-  const oldCodes = [...ledgerStmt.mains.all().map((m) => m.code), ...ledgerStmt.allSubs.all().map((s) => s.code)];
+  const oldCodes = [...(await ledgerStmt.mains.all()).map((m) => m.code), ...(await ledgerStmt.allSubs.all()).map((s) => s.code)];
   const removedCodes = oldCodes.filter((c) => !newCodes.has(c));
   if (removedCodes.length) {
-    const counts = ledgerUsageCounts(removedCodes);
+    const counts = await ledgerUsageCounts(removedCodes);
     const stillUsed = removedCodes.filter((c) => counts[c] > 0).map((c) => ({ code: c, rows: counts[c] }));
     if (stillUsed.length) {
       return {
@@ -440,6 +427,8 @@ function validateLedgerCsv(csvText) {
   return { ok: true, mains, subs };
 }
 
+// list, usageCounts, replaceAll and validateImport return Promises (step 1.4 B10); toCsv does not
+// touch the database.
 const ledgers = {
   list: ledgerList,
   usageCounts: ledgerUsageCounts,
@@ -450,38 +439,22 @@ const ledgers = {
 
 // ── delete-account: rows the user authored ────────────────────────────────────────────────────────
 const authoredStmt = {
-  cashIn: db.prepare('SELECT COUNT(*) AS n FROM cash_in WHERE by_user_id = ?'),
-  cashOut: db.prepare('SELECT COUNT(*) AS n FROM cash_out WHERE by_user_id = ?'),
+  cashIn: S('SELECT COUNT(*) AS n FROM cash_in WHERE by_user_id = ?'),
+  cashOut: S('SELECT COUNT(*) AS n FROM cash_out WHERE by_user_id = ?'),
 };
-const authoredCount = (userId) => authoredStmt.cashIn.get(userId).n + authoredStmt.cashOut.get(userId).n;
+const authoredCount = async (userId) => (await authoredStmt.cashIn.get(userId)).n + (await authoredStmt.cashOut.get(userId)).n;
 
 // ── Backup export / teardown / insert ─────────────────────────────────────────────────────────────
-// Tables come from a fixed server-side allowlist (BACKUP_TABLES); statements are cached by table (and
-// by cols for insert). configure() pre-builds them at boot.
-const _expCache = new Map(), _delCache = new Map();
-const settingsUpsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
-function exportStmtFor(table) { let s = _expCache.get(table); if (!s) { s = db.prepare(`SELECT * FROM ${table}`); _expCache.set(table, s); } return s; }
-function deleteStmtFor(table) { let s = _delCache.get(table); if (!s) { s = db.prepare(`DELETE FROM ${table}`); _delCache.set(table, s); } return s; }
+// Tables come from a fixed server-side allowlist (BACKUP_TABLES). Each runner returns a Promise
+// (step 1.4 B12). (backup-format.js builds and restores backups with its own statements.)
 const backup = {
-  exportTable: (table) => exportStmtFor(table).all(),
-  deleteTenantRows: (table) => deleteStmtFor(table).run(),
-  insertRow: (table, cols, vals) => insertStmtFor(table, cols).run(...vals),
-  upsertSetting: (key, value) => settingsUpsert.run(key, value), // settings PK is now a plain key
+  exportTable: (table) => S(`SELECT * FROM ${table}`).all(),
+  deleteTenantRows: (table) => S(`DELETE FROM ${table}`).run(),
+  insertRow: (table, cols, vals) => S(insertSqlFor(table, cols)).run(...vals),
+  upsertSetting: (key, value) => S('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value), // settings PK is now a plain key
 };
 
-// Pre-build every column/table-dependent statement at boot. Called by server.js once (after route
-// setup) with its fixed allowlists.
-function configure({ contractCols, backupTables, backupCols }) {
-  if (contractCols) { insertStmtFor('contract', contractCols); updateStmtFor('contract', contractCols); }
-  for (const table of (backupTables || [])) {
-    if (table === 'settings') continue; // settings handled by settingsUpsert / exportStmtFor below
-    exportStmtFor(table); deleteStmtFor(table);
-    if (backupCols && backupCols[table]) insertStmtFor(table, backupCols[table]);
-  }
-  exportStmtFor('settings'); deleteStmtFor('settings');
-}
-
 export {
-  crud, trash, configure,
+  crud, trash,
   overview, contract, ledgerCustoms, ledgers, authoredCount, backup,
 };

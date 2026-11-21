@@ -1,83 +1,68 @@
-# Plannr
+<p align="center">
+  <img src="docs/images/icon.png" alt="Plannr icon" width="96">
+</p>
 
-## What it is
+<h1 align="center">Plannr</h1>
 
-Plannr is an offline expense ledger for a single building project, packaged as an Android app. One
-person installs it on their own phone and uses it to record what has been paid out, what has come in,
-and what is still owed on a construction contract. There is no server, no account and no sign-in, and
-the app makes no network requests — everything lives in a database file on the device. It is built
-with [Capacitor](https://capacitorjs.com/), so the interface is ordinary HTML and JavaScript running
-in a WebView; that same interface also runs on a desktop through `node server.js`, which is how it is
-developed and tested.
+<p align="center">
+  Keep track of the money you spend building your home, on your Android phone, fully offline.
+</p>
 
-Built by Joel Jims — [github.com/JoelJims](https://github.com/JoelJims).
+<p align="center">
+  <a href="https://github.com/JoelJims/Plannr/actions/workflows/tests.yml"><img src="https://github.com/JoelJims/Plannr/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
+</p>
 
-## Screenshots
+<p align="center">
+  <img src="docs/images/home.png" alt="Home screen" width="240">
+  <img src="docs/images/add-entry.png" alt="Adding a payment" width="240">
+  <img src="docs/images/overview.png" alt="Overview with totals and a chart" width="240">
+</p>
+<p align="center">
+  <img src="docs/images/budget.png" alt="Budget on the Overview" width="160">
+  <img src="docs/images/backup.png" alt="Backup and restore" width="160">
+  <img src="docs/images/pdf-export.png" alt="The Overview as a PDF" width="252">
+</p>
 
-| Home | Cash Outflow | Overview |
-|---|---|---|
-| ![Home screen](screenshots/home.png) | ![Cash Outflow screen](screenshots/cash-outflow.png) | ![Overview screen](screenshots/overview.png) |
+<p align="center"><sub>All screenshots use made-up demo data.</sub></p>
 
 ## What it does
 
-- **Records money in and out.** Every credit and debit is a dated entry with a reason and a note of
-  who paid, so the running total always traces back to something you typed.
-- **Tracks what the contractor is owed.** Record the contract value and each payment made against it;
-  Plannr shows the balance still outstanding. The contract price can be a figure you type, or a rate
-  per square foot multiplied by the measured area once the building is finally measured. It covers one
-  contract at a time — the database itself stops you having two active contracts.
-- **Sorts spending into categories.** 24 main categories with sub-categories underneath, covering
-  materials, labour, fees and the rest. You can rename, add and remove them yourself by exporting the
-  list as a CSV, editing it and importing it back.
-- **Keeps a running total against allowance caps.** Where the contract sets a ceiling for something
-  like flooring, Plannr adds up what you have actually spent against it and shows whether you are over
-  or under.
-- **Records loans** taken for the build, with interest paid tracked as ordinary spending.
-- **Shows an overview** — a colour-coded pie chart of where the money went, totals for any date range
-  you pick, and a PDF you can save or share.
-- **Deleted items go to a recycle bin instead of vanishing**, so a mistaken delete can be undone.
-- **Backs itself up.** A full backup file you can restore from, an encrypted version protected by a
-  passphrase you choose, and a plain CSV export for opening in a spreadsheet.
+- Write down the money you pay out and the money you receive.
+- See how much you still owe your builder under the contract.
+- Sort your spending into groups, like materials and labour.
+- Set a budget and see how much of it is left.
+- See where the money went in a chart, and share it as a PDF.
+- Fix mistakes: deleted items go to a recycle bin first.
 
-## How to run it
+## Your data stays on your phone
 
-Desktop:
+Plannr works fully offline and your data stays on your device. Optional features use the internet only when you use them. Android's own Auto Backup may save a copy to your Google account.
 
-```sh
-npm install
-npm start
-```
+There is no account and no sign-in.
 
-Android:
+## Backups
 
-```sh
-npm run android:sync
-```
+You can save a backup file at any time, and lock it with a passphrase you choose. To move to a new phone, open that file in Plannr there.
 
-Then open the `android/` folder in Android Studio and run it on a device or emulator.
+## Install
 
-Tests:
+**Download coming soon.**
 
-```sh
-npm test
-```
+To build it yourself:
 
-## How it's built
+1. Install [Node.js](https://nodejs.org/) 24 and [Android Studio](https://developer.android.com/studio).
+2. Get the code: `git clone https://github.com/JoelJims/Plannr.git`
+3. In the `Plannr` folder, run `npm install`, then `npm run android:sync`.
+4. Open the `android` folder in Android Studio, connect your phone, and press **Run**.
 
-The screens are plain HTML and JavaScript in `public/` — no framework, no build step. Everything
-underneath stores its data in SQLite, and `db.js` owns the schema: on startup the database updates
-itself safely, even if it runs twice. `repo.js` is the single layer every read and write goes
-through, and `ledgers.js` holds the starting list of spending categories. What differs between the
-two ways of running is only what answers the screens' requests. On the desktop that is `server.js`,
-an ordinary Express server reading a database file on your computer. On Android it is
-`public/local-api.js` — a small piece of code that answers the app's requests locally instead of over
-a network — backed by `public/db-engine.js`, a database that runs inside the app itself. `android/`
-holds the native project Capacitor generates. The detail behind all of this is in
-[HANDOFF.md](HANDOFF.md).
+## Built with
 
-## What it doesn't do
+[Capacitor](https://capacitorjs.com/), SQLite and plain JavaScript.
 
-- **One person, one project.** There are no accounts and no way to share a ledger with anyone else.
-- **No sync.** Nothing leaves the device on its own. Moving data to another phone means exporting a
-  backup file and importing it there.
-- **Not on the Play Store.** You build and install it yourself from this repository.
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## For developers
+
+How it works, how to run the tests, and how to release an update: [docs/DEVELOPERS.md](docs/DEVELOPERS.md).

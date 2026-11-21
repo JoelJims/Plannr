@@ -14,10 +14,16 @@ to `public/local-api.js` — code that answers the app's requests locally instea
 a network — backed by a database that runs inside the app itself. That is what a user
 installs.
 
-`server.js` is a desktop version. It serves the *same* screens from `public/` against an
-ordinary database file on your computer (`data/plannr.db`). It exists so the app can be
-developed and tested on a desktop, and it is what most of the automated tests run
-against. **Nothing in `server.js` reaches the phone.**
+`server.js` is a desktop **dev and test tool only**. It serves the *same* screens from
+`public/` against an ordinary database file on your computer (`data/plannr.db`). It exists
+so the app can be developed and tested on a desktop, and it is what most of the automated
+tests run against. **Nothing in `server.js` reaches the phone**, and it prints
+`DEV MODE – not used by the phone app` when it starts. Its packages (`express`,
+`playwright`, `@capacitor/cli`) are `devDependencies`.
+
+How a page knows which one it is talking to (`public/runtime-mode.js`): inside the Android
+app it always uses its own database and never even looks for a server; in a desktop browser
+it uses `server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Server` header.
 
 Why that matters in practice:
 
@@ -74,7 +80,7 @@ they have to be copied across by hand into the **project root**, next to `packag
 > So check, rather than assume, after your first release build:
 >
 > ```sh
-> keytool -printcert -jarfile android/app/build/outputs/apk/release/app-release.apk
+> keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk
 > ```
 >
 > That must print a certificate. An error, or empty output, means `keystore.properties`
@@ -113,6 +119,12 @@ Android project and is not one.
 npm start                   # = node server.js  ->  http://localhost:3000   (PORT overrides)
 npm test                    # expect green before you change anything
 ```
+
+The desktop server has no login, so it listens on `127.0.0.1` only: other devices on your
+Wi-Fi cannot reach it. To open it to your network on purpose, set both `PLANNR_HOST=0.0.0.0`
+and `PLANNR_TOKEN` (a random string of 16+ characters). Then open
+`http://<this PC's IP>:3000/?token=<PLANNR_TOKEN>` once on each device. Without a long enough
+token, the server refuses to start in that mode.
 
 `npm test` is the quickest way to tell that the checkout is complete. It also protects the
 real database: every test file points `PLANNR_DB` at its own temporary database, and the
@@ -161,13 +173,15 @@ Studio will:
 From `android/`, or via Studio's Run button for debug builds:
 
 ```sh
-./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/app-release.apk  (signed)
-adb install -r android/app/build/outputs/apk/release/app-release.apk
+./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/Plannr-debug.apk
+./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/Plannr.apk  (signed)
+adb install -r android/app/build/outputs/apk/release/Plannr.apk
 ```
 
-App id `com.plannr.app`, `versionCode 1`, `versionName "1.0"` — raise these in
-`android/app/build.gradle` for a real release.
+App id `com.plannr.app`. For a real release use `npm run release:android`: it runs every test,
+raises `versionCode`/`versionName` in `android/app/build.gradle`, syncs and builds the signed APK.
+The whole procedure — back up the phone, build, install over the old app, check the data — is
+in [`docs/RELEASE.md`](docs/RELEASE.md).
 
 ---
 
@@ -224,6 +238,7 @@ npm run test:slow            # the slower suite, run one at a time
 npm run test:ui              # visual tests against server.js
 npm run test:static-hosting  # visual tests against a real local-server.js process
 npm run test:backup-crypto   # round-trips the encrypted backup through the real code
+npm run test:offline         # every page in a real browser with no connection
 ```
 
 Playwright downloads its own browsers. If a visual suite complains one is missing, run

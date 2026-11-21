@@ -1,0 +1,236 @@
+// Step 1.4 B10-B17: repo.js and the core move to the async database interface (core/db-adapter.js),
+// one group per part, and every caller awaits it. This file checks the converted groups themselves: each call
+// answers with a Promise, a multi-row write is still one transaction, and the in-memory ledger list
+// (core/ledger-index.js) cannot be read before its first refresh. The routes over them are covered by
+// the route tests, in both passes.
+const H = require('./helpers');
+const { test, before, after } = require('node:test');
+const assert = require('node:assert');
+const path = require('node:path');
+const fs = require('node:fs');
+const { pathToFileURL } = require('node:url');
+const repo = require('../repo');
+
+before(async () => { await H.startApp(); });
+after(async () => { await H.stopApp(); });
+
+const imp = (rel) => import(pathToFileURL(path.join(__dirname, '..', rel)).href);
+
+test('B10: overview, ledger list, custom names and authoredCount answer with Promises', async () => {
+  const calls = {
+    'overview.contracts': () => repo.overview.contracts(),
+    'overview.paidByContract': () => repo.overview.paidByContract(),
+    'overview.outsAll': () => repo.overview.outsAll(),
+    'overview.outsRange': () => repo.overview.outsRange('2026-01-01', '2026-12-31'),
+    'overview.paymentsAll': () => repo.overview.paymentsAll(),
+    'overview.paymentsRange': () => repo.overview.paymentsRange('2026-01-01', '2026-12-31'),
+    'overview.loansSum': () => repo.overview.loansSum(),
+    'overview.outsSince': () => repo.overview.outsSince('2026-01-01 00:00:00'),
+    'ledgerCustoms.list': () => repo.ledgerCustoms.list(),
+    'ledgerCustoms.save': () => repo.ledgerCustoms.save('B10 test name'),
+    'ledgerCustoms.remove': () => repo.ledgerCustoms.remove('B10 test name'),
+    'ledgers.list': () => repo.ledgers.list(),
+    'ledgers.usageCounts': () => repo.ledgers.usageCounts(['1.0']),
+    'ledgers.validateImport': () => repo.ledgers.validateImport(''),
+    authoredCount: () => repo.authoredCount(1),
+  };
+  for (const [name, call] of Object.entries(calls)) {
+    const answer = call();
+    assert.ok(answer instanceof Promise, `${name} returns a Promise`);
+    await answer;
+  }
+  assert.ok(!(await repo.ledgerCustoms.list()).includes('B10 test name'), 'the name saved above was removed again');
+  assert.strictEqual(typeof repo.ledgers.toCsv([]), 'string', 'toCsv does not touch the database and stays synchronous');
+});
+
+test('B10: ledgers.replaceAll is one transaction: a failure part-way leaves the list as it was', async () => {
+  const before = await repo.ledgers.list();
+  assert.ok(before.length > 1 && before[0].subLedgers.length > 0, 'the test database has the built-in ledger list');
+  const mains = before.map((m) => ({ code: m.code, name: `${m.name} (renamed)` }));
+  const subs = before.flatMap((m) => m.subLedgers.map((s) => ({ code: s.code, mainCode: m.code, name: s.name })));
+  subs.push({ ...subs[0] }); // the last insert breaks the primary key, after every other row is written
+  await assert.rejects(repo.ledgers.replaceAll(mains, subs), /UNIQUE constraint failed: ledger_subs\.code/);
+  assert.deepStrictEqual(await repo.ledgers.list(), before, 'rolled back: no ledger renamed, no row lost');
+});
+
+test('B10: the ledger index cannot be read before its first refresh(); refresh() fills it from the database', async () => {
+  const { createLedgerIndex } = await imp('core/ledger-index.js');
+  const index = createLedgerIndex(repo);
+  assert.throws(() => index.list(), /read before its first refresh\(\) finished/);
+  assert.throws(() => index.byCode(), /read before its first refresh\(\) finished/);
+  await index.refresh();
+  const list = await repo.ledgers.list();
+  assert.deepStrictEqual(index.list(), list);
+  assert.deepStrictEqual([...index.byCode().keys()], list.map((l) => l.code));
+});
+
+test('B11: every repo.contract function answers with a Promise', async () => {
+  H.clearLedger();
+  const cid = H.seedContract();
+  const allowance = { name: 'B11 cap', cap_kind: 'lump', cap_paise: 100000, cap_rate_per_sqft_paise: null, area_milli_sqft: null, sort_order: 0 };
+  let sid = null;
+  let aid = null;
+  // The two inserts keep their row id for the calls after them; the Promise itself is what is checked.
+  const keepId = (answer, set) => { answer.then((r) => set(r.lastInsertRowid), () => {}); return answer; };
+  const calls = {
+    list: () => repo.contract.list(),
+    getLive: () => repo.contract.getLive(cid),
+    existsLive: () => repo.contract.existsLive(cid),
+    liveCount: () => repo.contract.liveCount(),
+    deletedAt: () => repo.contract.deletedAt(cid),
+    update: () => repo.contract.update(cid, ['area_of_work'], ['B11 area']),
+    payDatesFor: () => repo.contract.payDatesFor(cid),
+    writePayDates: () => repo.contract.writePayDates(cid, ['2026-08-01', '2026-09-01']),
+    servicesFor: () => repo.contract.servicesFor(cid),
+    insertService: () => keepId(repo.contract.insertService(cid, 'B11 service'), (id) => { sid = id; }),
+    serviceLive: () => repo.contract.serviceLive(sid),
+    serviceForContract: () => repo.contract.serviceForContract(cid, sid),
+    updateService: () => repo.contract.updateService(sid, 'B11 service renamed'),
+    serviceLinkable: () => repo.contract.serviceLinkable(sid),
+    serviceClaimedByOther: () => repo.contract.serviceClaimedByOther(sid, -1),
+    softDeleteService: () => repo.contract.softDeleteService(sid),
+    livePaymentsFor: () => repo.contract.livePaymentsFor(cid),
+    paymentOnDate: () => repo.contract.paymentOnDate(cid, '2026-08-01'),
+    paymentsForAny: () => repo.contract.paymentsForAny(cid),
+    paymentContractId: () => repo.contract.paymentContractId(1),
+    cashOutReferencingServices: () => repo.contract.cashOutReferencingServices(cid),
+    cashOutServiceId: () => repo.contract.cashOutServiceId(1),
+    nextAllowanceOrder: () => repo.contract.nextAllowanceOrder(cid),
+    insertAllowance: () => keepId(repo.contract.insertAllowance(cid, allowance), (id) => { aid = id; }),
+    allowancesFor: () => repo.contract.allowancesFor(cid),
+    allowanceLive: () => repo.contract.allowanceLive(aid),
+    allowanceLinkable: () => repo.contract.allowanceLinkable(aid),
+    allowanceForContract: () => repo.contract.allowanceForContract(cid, aid),
+    allowanceCount: () => repo.contract.allowanceCount(cid),
+    allowanceSpendFor: () => repo.contract.allowanceSpendFor(cid),
+    updateAllowance: () => repo.contract.updateAllowance(aid, { ...allowance, cap_paise: 200000 }),
+    softDeleteAllowance: () => repo.contract.softDeleteAllowance(aid),
+    cashOutReferencingAllowances: () => repo.contract.cashOutReferencingAllowances(cid),
+    softDelete: () => repo.contract.softDelete(cid),
+    insert: () => repo.contract.insert(['contractor_name', 'area_of_work', 'ledger_code'], ['B11', 'B11 area', '5.0']),
+  };
+  assert.deepStrictEqual(Object.keys(calls).sort(), Object.keys(repo.contract).sort(), 'every function is checked');
+  for (const [name, call] of Object.entries(calls)) {
+    const answer = call();
+    assert.ok(answer instanceof Promise, `contract.${name} returns a Promise`);
+    await answer;
+  }
+  assert.ok(Number.isInteger(sid) && Number.isInteger(aid), 'the inserts answered with their row ids');
+  // What the calls did, read back directly: they ran, in order, on this file's database.
+  assert.deepStrictEqual(H.db.prepare('SELECT pay_date FROM contract_payment_dates WHERE contract_id = ? ORDER BY pay_date').all(cid).map((r) => r.pay_date), ['2026-08-01', '2026-09-01']);
+  assert.strictEqual(H.db.prepare('SELECT name FROM contract_services WHERE id = ?').get(sid).name, 'B11 service renamed');
+  assert.strictEqual(H.db.prepare('SELECT cap_paise FROM contract_allowances WHERE id = ?').get(aid).cap_paise, 200000);
+  assert.strictEqual(H.db.prepare('SELECT COUNT(*) AS n FROM contract WHERE deleted_at IS NULL').get().n, 1, 'the first contract soft-deleted, the second inserted');
+  H.clearLedger();
+});
+
+// Every database call the shared core and both backends make through repo.js or the adapter (and the
+// async helpers built on them) is awaited, returned, or the body of an arrow function its caller awaits. A call left
+// un-awaited answers the request before it has run, and its failure is lost (an unhandled rejection
+// instead of a 500). The node:sqlite engine runs the SQL at call time, so no route test can see a
+// missing await on a write whose answer is not read; this check can.
+test('B12: every repo call in the core and both backends is awaited', () => {
+  const ROOT = path.join(__dirname, '..');
+  const files = ['server.js', 'public/local-api.js', ...fs.readdirSync(path.join(ROOT, 'core'), { recursive: true })
+    .filter((f) => f.endsWith('.js')).map((f) => path.join('core', f))];
+  const HELPERS = ['contractRow', 'getContractRow', 'getServiceRow', 'getLiveServiceForContract', 'getLiveAllowanceForContract',
+    'writePaymentDates', 'allowanceById', 'computeOverview', 'computeUpcomingPayments', 'overviewPdfHtml', 'saveLedgerCustom',
+    'validate', 'finalize', 'afterWrite', 'getBudgetPaise', 'getNotificationTimes', 'getLastExportAt', 'getBackupReminderDays',
+    'getBackupReminderStatus', 'setSetting', 'getOwner', 'userExists', 'resolveBy', 'resolveCashOutBy'];
+  const CALL = new RegExp(String.raw`(?:\brepo\.(?:overview|contract|ledgerCustoms|ledgers|backup)\.\w+|\brepo\.authoredCount|\brc\.\w+`
+    + String.raw`|\bTRASH_REPO\[\w+\]\.\w+|\bLEDGER_CRUDS\.\w+\.\w+|\bledgerIndex\.refresh`
+    + String.raw`|\bbackupFormat\.(?:buildBackup|applyBackup|assertImportOwnershipComplete)`
+    + String.raw`|\b(?:adapter|tx|dbAdapter\(\))\.(?:get|all|run|exec|transaction)|\b(?:${HELPERS.join('|')}))\(`, 'g');
+  const SYNC = new Set(['repo.ledgers.toCsv']); // builds text, no database
+  const bad = [];
+  let seen = 0;
+  for (const f of files) {
+    const lines = fs.readFileSync(path.join(ROOT, f), 'utf8').split(/\r?\n/);
+    lines.forEach((raw, i) => {
+      if (/^\s*(\/\/|\*)/.test(raw)) return; // a comment
+      const line = raw.replace(/\s\/\/.*$/, ''); // and a comment after the code
+      const arrowAbove = i > 0 && /=>\s*$/.test(lines[i - 1]); // `(...) =>` with its body on this line
+      for (const m of line.matchAll(CALL)) {
+        if (SYNC.has(m[0].slice(0, -1))) continue;
+        const before = line.slice(0, m.index);
+        if (/\bfunction\s+$/.test(before)) continue; // the helper's own definition
+        seen++;
+        if (arrowAbove && !before.trim()) continue;
+        if (!/(?:\bawait\s*\(?|\breturn\s+|=>\s*)$/.test(before)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  }
+  assert.ok(seen > 100, `the check found the calls (${seen})`);
+  assert.deepStrictEqual(bad, [], 'these calls are not awaited');
+});
+
+// Step 1.4 B16: the shared core reaches the database only through ctx.adapter and repo.js, so it runs
+// unchanged on an adapter with no synchronous side (the phone's database file, stage C). The adapter's
+// own file is the one place in the core that touches an engine handle.
+test('B16: the core never touches a synchronous database handle, and neither backend hands it one', () => {
+  const ROOT = path.join(__dirname, '..');
+  const files = fs.readdirSync(path.join(ROOT, 'core'), { recursive: true }).filter((f) => f.endsWith('.js'))
+    .map((f) => path.join('core', f)).filter((f) => f !== path.join('core', 'db-adapter.js'));
+  const SYNC = /\.prepare\(|\.execSync\(|\bctx\.db\b|\brollbackQuietly\b|\{[^}]*\bdb\b[^}]*\}\s*=\s*ctx\b/;
+  const bad = [];
+  for (const f of files) {
+    fs.readFileSync(path.join(ROOT, f), 'utf8').split(/\r?\n/).forEach((raw, i) => {
+      if (/^\s*(\/\/|\*)/.test(raw)) return; // a comment
+      const line = raw.replace(/\s\/\/.*$/, '');
+      if (SYNC.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.ok(files.length > 15, `the check read the core (${files.length} files)`);
+  assert.deepStrictEqual(bad, [], 'the core touches the synchronous database here');
+  for (const f of ['server.js', 'public/local-api.js']) {
+    const block = /const coreContext = \{([\s\S]*?)\n\s*\};/.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    assert.ok(block, `${f}: coreContext found`);
+    const keys = block[1].replace(/\/\/.*$/gm, '');
+    assert.ok(!/(?:^|[\s,{])db\s*[,:]/.test(keys), `${f}: coreContext passes no db`);
+    assert.ok(!/\brollbackQuietly\b/.test(keys), `${f}: coreContext passes no rollbackQuietly`);
+    assert.match(keys, /\badapter: dbAdapter\(\)/, `${f}: coreContext passes the adapter`);
+  }
+});
+
+// Step 1.4 B17: the synchronous transition code is gone for good. Nothing opens or upgrades the database
+// at once (initSync(), migrationPlan(), runNow()), the adapter has no synchronous side (prepare(),
+// execSync()), and repo.js prepares nothing at start (configure()). A caller that still needs one of
+// them would only work on the desktop engine, not on the phone's database file (stage C).
+test('B17: no synchronous start, plan or adapter method is left, and nothing calls one', async () => {
+  const db = require('../db');
+  for (const name of ['initSync', 'migrationPlan', 'runNow']) assert.strictEqual(db[name], undefined, `db.js exports no ${name}()`);
+  assert.strictEqual(repo.configure, undefined, 'repo.js has no configure()');
+  const adapterMod = await imp('core/db-adapter.js');
+  assert.strictEqual(adapterMod.TRANSITION_SYNC_METHODS, undefined, 'core/db-adapter.js lists no transition methods');
+  const live = db.dbAdapter();
+  for (const m of ['prepare', 'execSync']) assert.strictEqual(live[m], undefined, `the adapter has no ${m}()`);
+
+  const ROOT = path.join(__dirname, '..');
+  const SKIP = new Set(['node_modules', 'fixtures', 'vendor', 'android', 'dist', '.git']);
+  const files = [];
+  (function walk(dir, deep) {
+    for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = path.join(dir, e.name);
+      if (e.isDirectory()) { if (deep && !SKIP.has(e.name)) walk(rel, true); }
+      else if (/\.(c|m)?js$/.test(e.name) && rel !== path.join('test', 'repo-async.test.js')) files.push(rel);
+    }
+  })('.', false);
+  for (const d of ['core', 'public', 'test', 'test-ui', 'scripts']) if (fs.existsSync(path.join(ROOT, d))) (function walk(dir) {
+    for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(rel); }
+      else if (/\.(c|m)?js$/.test(e.name) && rel !== path.join('test', 'repo-async.test.js')) files.push(rel);
+    }
+  })(d);
+  const CALL = /\b(?:initSync|migrationPlan|runNow)\(|\.execSync\(|\brepo\.configure\(|\bTRANSITION_SYNC_METHODS\b/;
+  const bad = [];
+  for (const f of files) {
+    fs.readFileSync(path.join(ROOT, f), 'utf8').split(/\r?\n/).forEach((raw, i) => {
+      if (/^\s*(\/\/|\*)/.test(raw)) return; // a comment
+      const line = raw.replace(/\s\/\/.*$/, '');
+      if (CALL.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.ok(files.some((f) => f === 'db.js') && files.some((f) => f.startsWith('test')) && files.length > 100, `the check read the sources (${files.length} files)`);
+  assert.deepStrictEqual(bad, [], 'a removed synchronous method is still used here');
+});

@@ -291,7 +291,10 @@ function attachErrorCollector(page) {
     errors.length = 0;
     await page.waitForTimeout(300);
 
-    const bannerVisible = () => page.$eval('#backupBanner', (el) => !el.hidden).catch(() => false);
+    // The banner's RENDERED state, not its hidden attribute: a `display: flex` rule once overrode
+    // [hidden], so an empty red banner showed on every Home load while !el.hidden said it was gone.
+    const bannerState = () => page.$eval('#backupBanner', (el) => ({ hiddenAttr: el.hidden, display: getComputedStyle(el).display, height: Math.round(el.getBoundingClientRect().height) })).catch(() => null);
+    const bannerVisible = async () => { const st = await bannerState(); return !!st && st.display !== 'none' && st.height > 0; };
     const bannerText = () => page.$eval('#backupBannerText', (el) => el.textContent).catch(() => '');
     const reminderStatus = () => page.evaluate(() => fetch('/api/backup/reminder').then((r) => r.json()));
 
@@ -307,6 +310,7 @@ function attachErrorCollector(page) {
     errors.length = 0;
     await page.waitForTimeout(300);
     await page.fill('#encExportPass', 'correct horse battery staple');
+    await page.fill('#encExportPass2', 'correct horse battery staple');
     const [encDl] = await Promise.all([page.waitForEvent('download'), page.click('#encExportBtn')]);
     check('Encrypted export: download fired', !!encDl, '');
     await page.waitForTimeout(300);
@@ -318,7 +322,8 @@ function attachErrorCollector(page) {
     await page.goto(BASE + '/', { waitUntil: 'networkidle' });
     errors.length = 0;
     await page.waitForTimeout(300);
-    check('home.html: backup banner is gone after a successful export', !(await bannerVisible()), await bannerText());
+    check('home.html: backup banner is gone (not rendered) after a successful export', !(await bannerVisible()), JSON.stringify(await bannerState()));
+    check('home.html: the banner hidden attribute and what is rendered agree', (await bannerState()).hiddenAttr === !(await bannerVisible()), JSON.stringify(await bannerState()));
 
     // ---- Interval setting: off persists across a reload, and so does a number afterward ----
     await page.selectOption('#backupReminderSelect', 'off');

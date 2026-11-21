@@ -67,7 +67,7 @@ function tableCount(dbPath) {
   return n;
 }
 
-function snapshot() {
+async function snapshot() {
   if (!fs.existsSync(DB_PATH)) {
     console.error(`[backup] no database at ${DB_PATH} — nothing to back up.`);
     process.exit(1);
@@ -94,11 +94,11 @@ function snapshot() {
       tables = tableCount(tmp);
       if (tables < 1) { console.error(`[backup] snapshot has no tables — aborting (something is wrong).`); process.exit(1); }
       const plain = fs.readFileSync(tmp);
-      const enc = encrypt(plain, PASSPHRASE);
+      const enc = await encrypt(plain, PASSPHRASE);
       fs.writeFileSync(dest, enc);
       // "An encrypted backup you haven't decrypted is not a backup": prove THIS file decrypts NOW with
       // the current passphrase before we trust it (and before we prune older ones).
-      if (!looksLikeSqlite(decrypt(fs.readFileSync(dest), PASSPHRASE))) {
+      if (!looksLikeSqlite(await decrypt(fs.readFileSync(dest), PASSPHRASE))) {
         console.error(`[backup] verification FAILED — ${dest} did not decrypt to a SQLite file. Aborting.`);
         try { fs.unlinkSync(dest); } catch { /* ignore */ }
         process.exit(1);
@@ -118,4 +118,6 @@ function snapshot() {
   console.log(`[backup] ${Math.min(snaps.length, KEEP)} snapshot(s) kept in ${BACKUP_DIR}.`);
 }
 
-snapshot();
+// encrypt()/decrypt() are async since step 1.4 A3 (core/backup-crypto.js). Any failure still ends
+// the run with exit code 1, as an uncaught error did before.
+snapshot().catch((e) => { console.error('[backup] failed:', e); process.exit(1); });

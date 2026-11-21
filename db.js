@@ -17,10 +17,11 @@
 // module finishes loading, synchronously, as today); under a browser it's what a caller MUST await
 // before using `db`/`init` — see `ready()`'s own comment.
 
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
 import { LEDGERS as SEED_LEDGERS } from './ledgers.js';
+import { createSyncEngineAdapter } from './core/db-adapter.js';
 
 const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
 
@@ -42,6 +43,25 @@ function openDb(EngineDatabaseSync) {
 
 export let db;
 let readyPromise = null;
+// Step 1.4 C9: on the phone, once the data has moved to its own file, local-bootstrap.js hands db.js
+// the adapter on that file (useAdapter) before ready(), and kvvfs is not opened as the database.
+let externalAdapter = null;
+
+// No test ever opens the live database (step 1.4, incident 2). Under Node's test runner
+// (NODE_TEST_CONTEXT is set for every test file and inherited by what it spawns), PLANNR_DB must
+// name the test's own file first, as test/helpers.js does. run-tests.js's mtime check cannot see an
+// open that writes nothing, which is how test/seed-demo.test.js opened data/plannr.db unnoticed.
+const LIVE_DB = isNode ? join(DATA_DIR, 'plannr.db') : '';
+const samePath = (a, b) => String(a).replace(/\\/g, '/').toLowerCase() === String(b).replace(/\\/g, '/').toLowerCase();
+if (isNode && process.env.NODE_TEST_CONTEXT && samePath(DB_PATH, LIVE_DB)) {
+  throw new Error('db.js: a test was about to open the live database (data/plannr.db). Set PLANNR_DB to a file of its own first (test/helpers.js does).');
+}
+// A PLANNR_DB that is set but empty (a failed `$(...)` in a script, `PLANNR_DB=` in a .env file) used
+// to fall back to the live database, because '' is falsy (review R2/S10, incident 1). Unset means the
+// live database; set means a file; set but empty is refused before anything is opened.
+if (isNode && process.env.PLANNR_DB !== undefined && !String(process.env.PLANNR_DB).trim()) {
+  throw new Error('db.js: PLANNR_DB is set but empty. Unset it to use data/plannr.db, or set it to a database file. Nothing was opened.');
+}
 
 if (isNode) {
   mkdirSync(DATA_DIR, { recursive: true }); // make sure the folder for the database file exists
@@ -59,7 +79,7 @@ if (isNode) {
  * before its functions are first called. repo.js's internals are unchanged from before this phase.
  */
 export function ready() {
-  if (db) return Promise.resolve();
+  if (db || externalAdapter) return Promise.resolve();
   if (!readyPromise) {
     readyPromise = import('./db-engine.js').then(async (engine) => {
       await engine.ready();
@@ -75,11 +95,332 @@ export function ready() {
 // on "does column X exist?" wrongly re-runs after some later, unrelated change recreates column X, and
 // a re-run of a create-copy-swap rebuild risks data. Bump this + gate the new step on
 // `userVersion < N` when a future migration needs the same protection.
-const SCHEMA_VERSION = 2; // v2 = Phase 2 Step 2a: the tenant_id dimension is dropped back off (see the
-                          // `userVersion < 2` migration near the end of init()).
+//
+// Phase 2 (Step 2) of the review roadmap turned this into a versioned migration chain (see CONTRIBUTING.md):
+//   · BASELINE_VERSION (2): everything legacyInit() below does — the historic, hand-gated migrations
+//     that bring any older database (or an empty new one) up to the v2 shape. Kept exactly as it was.
+//   · MIGRATIONS: every schema change AFTER v2, one numbered step each, applied in order by
+//     runMigrations(), each inside its own transaction together with its user_version stamp.
+//   · init() refuses a database stamped NEWER than this code understands (an older app installed
+//     over newer data), and on the desktop writes a safety snapshot before any step runs. The phone
+//     writes its own (async, Capacitor Filesystem) in local-bootstrap.js before calling init().
+// This file is shared by server.js (desktop/dev) and the phone app, so both run the same chain.
+const BASELINE_VERSION = 2; // v2 = the tenant_id dimension dropped back off (the `userVersion < 2` step in legacyInit()).
 
-export function init() {
-  db.exec(`
+// Schema changes after v2. Append only — never edit or reorder a step that has shipped. Each:
+//   { version: <previous + 1>, name: 'what it does', async up(tx) { await tx.exec('...'); } }
+// tx is the async database interface (core/db-adapter.js: get/all/run/exec, params as an array).
+// up() runs inside a transaction, so it must not BEGIN/COMMIT or toggle PRAGMA foreign_keys itself
+// (a nested tx.transaction() is refused).
+export const MIGRATIONS = [];
+
+export function assertMigrationList(list, baseline = BASELINE_VERSION) {
+  list.forEach((m, i) => {
+    const want = baseline + 1 + i;
+    if (m.version !== want) throw new Error(`MIGRATIONS[${i}] has version ${m.version}; expected ${want} (versions must count up by one from ${baseline + 1}).`);
+    if (typeof m.up !== 'function' || !m.name) throw new Error(`MIGRATIONS[${i}] (v${m.version}) needs a name and an up(tx) function.`);
+  });
+}
+assertMigrationList(MIGRATIONS);
+export const SCHEMA_VERSION = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : BASELINE_VERSION;
+
+export const schemaVersionOf = (dbh = db) => dbh.prepare('PRAGMA user_version').get().user_version;
+
+// Step 1.4 B4: the async database interface (core/db-adapter.js) over a synchronous handle. Since
+// B9, every database call legacyInit() and the upgrade plan make goes through it (below); only the
+// desktop's safety snapshots (VACUUM INTO, Node only) still use `db` directly.
+//
+// Exporting, replacing, measuring and closing (step 1.4 D1): under Node, db.js's own connection is a
+// database file, and its adapter does these with db-adapter-node.js's file operations, loaded only
+// when first needed (the phone's copy of this file never loads it). A replace swaps `db` for a new
+// handle: read `db` at the time of use (or use dbAdapter()), never keep it. In a browser, and for any
+// other handle, only get/all/run/exec/transaction work here; the phone's database file has its own
+// adapter (useAdapter, below).
+const notHereYet = (what) => () => { throw new Error(`db.js: ${what}() is not available through db.js's adapter here (only for its own database file, under Node).`); };
+const nodeFiles = () => import('./db-adapter-node.js');
+const ownFilePlatform = {
+  exportBytes: async () => (await nodeFiles()).exportFileBytes(db),
+  async replaceWith(bytes) {
+    if (DB_PATH === ':memory:') throw new Error('db.js: replaceWith needs a database file, not :memory:.');
+    const { replaceDatabaseFile } = await nodeFiles();
+    try {
+      replaceDatabaseFile(DB_PATH, bytes, () => { db.close(); db = null; });
+    } finally {
+      if (!db) db = openDb(NodeDatabaseSync); // the new file, or the old one if the rename never happened
+    }
+  },
+  info: async () => (await nodeFiles()).databaseFileInfo(DB_PATH),
+  close() { if (db) { db.close(); db = null; } },
+};
+function adapterOver(handle, own = false) {
+  const files = own && isNode ? ownFilePlatform
+    : { exportBytes: notHereYet('exportBytes'), replaceWith: notHereYet('replaceWith'), info: notHereYet('info'), close: notHereYet('close') };
+  return createSyncEngineAdapter({ engine: isNode ? 'node-sqlite' : 'wasm-kvvfs', handle, ...files });
+}
+let ownAdapter = null;
+// dbAdapter() is db.js's own connection (one shared adapter, so a nested transaction is refused);
+// dbAdapter(handle) wraps another handle (the tests use throwaway databases).
+export function dbAdapter(dbh) {
+  if (externalAdapter && (dbh === undefined || dbh === db)) return externalAdapter;
+  if (dbh === undefined || dbh === db) return ownAdapter || (ownAdapter = adapterOver(() => db, true));
+  return adapterOver(() => dbh);
+}
+
+/**
+ * Step 1.4 C9: make `adapter` (core/db-adapter.js; the phone's database file) db.js's own connection,
+ * instead of the kvvfs database ready() would open. Only in a browser, and only before ready(): `db`
+ * (the synchronous handle) then stays unset, and everything goes through dbAdapter().
+ */
+export function useAdapter(adapter) {
+  if (isNode) throw new Error('db.js: useAdapter() is for the phone; under Node db.js opens its own file.');
+  if (db || readyPromise || externalAdapter) throw new Error('db.js: useAdapter() must be called once, before ready().');
+  if (!adapter || typeof adapter.transaction !== 'function' || typeof adapter.exportBytes !== 'function') {
+    throw new TypeError('db.js: useAdapter() needs an adapter (core/db-adapter.js).');
+  }
+  externalAdapter = adapter;
+}
+/** True when db.js opened the database itself (`db` is set); false once useAdapter() was used. */
+export const usingOwnHandle = () => !externalAdapter;
+
+// Run fn(tx) inside one transaction on db.js's connection: COMMIT when it resolves, ROLLBACK when it
+// throws (the error is passed on). One at a time: a nested call is refused.
+export function transaction(fn) {
+  return dbAdapter().transaction(fn);
+}
+
+// The one-off clean-ups in legacyInit() that are gated on a settings marker, not on user_version, so
+// they can still run on a database already at v2 that an older app version made. Two of them delete
+// data once approved (the taxonomy wipe, the service-price drop). Step 1.4 B4 found that such a
+// database got no safety snapshot first; a missing marker now counts as baseline work.
+const LEGACY_MARKERS = ['_migrated_service_price_removed_v1', '_migrated_ledger_taxonomy_v1', '_migrated_generic_ledger_names_v1'];
+function* legacyMarkerMissingCalls() {
+  try {
+    for (const key of LEGACY_MARKERS) if (!(yield q.get('SELECT 1 FROM settings WHERE key = ?', [key]))) return true;
+    return false;
+  } catch {
+    return false; // no settings table: not a Plannr database at v2 (an older one is caught by its version)
+  }
+}
+
+// What init() would do to this database, without changing anything. needsSnapshot: there is existing
+// data and at least one step will run (a brand-new, empty database needs no snapshot).
+// A generator of database calls like legacyInit() (step 1.4 B9), awaited by planMigrations() (init(),
+// the phone's start).
+function* planCalls(list) {
+  const from = (yield q.get('PRAGMA user_version')).user_version;
+  const to = list.length ? list[list.length - 1].version : BASELINE_VERSION;
+  const hasTables = !!(yield q.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"));
+  const steps = [];
+  if (from < BASELINE_VERSION) steps.push({ version: BASELINE_VERSION, name: 'baseline: historic migrations up to schema v2' });
+  else if (from === BASELINE_VERSION && hasTables && (yield* legacyMarkerMissingCalls())) steps.push({ version: BASELINE_VERSION, name: 'baseline: one-off clean-ups this database has not had yet' });
+  for (const m of list) if (m.version > from) steps.push({ version: m.version, name: m.name });
+  return { from, to, steps, tooNew: from > to, needsSnapshot: hasTables && steps.length > 0 };
+}
+export function planMigrations(adapter = dbAdapter(), list = MIGRATIONS) {
+  return runAwaited(planCalls(list), adapter);
+}
+
+// Apply every migration newer than the database's user_version, oldest first, through the async
+// interface (`adapter`: dbAdapter() or dbAdapter(handle)). Each step runs inside its own transaction
+// together with its user_version stamp, so a failing step rolls back completely and leaves the
+// database at the previous version (the next start retries it). Resolves to the versions applied.
+export async function runMigrations(adapter = dbAdapter(), list = MIGRATIONS) {
+  if (!adapter || typeof adapter.transaction !== 'function') throw new TypeError('runMigrations: pass the async database interface (dbAdapter(), or dbAdapter(handle)).');
+  const applied = [];
+  for (const m of list) {
+    const current = (await adapter.get('PRAGMA user_version')).user_version;
+    if (m.version <= current) continue;
+    try {
+      await adapter.transaction(async (tx) => {
+        await m.up(tx);
+        await tx.exec(`PRAGMA user_version = ${m.version}`);
+      });
+    } catch (e) {
+      // The adapter rolls back before passing the error on. If even that failed, say so: the data
+      // is then NOT known to be unchanged, and the safety snapshot is the way back.
+      const err = e && e.rollbackError
+        ? new Error(`Database upgrade to schema v${m.version} (${m.name}) failed, and undoing it failed too (${e.rollbackError.message}). Restore the safety snapshot taken before the upgrade. Cause: ${e.message}`)
+        : new Error(`Database upgrade to schema v${m.version} (${m.name}) failed and was rolled back; your data is unchanged at v${current}. Cause: ${e && e.message}`);
+      err.cause = e;
+      throw err;
+    }
+    applied.push(m.version);
+  }
+  return applied;
+}
+
+// Desktop only: a whole-database copy beside the database file, before any upgrade step runs. Keeps
+// the newest 3 (the same rule as the phone's Directory.Data/safety-snapshots/).
+//
+// The snapshot taken before an upgrade that has not finished yet is kept until it finishes. A failed
+// upgrade can leave the database part-way, and each later start takes a snapshot of THAT; without
+// this, three failed starts rotated the only copy from before the upgrade out. The record is
+// safety-snapshots/plannr-upgrade-pending.json ({ snapshot, from, to, startedAt }): written with the
+// first snapshot of an upgrade, removed by finishUpgrade() once init() completes. While it names a
+// snapshot that is there, that one is never deleted (it counts as one of the 3). If the record
+// cannot be read, nothing is deleted.
+const KEEP_SNAPSHOTS = 3;
+export const PENDING_UPGRADE = 'plannr-upgrade-pending.json';
+const snapshotDir = () => join(dirname(DB_PATH), 'safety-snapshots');
+// The snapshot an unfinished upgrade started from: its file name, null if there is none, or
+// undefined if a record is there but cannot be read (then the caller deletes nothing).
+function pendingUpgradeSnapshot(dir) {
+  const file = join(dir, PENDING_UPGRADE);
+  if (!existsSync(file)) return null;
+  try {
+    const p = JSON.parse(readFileSync(file, 'utf8'));
+    if (p && typeof p.snapshot === 'string' && /^plannr-pre-migration-.*\.db$/.test(p.snapshot)) return existsSync(join(dir, p.snapshot)) ? p.snapshot : null;
+  } catch { /* unreadable: fall through */ }
+  return undefined;
+}
+function writeNodeSnapshot(plan) {
+  const dir = snapshotDir();
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const name = `plannr-pre-migration-v${plan.from}-to-v${plan.to}-${stamp}.db`;
+  const file = join(dir, name);
+  db.exec(`VACUUM INTO '${file.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  if (!(statSync(file).size > 0)) throw new Error(`Safety snapshot ${file} is empty; the upgrade was not started.`);
+  let pinned = pendingUpgradeSnapshot(dir);
+  if (pinned === null) {
+    // The first snapshot of this upgrade: record it before any step runs (written whole, then renamed).
+    const tmp = join(dir, `${PENDING_UPGRADE}.tmp`);
+    writeFileSync(tmp, JSON.stringify({ snapshot: name, from: plan.from, to: plan.to, startedAt: new Date().toISOString() }));
+    renameSync(tmp, join(dir, PENDING_UPGRADE));
+    pinned = name;
+  }
+  // Only after the new copy is written and non-empty: delete all but the newest KEEP_SNAPSHOTS (by
+  // modification time), never the one just written, never the one the unfinished upgrade started from.
+  if (pinned !== undefined) {
+    const keepOthers = KEEP_SNAPSHOTS - (pinned === name ? 1 : 2);
+    const old = readdirSync(dir).filter((f) => /^plannr-pre-migration-.*\.db$/.test(f) && f !== name && f !== pinned)
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
+      .slice(keepOthers);
+    for (const { f } of old) rmSync(join(dir, f), { force: true });
+  }
+  if (process.env.PLANNR_TEST !== '1') {
+    console.log(`[db] safety snapshot before upgrading schema v${plan.from} -> v${plan.to}: ${file}`);
+    if (pinned && pinned !== name) console.log(`[db] an earlier upgrade did not finish; the snapshot from before it is kept: ${join(dir, pinned)}`);
+  }
+  return file;
+}
+// The upgrade finished: the snapshot from before it goes back into the normal rotation.
+function finishUpgrade() {
+  if (isNode) rmSync(join(snapshotDir(), PENDING_UPGRADE), { force: true });
+}
+
+// Desktop only (step 1.4 D1): a whole-database copy beside the database file before an encrypted
+// restore replaces it (the phone's is writePreRestoreSnapshot() in safety-snapshots.js). The same
+// folder and rule as the copies before an upgrade: the newest 3 kept, the one just written never
+// deleted, and a failed clean-up never fails the restore. Returns the copy's path.
+export function writeRestoreSnapshot() {
+  if (!isNode) throw new Error('db.js: writeRestoreSnapshot() is for the desktop; the phone writes its own (safety-snapshots.js).');
+  const dir = snapshotDir();
+  mkdirSync(dir, { recursive: true });
+  const name = `plannr-pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
+  const file = join(dir, name);
+  db.exec(`VACUUM INTO '${file.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+  if (!(statSync(file).size > 0)) throw new Error(`Safety snapshot ${file} is empty; the restore was not started.`);
+  try {
+    const old = readdirSync(dir).filter((f) => /^plannr-pre-restore-.*\.db$/.test(f) && f !== name)
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t || (b.f < a.f ? -1 : 1))
+      .slice(KEEP_SNAPSHOTS - 1);
+    for (const { f } of old) rmSync(join(dir, f), { force: true });
+  } catch { /* the new copy is safe; older ones stay a while longer */ }
+  return file;
+}
+
+// The checks before any upgrade step in init(): refuse a database from a newer
+// app version (nothing changed), then, on the desktop, the safety snapshot.
+function beforeUpgrade(plan, snapshot) {
+  if (plan.tooNew) {
+    throw new Error(`This Plannr database was saved by a newer version of the app (schema v${plan.from}; this version understands up to v${plan.to}). `
+      + 'Nothing was changed. Install the newer version of Plannr, or restore a backup made with this one.');
+  }
+  if (plan.needsSnapshot && snapshot && isNode) writeNodeSnapshot(plan);
+}
+
+// Bring the database up to SCHEMA_VERSION. Awaited once at startup by the phone's local-bootstrap.js
+// (and after an encrypted restore). Options: { snapshot: false } skips the desktop snapshot (the
+// caller already has one, e.g. a restore that just copied a backup in); `migrations` replaces the
+// step list (tests only). A refusal or a failed step rejects.
+export async function init({ snapshot = true, migrations = MIGRATIONS } = {}) {
+  if (migrations !== MIGRATIONS) assertMigrationList(migrations);
+  beforeUpgrade(await planMigrations(dbAdapter(), migrations), snapshot);
+  await runAwaited(legacyInit(), dbAdapter());
+  await runMigrations(dbAdapter(), migrations);
+  finishUpgrade();
+}
+
+// PRAGMA user_version is a 4-byte big-endian number at offset 60 of a SQLite file's header.
+export const imageUserVersion = (bytes) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(60);
+
+/** The answer to a backup made by a newer Plannr: nothing is changed (code BACKUP_TOO_NEW). */
+export function backupTooNew(userVersion) {
+  const err = new Error(`This backup was made by a newer version of Plannr (schema v${userVersion}; this version understands up to v${SCHEMA_VERSION}). Nothing was changed — update Plannr, then restore it.`);
+  err.code = 'BACKUP_TOO_NEW';
+  return err;
+}
+
+/**
+ * Replace the whole database with a decrypted backup, through db.js's adapter: the phone's database
+ * file (since step 1.4 C9) and the desktop's (since D1). A backup from a newer Plannr is refused
+ * before anything changes; the adapter checks the bytes (integrity) before it replaces anything; an
+ * older backup is then brought up to this version; foreign keys are checked last. The caller saves
+ * a safety copy first (core/routes/backup.js).
+ */
+export async function restoreFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 100) throw new Error('restoreSnapshotBytes: not a valid SQLite image.');
+  if (imageUserVersion(bytes) > SCHEMA_VERSION) throw backupTooNew(imageUserVersion(bytes));
+  const live = dbAdapter();
+  await live.replaceWith(bytes);
+  await init({ snapshot: false });
+  const fkViol = await live.all('PRAGMA foreign_key_check');
+  if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
+}
+
+// ---- legacyInit()'s database calls (step 1.4 B5–B9) ---------------------------------------------------
+//
+// legacyInit() is a generator: each database call it makes is `yield q.get(sql, params)` (or all, run,
+// exec), which hands the call to runAwaited() and gets the answer back (a row, the rows,
+// { changes, lastInsertRowid }, or the error thrown at that point). runAwaited() awaits each call
+// through the async interface, the same calls the capacitor-sqlite adapter answers in stage C.
+// test/migration-equivalence.test.js and test/migration-legacy-shapes.test.js compare its writes with
+// the old runner's, write by write. (Until step 1.4 B17 a second runner made the same calls at once
+// for initSync(); the generator form let one copy serve both.)
+const q = {
+  get: (sql, params) => ({ op: 'get', sql, params }),
+  all: (sql, params) => ({ op: 'all', sql, params }),
+  run: (sql, params) => ({ op: 'run', sql, params }),
+  exec: (sql) => ({ op: 'exec', sql }),
+};
+const OPS = new Set(Object.keys(q));
+function checkOp(o) {
+  if (!o || !OPS.has(o.op) || typeof o.sql !== 'string') throw new TypeError(`legacyInit yielded something that is not a database call (${JSON.stringify(o)}); use yield q.get/all/run/exec(...) or yield* for a helper.`);
+  if (o.params !== undefined && !Array.isArray(o.params)) throw new TypeError(`legacyInit: params must be an array (${o.sql}).`);
+  return o;
+}
+async function runAwaited(gen, adapter) {
+  let step = gen.next();
+  while (!step.done) {
+    const o = checkOp(step.value);
+    let value, error, failed = false;
+    try {
+      value = o.op === 'exec' ? await adapter.exec(o.sql) : await adapter[o.op](o.sql, o.params);
+    } catch (e) { failed = true; error = e; }
+    step = failed ? gen.throw(error) : gen.next(value);
+  }
+  return step.value;
+}
+// rollbackQuietly() (below) for legacyInit(): the same rule, as database calls it yields.
+function* rollbackQuietlyCalls() {
+  try { yield q.exec('ROLLBACK'); } catch (e) { if (!/no transaction is active/i.test(String(e && e.message))) throw e; }
+}
+
+function* legacyInit() {
+  yield q.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       username      TEXT    NOT NULL COLLATE NOCASE UNIQUE,
@@ -94,9 +435,8 @@ export function init() {
   // deployment has had one since some now-removed registration step, long before this check existed,
   // so this is a no-op there. A brand-new Capacitor install has no such history, so seed exactly one
   // default owner the first time the table is empty.
-  if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
-    db.prepare('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)')
-      .run('owner', 'Owner', 'local-single-user-no-auth');
+  if (!(yield q.get('SELECT 1 FROM users LIMIT 1'))) {
+    yield q.run('INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)', ['owner', 'Owner', 'local-single-user-no-auth']);
   }
 
   // Services phase — contract_services RETURNS (dropped in Phase 5C). If a PRE-Phase-5 database still
@@ -114,16 +454,36 @@ export function init() {
   // stripped again because Step 2a itself is version-gated and won't re-fire. Caught by booting the
   // real db.js against one persistent file across two separate processes (not a fresh temp DB each
   // time) — a second `contract_services` row silently vanished and tenant_id came back.
+  //
+  // FIX 2 (step 1.4 B4, found by test/slow/migration-faults-v1.test.js): the version gate is not
+  // enough either. Step 2a commits before user_version becomes 2, so an upgrade that fails after it
+  // leaves a v1 database whose contract_services already has the new shape without tenant_id, and
+  // the next start dropped it with every row. So: a table with the Services-phase columns is never
+  // the old one, whatever its version. And a table that is not recognised but still holds rows is
+  // never dropped: it is renamed aside (contract_services_pre_phase5) with its rows, and a new empty
+  // contract_services is created below as before.
   {
-    const userVersion0 = db.prepare('PRAGMA user_version').get().user_version;
-    const cs = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'").get();
+    const userVersion0 = (yield q.get('PRAGMA user_version')).user_version;
+    const cs = yield q.get("SELECT name FROM sqlite_master WHERE type='table' AND name='contract_services'");
     if (cs && userVersion0 < 2) {
-      const hasTenant = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'tenant_id');
-      if (!hasTenant) {
-        db.exec('PRAGMA foreign_keys = OFF');
-        db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
-        db.exec('DROP TABLE contract_services');
-        db.exec('PRAGMA foreign_keys = ON');
+      const cols = (yield q.all('PRAGMA table_info(contract_services)')).map((c) => c.name);
+      const servicesPhaseShape = ['id', 'contract_id', 'name', 'created_at', 'updated_at', 'deleted_at'].every((c) => cols.includes(c));
+      if (!cols.includes('tenant_id') && !servicesPhaseShape) {
+        const rows = (yield q.get('SELECT COUNT(*) AS n FROM contract_services')).n;
+        yield q.exec('PRAGMA foreign_keys = OFF');
+        yield q.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+        if (rows === 0) {
+          yield q.exec('DROP TABLE contract_services');
+        } else {
+          let aside = 'contract_services_pre_phase5';
+          for (let n = 2; yield q.get('SELECT 1 FROM sqlite_master WHERE name = ?', [aside]); n++) aside = `contract_services_pre_phase5_${n}`;
+          // legacy_alter_table: other tables' REFERENCES contract_services keep that name (the new
+          // table below), instead of being rewritten to follow the old one aside.
+          yield q.exec('PRAGMA legacy_alter_table = ON');
+          try { yield q.exec(`ALTER TABLE contract_services RENAME TO ${aside}`); } finally { yield q.exec('PRAGMA legacy_alter_table = OFF'); }
+          if (isNode && process.env.PLANNR_TEST !== '1') console.warn(`[db] an old contract_services table with ${rows} row(s) was kept as ${aside}; nothing in it was deleted.`);
+        }
+        yield q.exec('PRAGMA foreign_keys = ON');
       }
     }
   }
@@ -140,7 +500,7 @@ export function init() {
   // (NULL = live row). All statements are IF NOT EXISTS, so this is safe to run
   // against an existing database — users/sessions and their data are untouched.
   // ---------------------------------------------------------------------------
-  db.exec(`
+  yield q.exec(`
     -- 1. contract: EXACTLY ONE live contract (Phase 5D). At most one row with deleted_at IS NULL
     --    is allowed — enforced in the DATABASE by the partial unique index idx_contract_single_live
     --    (created at the end of init), not by app code. Soft-deleted rows may coexist with the one
@@ -434,23 +794,23 @@ export function init() {
   // install, or an upgrade from a pre-10b database). Presence-keyed, not version-gated: once a
   // household has edited the taxonomy via CSV import, the table is never empty again, so this can
   // never re-fire and stomp an edit — it only ever runs once, on a genuinely empty table.
-  if (!db.prepare('SELECT 1 FROM ledger_mains LIMIT 1').get()) {
-    const insMain = db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)');
-    const insSub = db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)');
+  if (!(yield q.get('SELECT 1 FROM ledger_mains LIMIT 1'))) {
+    const insMain = 'INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)';
+    const insSub = 'INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)';
     // Phase 12: these ~190 inserts were each their own autocommit transaction (a journal
     // create/fsync/delete per row under DELETE journal mode) — 0.5-1.1s on a fresh install, the very
     // first thing a new user waits on. One transaction for the whole seed: same rows, same order, same
     // end state, ~7-12ms instead.
-    db.exec('BEGIN');
+    yield q.exec('BEGIN');
     try {
       let order = 0;
       for (const L of SEED_LEDGERS) {
-        insMain.run(L.code, L.name, order++);
-        for (const s of L.subLedgers) insSub.run(s.code, L.code, s.name, order++);
+        yield q.run(insMain, [L.code, L.name, order++]);
+        for (const s of L.subLedgers) yield q.run(insSub, [s.code, L.code, s.name, order++]);
       }
-      db.exec('COMMIT');
+      yield q.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      yield* rollbackQuietlyCalls();
       throw e;
     }
   }
@@ -459,17 +819,17 @@ export function init() {
   // cash_out for databases created before they existed (fresh DBs already have
   // them from the CREATE above). ALTER ADD COLUMN appends a nullable TEXT column;
   // existing rows get NULL — no data is altered.
-  const cashOutCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const cashOutCols = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   for (const col of ['ledger_custom_name', 'subledger_custom_name']) {
-    if (!cashOutCols.includes(col)) db.exec(`ALTER TABLE cash_out ADD COLUMN ${col} TEXT`);
+    if (!cashOutCols.includes(col)) yield q.exec(`ALTER TABLE cash_out ADD COLUMN ${col} TEXT`);
   }
 
   // Idempotent migration: add contract_end_date to contract for databases
   // created before it existed (fresh DBs already have it from the CREATE above).
   // Nullable TEXT; existing rows get NULL — no data is altered.
-  const contractCols = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  const contractCols = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
   if (!contractCols.includes('contract_end_date')) {
-    db.exec('ALTER TABLE contract ADD COLUMN contract_end_date TEXT');
+    yield q.exec('ALTER TABLE contract ADD COLUMN contract_end_date TEXT');
   }
 
   // Idempotent migration (Phase 2): contract becomes a multi-row list — add the new
@@ -480,13 +840,13 @@ export function init() {
   // ADDITIVE-ONLY — the worst a wrong-fire can do is skip or add a NULL column; it can never drop or
   // overwrite. So, unlike the destructive cash_out rebuild, it stays safe as a pure presence key and
   // deliberately needs NO version gate (a legitimately re-absent column SHOULD be re-added).
-  const contractColsP2 = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  const contractColsP2 = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
   for (const [col, type] of [
     ['area_of_work', 'TEXT'], ['ledger_code', 'TEXT'], ['subledger_code', 'TEXT'],
     ['ledger_custom_name', 'TEXT'], ['subledger_custom_name', 'TEXT'],
     ['amount_paise', 'INTEGER'], ['date_signed', 'TEXT'], ['deleted_at', 'TEXT'],
   ]) {
-    if (!contractColsP2.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+    if (!contractColsP2.includes(col)) yield q.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
   }
 
   // Migration: cash_out phase/subpart are SIMPLE SCALARS — phase is a positive whole
@@ -506,13 +866,13 @@ export function init() {
   // guard). So it is ALSO gated on the schema-version marker: the rebuild runs ONLY on a DB that
   // predates the marker (user_version 0). init() stamps user_version = SCHEMA_VERSION on success, so
   // no later re-add of the column can re-trigger it. Read the marker BEFORE any migration changes it.
-  const userVersion = db.prepare('PRAGMA user_version').get().user_version;
-  const coCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const userVersion = (yield q.get('PRAGMA user_version')).user_version;
+  const coCols = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   if (userVersion === 0 && (coCols.includes('phase_custom_name') || coCols.includes('subpart_custom_name'))) {
-    db.exec('PRAGMA foreign_keys = OFF'); // standard rebuild guard (nothing references cash_out anyway)
-    db.exec('BEGIN');
+    yield q.exec('PRAGMA foreign_keys = OFF'); // standard rebuild guard (nothing references cash_out anyway)
+    yield q.exec('BEGIN');
     try {
-      db.exec(`CREATE TABLE cash_out_rebuild (
+      yield q.exec(`CREATE TABLE cash_out_rebuild (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         amount_paise        INTEGER NOT NULL,
         by_type             TEXT    NOT NULL,
@@ -530,7 +890,7 @@ export function init() {
         updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
         deleted_at          TEXT
       )`);
-      db.exec(`INSERT INTO cash_out_rebuild
+      yield q.exec(`INSERT INTO cash_out_rebuild
         (id, amount_paise, by_type, by_user_id, by_label, ledger_code, subledger_code,
          ledger_custom_name, subledger_custom_name, reason, contract_scope,
          phase, subpart, created_at, updated_at, deleted_at)
@@ -540,21 +900,21 @@ export function init() {
                CASE WHEN subpart GLOB '[A-Za-z]' THEN lower(subpart) ELSE NULL END,
                created_at, updated_at, deleted_at
           FROM cash_out`);
-      db.exec('DROP TABLE cash_out');
-      db.exec('ALTER TABLE cash_out_rebuild RENAME TO cash_out');
-      db.exec('COMMIT');
+      yield q.exec('DROP TABLE cash_out');
+      yield q.exec('ALTER TABLE cash_out_rebuild RENAME TO cash_out');
+      yield q.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      yield* rollbackQuietlyCalls();
       throw e;
     }
-    db.exec('PRAGMA foreign_keys = ON');
+    yield q.exec('PRAGMA foreign_keys = ON');
     // The old table's indexes went with it on DROP; recreate the ledger one (Phase 6C dropped the
     // useless deleted_at index — not recreated here; the tx_date partial index is made below).
-    db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code)');
+    yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code         ON cash_out(ledger_code)');
   } else {
     // Fresh or already-migrated DB: just ensure the two scalar columns exist.
-    if (!coCols.includes('phase')) db.exec('ALTER TABLE cash_out ADD COLUMN phase INTEGER');
-    if (!coCols.includes('subpart')) db.exec('ALTER TABLE cash_out ADD COLUMN subpart TEXT');
+    if (!coCols.includes('phase')) yield q.exec('ALTER TABLE cash_out ADD COLUMN phase INTEGER');
+    if (!coCols.includes('subpart')) yield q.exec('ALTER TABLE cash_out ADD COLUMN subpart TEXT');
   }
 
   // Idempotent migration (Phase 1): cash_out gains tx_date — the user-chosen
@@ -562,10 +922,10 @@ export function init() {
   // backfilled from their created_at calendar date so no live row is left dateless
   // (a valid, sensible date rather than NULL). Run LAST so a table rebuilt above
   // (old phase_custom_name shape) also picks up the column. No data is altered.
-  const coDateCols = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const coDateCols = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   if (!coDateCols.includes('tx_date')) {
-    db.exec('ALTER TABLE cash_out ADD COLUMN tx_date TEXT');
-    db.exec("UPDATE cash_out SET tx_date = date(created_at) WHERE tx_date IS NULL");
+    yield q.exec('ALTER TABLE cash_out ADD COLUMN tx_date TEXT');
+    yield q.exec("UPDATE cash_out SET tx_date = date(created_at) WHERE tx_date IS NULL");
   }
 
   // Idempotent migration (Phase 4C): cash_in gains tx_date — inflows were undateable before. Same
@@ -573,10 +933,10 @@ export function init() {
   // PRAGMA foreign_keys toggling is needed), then backfill existing rows from date(created_at) so no
   // live row is left dateless. Guarded on the column's absence, so it no-ops on fresh installs (whose
   // CREATE already has it) and on a second boot. New writes REQUIRE tx_date (validated in server.js).
-  const ciDateCols = db.prepare('PRAGMA table_info(cash_in)').all().map((c) => c.name);
+  const ciDateCols = (yield q.all('PRAGMA table_info(cash_in)')).map((c) => c.name);
   if (!ciDateCols.includes('tx_date')) {
-    db.exec('ALTER TABLE cash_in ADD COLUMN tx_date TEXT');
-    db.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL");
+    yield q.exec('ALTER TABLE cash_in ADD COLUMN tx_date TEXT');
+    yield q.exec("UPDATE cash_in SET tx_date = date(created_at) WHERE tx_date IS NULL");
   }
 
   // -------------------------------------------------------------------------
@@ -591,7 +951,7 @@ export function init() {
   // every reboot and DROP the new column. The unambiguous OLD-shape signal is `contract_service_id
   // present AND contract_stated_paise ABSENT` (the whole point of 5B was to ADD contract_stated_paise;
   // if it's already there, 5B has run). The new shape has BOTH columns, so this stays false for it.
-  const coColsP5 = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
+  const coColsP5 = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
   if (coColsP5.includes('contract_service_id') && !coColsP5.includes('contract_stated_paise')) {
     // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, restore AFTER
     // COMMIT, and read it back to prove enforcement is actually off (Phase 4B's trap).
@@ -600,16 +960,16 @@ export function init() {
     // current max were ever created and deleted (e.g. the live DB has seq=17 with max id 11). Left
     // unfixed, new rows would REUSE deleted ids 12..17. Capture the old high-water mark and restore
     // it after the swap so the next insert always lands strictly past the highest id ever used.
-    const oldSeqRow = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'cash_out'").get();
+    const oldSeqRow = yield q.get("SELECT seq FROM sqlite_sequence WHERE name = 'cash_out'");
     const oldSeq = oldSeqRow ? oldSeqRow.seq : null;
-    db.exec('PRAGMA foreign_keys = OFF');
-    const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+    yield q.exec('PRAGMA foreign_keys = OFF');
+    const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
     if (fkOff !== 0) throw new Error(`cash_out rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-    db.exec('BEGIN');
+    yield q.exec('BEGIN');
     try {
       // Final shape = the current base CREATE above, minus contract_service_id + units_covered,
       // plus contract_stated_paise. Same column order as the CREATE so fresh == migrated.
-      db.exec(`CREATE TABLE cash_out_p5 (
+      yield q.exec(`CREATE TABLE cash_out_p5 (
         id                    INTEGER PRIMARY KEY AUTOINCREMENT,
         amount_paise          INTEGER NOT NULL,
         tx_date               TEXT,
@@ -632,7 +992,7 @@ export function init() {
       // Explicit column lists (never SELECT *). Copy id explicitly to preserve row ids (1–11).
       // contract_service_id + units_covered are simply not selected (dropped); contract_stated_paise
       // starts NULL. phase + subpart carried through unchanged (deliberately dormant — not swept here).
-      db.exec(`INSERT INTO cash_out_p5
+      yield q.exec(`INSERT INTO cash_out_p5
         (id, amount_paise, tx_date, by_type, by_user_id, by_label, ledger_code, subledger_code,
          ledger_custom_name, subledger_custom_name, reason, contract_scope, contract_stated_paise,
          phase, subpart, created_at, updated_at, deleted_at)
@@ -640,29 +1000,29 @@ export function init() {
                ledger_custom_name, subledger_custom_name, reason, contract_scope, NULL,
                phase, subpart, created_at, updated_at, deleted_at
           FROM cash_out`);
-      db.exec('DROP TABLE cash_out');
-      db.exec('ALTER TABLE cash_out_p5 RENAME TO cash_out');
+      yield q.exec('DROP TABLE cash_out');
+      yield q.exec('ALTER TABLE cash_out_p5 RENAME TO cash_out');
       // Restore the AUTOINCREMENT high-water mark (see note above) so ids are never reused.
-      db.exec("DELETE FROM sqlite_sequence WHERE name = 'cash_out'");
-      if (oldSeq != null) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('cash_out', ?)").run(oldSeq);
-      db.exec('COMMIT');
+      yield q.exec("DELETE FROM sqlite_sequence WHERE name = 'cash_out'");
+      if (oldSeq != null) yield q.run("INSERT INTO sqlite_sequence (name, seq) VALUES ('cash_out', ?)", [oldSeq]);
+      yield q.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
-      db.exec('PRAGMA foreign_keys = ON');
+      yield* rollbackQuietlyCalls();
+      yield q.exec('PRAGMA foreign_keys = ON');
       throw e;
     }
-    db.exec('PRAGMA foreign_keys = ON');
+    yield q.exec('PRAGMA foreign_keys = ON');
     // The dropped table took its indexes with it. Recreate the ledger one; NOT
     // idx_cash_out_contract_service_id (column gone) and NOT idx_cash_out_deleted_at (Phase 6C
     // dropped it as counter-productive). The tx_date partial index is (re)created at init end.
     // (sqlite_sequence was restored to its pre-rebuild high-water mark inside the transaction above.)
-    db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code ON cash_out(ledger_code)');
-    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_ledger_code ON cash_out(ledger_code)');
+    const fkViol = yield q.all('PRAGMA foreign_key_check');
     if (fkViol.length) throw new Error('cash_out rebuild: foreign_key_check found ' + JSON.stringify(fkViol));
   } else if (!coColsP5.includes('contract_stated_paise')) {
     // Already lost the dead columns (e.g. a phase_custom_name-era DB rebuilt above) but predates
     // contract_stated_paise — just add the nullable column. No data altered.
-    db.exec('ALTER TABLE cash_out ADD COLUMN contract_stated_paise INTEGER');
+    yield q.exec('ALTER TABLE cash_out ADD COLUMN contract_stated_paise INTEGER');
   }
 
   // -------------------------------------------------------------------------
@@ -670,7 +1030,8 @@ export function init() {
   // contract_services (new shape), so the unconditional drop is GONE; the conditional old-shape drop
   // moved ABOVE the ledger CREATE block (see "Services phase — contract_services RETURNS"). The old
   // child index drop is kept (harmless if it lingers on an ancient DB).
-  db.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+  yield q.exec('DROP INDEX IF EXISTS idx_cash_out_contract_service_id');
+
 
   // ===========================================================================
   // Tenancy Phase 2 (Part A) — add the tenant dimension. SCHEMA + BACKFILL ONLY: no read/write
@@ -690,7 +1051,7 @@ export function init() {
   // ---------------------------------------------------------------------------
   // Part D — the tenant every existing row would be assigned to, IF this migration runs at all.
   // Computed unconditionally (cheap, read-only) because Step 2a further below also needs it.
-  const tenantUsers = db.prepare('SELECT id FROM users ORDER BY id ASC').all().map((u) => u.id);
+  const tenantUsers = (yield q.all('SELECT id FROM users ORDER BY id ASC')).map((u) => u.id);
   const chosenTenant = tenantUsers.length ? tenantUsers[0] : null;
 
   // BUG FIX: this whole block (Parts A/B/C — add tenant_id, the per-tenant settings PK, the
@@ -705,10 +1066,11 @@ export function init() {
   // and nothing tries to build an index against a column that no longer exists.
   if (userVersion < 2) {
     const TENANT_TABLES = ['cash_out', 'cash_in', 'loans', 'contract', 'contract_payment_dates', 'contractor_payments'];
-    const rowsNeedingTenant = TENANT_TABLES.filter((t) => {
-      const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
-      return !cols.includes('tenant_id') && db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n > 0;
-    });
+    const rowsNeedingTenant = []; // a loop, not .filter(): a callback cannot yield
+    for (const t of TENANT_TABLES) {
+      const cols = (yield q.all(`PRAGMA table_info(${t})`)).map((c) => c.name);
+      if (!cols.includes('tenant_id') && (yield q.get(`SELECT COUNT(*) AS n FROM ${t}`)).n > 0) rowsNeedingTenant.push(t);
+    }
     if (rowsNeedingTenant.length && chosenTenant == null) {
       throw new Error(`Tenancy Phase 2: tables [${rowsNeedingTenant.join(', ')}] hold rows but there are NO users to own them — refusing to backfill tenant_id to a non-existent user (the FK would fail). Register the household user first, then reboot.`);
     }
@@ -719,53 +1081,54 @@ export function init() {
     // create-copy-swap: rebuild `table` with a trailing NOT NULL tenant_id, backfilling every row to
     // `tenant`. Preserves ids, sqlite_sequence, the table's own indexes, and FK integrity. Reuses the
     // table's CURRENT DDL (comments stripped) so there is no second copy of each schema to drift.
-    const rebuildAddingTenant = (table, oldCols, tenant) => {
-      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+    // Generators (run with yield*), so their database calls go through the same runner.
+    const rebuildAddingTenant = function* (table, oldCols, tenant) {
+      const seqRow = yield q.get('SELECT seq FROM sqlite_sequence WHERE name = ?', [table]);
       const oldSeq = seqRow ? seqRow.seq : null;                        // AUTOINCREMENT high-water mark
-      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table); // DROP TABLE takes indexes with it
-      const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(table).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
+      const idxDdls = yield q.all("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL", [table]); // DROP TABLE takes indexes with it
+      const ddl = (yield q.get("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table])).sql.replace(/--[^\n]*/g, ''); // strip line comments so the paren scan is safe
       const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
       const tmp = `${table}__tenant_rebuild`;
       // PRAGMA foreign_keys is a NO-OP inside a transaction — set it BEFORE BEGIN, read it back to
       // PROVE enforcement is off (this project's twice-hit trap), restore AFTER COMMIT.
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`${table} tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
-        db.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
+        yield q.exec(`CREATE TABLE ${tmp} (${body}, tenant_id INTEGER NOT NULL REFERENCES users(id))`);
         const colList = oldCols.join(', ');
-        db.prepare(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`).run(tenant);
-        db.exec(`DROP TABLE ${table}`);
-        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        yield q.run(`INSERT INTO ${tmp} (${colList}, tenant_id) SELECT ${colList}, ? FROM ${table}`, [tenant]);
+        yield q.exec(`DROP TABLE ${table}`);
+        yield q.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
         // RENAME set sqlite_sequence for the table to the copied max id; restore the true high-water
         // mark so the next insert lands strictly PAST the highest id ever used (never reuses 12..17).
-        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
-        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
-        db.exec('COMMIT');
+        yield q.run('DELETE FROM sqlite_sequence WHERE name = ?', [table]);
+        if (oldSeq != null) yield q.run('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)', [table, oldSeq]);
+        yield q.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
+      yield q.exec('PRAGMA foreign_keys = ON');
       // Replay the table's own indexes (DROP TABLE removed them). Skip the old database-wide
       // single-live-contract index — the per-tenant block below creates the correct replacement.
-      for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') db.exec(idx.sql); }
-      const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+      for (const idx of idxDdls) { if (idx.name !== 'idx_contract_single_live') yield q.exec(idx.sql); }
+      const fkViol = yield q.all('PRAGMA foreign_key_check');
       if (fkViol.length) throw new Error(`${table} tenant rebuild: foreign_key_check found ${JSON.stringify(fkViol)}`);
     };
 
     // Add tenant_id to one table: no-op if present (idempotent / fresh install), ADD COLUMN if empty,
     // forced rebuild if it holds rows.
-    const addTenantId = (table) => {
-      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+    const addTenantId = function* (table) {
+      const cols = (yield q.all(`PRAGMA table_info(${table})`)).map((c) => c.name);
       if (cols.includes('tenant_id')) return;
-      const n = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
-      if (n === 0) { db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
-      rebuildAddingTenant(table, cols, chosenTenant);
+      const n = (yield q.get(`SELECT COUNT(*) AS n FROM ${table}`)).n;
+      if (n === 0) { yield q.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER NOT NULL REFERENCES users(id)`); return; }
+      yield* rebuildAddingTenant(table, cols, chosenTenant);
     };
-    for (const t of TENANT_TABLES) addTenantId(t);
+    for (const t of TENANT_TABLES) yield* addTenantId(t);
 
     // Part C — settings becomes PER-TENANT via a composite (tenant_id, key) primary key. The PK change
     // forces a create-copy-swap rebuild (SQLite can't add a column to a PK in place). Backfill every
@@ -773,41 +1136,41 @@ export function init() {
     // schedule times, and the last-success/attempt/alert bookkeeping are all per-household. (The one
     // genuinely-global piece of state, the shared WhatsApp client session, lives in .wwebjs_auth on
     // disk, not here; a future infra key would use the reserved tenant_id = 0.)
-    const settingsCols = db.prepare('PRAGMA table_info(settings)').all().map((c) => c.name);
+    const settingsCols = (yield q.all('PRAGMA table_info(settings)')).map((c) => c.name);
     if (!settingsCols.includes('tenant_id')) {
-      const settingsRows = db.prepare('SELECT COUNT(*) AS n FROM settings').get().n;
+      const settingsRows = (yield q.get('SELECT COUNT(*) AS n FROM settings')).n;
       if (settingsRows > 0 && chosenTenant == null) {
         throw new Error('Tenancy Phase 2: settings holds rows but there are NO users to own them — register the household user first, then reboot.');
       }
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`settings tenant rebuild: foreign_keys still ${fkOff} after OFF.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
         // No FK on tenant_id (see the CREATE note). backfill = chosenTenant for every existing row.
-        db.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
-        db.prepare('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings').run(chosenTenant);
-        db.exec('DROP TABLE settings');
-        db.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
-        db.exec('COMMIT');
+        yield q.exec('CREATE TABLE settings__tenant_rebuild (tenant_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (tenant_id, key))');
+        yield q.run('INSERT INTO settings__tenant_rebuild (tenant_id, key, value) SELECT ?, key, value FROM settings', [chosenTenant]);
+        yield q.exec('DROP TABLE settings');
+        yield q.exec('ALTER TABLE settings__tenant_rebuild RENAME TO settings');
+        yield q.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
+      yield q.exec('PRAGMA foreign_keys = ON');
     }
 
     // Part B — the single-live-contract invariant becomes PER-TENANT. The old database-wide
     // idx_contract_single_live made a SECOND user unable to create ANY contract (the INSERT
     // failed); replace it so each tenant gets exactly one live contract. Fail LOUDLY first if any
     // tenant already holds more than one live contract — never silently pick a winner.
-    const dupLiveTenants = db.prepare('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1').all();
+    const dupLiveTenants = yield q.all('SELECT tenant_id, COUNT(*) AS n FROM contract WHERE deleted_at IS NULL GROUP BY tenant_id HAVING n > 1');
     if (dupLiveTenants.length) {
       throw new Error(`Tenancy Phase 2 (Part B): tenant(s) ${dupLiveTenants.map((d) => `${d.tenant_id} (${d.n} live)`).join(', ')} already hold more than one live contract; the per-tenant invariant allows one each. Soft-delete the extras, then reboot — refusing to pick a winner automatically.`);
     }
-    db.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
+    yield q.exec('DROP INDEX IF EXISTS idx_contract_single_live'); // retire the database-wide index
+    yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_single_live_tenant ON contract(tenant_id) WHERE deleted_at IS NULL');
   }
 
   // ===========================================================================
@@ -817,10 +1180,10 @@ export function init() {
   //  · contract.company (Part F) — optional, nullable.
   //  · cash_out.contract_service_id (Part C/D) — nullable FK to contract_services. Runs AFTER the
   //    Phase 2 cash_out tenant-rebuild (so it isn't dropped) and after contract_services exists.
-  const contractColsSvc = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
-  if (!contractColsSvc.includes('company')) db.exec('ALTER TABLE contract ADD COLUMN company TEXT');
-  const cashOutColsSvc = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
-  if (!cashOutColsSvc.includes('contract_service_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_service_id INTEGER REFERENCES contract_services(id)');
+  const contractColsSvc = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
+  if (!contractColsSvc.includes('company')) yield q.exec('ALTER TABLE contract ADD COLUMN company TEXT');
+  const cashOutColsSvc = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
+  if (!cashOutColsSvc.includes('contract_service_id')) yield q.exec('ALTER TABLE cash_out ADD COLUMN contract_service_id INTEGER REFERENCES contract_services(id)');
 
   // Part E — one-time backfill of the per-user custom list so existing free-text ledger names are not
   // orphaned: they still display from their own cash_out.ledger_custom_name (unchanged), AND become
@@ -834,12 +1197,13 @@ export function init() {
   // the schema being reset to match) must not attempt this INSERT.
   // Phase 12: check the cheap userVersion gate FIRST — short-circuits the PRAGMA call below (and
   // everything after it) on every already-migrated boot, same as every other userVersion < 2 gate here.
-  if (userVersion < 2 && db.prepare('PRAGMA table_info(ledger_customs)').all().map((c) => c.name).includes('tenant_id') && chosenTenant != null && db.prepare('SELECT COUNT(*) AS n FROM ledger_customs').get().n === 0) {
-    db.prepare(
+  if (userVersion < 2 && (yield q.all('PRAGMA table_info(ledger_customs)')).map((c) => c.name).includes('tenant_id') && chosenTenant != null && (yield q.get('SELECT COUNT(*) AS n FROM ledger_customs')).n === 0) {
+    yield q.run(
       "INSERT OR IGNORE INTO ledger_customs (tenant_id, name) " +
       "SELECT DISTINCT ?, ledger_custom_name FROM cash_out " +
-      "WHERE ledger_code = 'CUSTOM' AND ledger_custom_name IS NOT NULL AND trim(ledger_custom_name) <> '' AND deleted_at IS NULL"
-    ).run(chosenTenant);
+      "WHERE ledger_code = 'CUSTOM' AND ledger_custom_name IS NOT NULL AND trim(ledger_custom_name) <> '' AND deleted_at IS NULL",
+      [chosenTenant]
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -851,22 +1215,22 @@ export function init() {
   //  · CREATE the PARTIAL date indexes that the Overview range queries actually use — keyed on the
   //    date, restricted to live rows, so `WHERE deleted_at IS NULL AND <date> BETWEEN ?..?` is an
   //    index range scan.
-  db.exec('DROP INDEX IF EXISTS idx_cash_out_deleted_at');
-  db.exec('DROP INDEX IF EXISTS idx_cash_in_deleted_at');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_txdate_live ON cash_out(tx_date) WHERE deleted_at IS NULL');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_contractor_payments_paydate_live ON contractor_payments(pay_date) WHERE deleted_at IS NULL');
+  yield q.exec('DROP INDEX IF EXISTS idx_cash_out_deleted_at');
+  yield q.exec('DROP INDEX IF EXISTS idx_cash_in_deleted_at');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_txdate_live ON cash_out(tx_date) WHERE deleted_at IS NULL');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_contractor_payments_paydate_live ON contractor_payments(pay_date) WHERE deleted_at IS NULL');
   // Part A — the amount-range filter on the outflow search is a range predicate, so it gets the SAME
   // partial-index-on-live-rows treatment as tx_date above: `WHERE deleted_at IS NULL AND amount_paise
   // BETWEEN ?..?` becomes an index range scan instead of a full table scan. (EXPLAIN-verified: turns the
   // amount-only search from a SCAN into SEARCH … USING idx_cash_out_amount_live.)
-  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_amount_live ON cash_out(amount_paise) WHERE deleted_at IS NULL');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_amount_live ON cash_out(amount_paise) WHERE deleted_at IS NULL');
 
   // Services phase (Part D) — the ONE-SERVICE-ONE-OFFSET invariant, enforced in the DATABASE (mirrors
   // idx_contract_single_live_tenant): at most one LIVE debit may link any given service, so a single
   // substitution can never offset the contractor's dues twice. Partial + restricted to non-null
   // service ids (a NULL link — the common case — is unconstrained). Created here at init end so the
   // cash_out rebuilds above can't drop it and contract_service_id is guaranteed to exist by now.
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
+  yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_out_service_live ON cash_out(contract_service_id) WHERE contract_service_id IS NOT NULL AND deleted_at IS NULL');
 
   // ===========================================================================
   // Tenancy Phase 2, Step 2a — SCHEMA-ONLY collapse back to a single tenant. The app is becoming a
@@ -890,7 +1254,7 @@ export function init() {
     const GUARD_TABLES = ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs', 'settings'];
     const countsBefore = {};
     const deliberatelyRemoved = {};
-    for (const t of GUARD_TABLES) { countsBefore[t] = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n; deliberatelyRemoved[t] = 0; }
+    for (const t of GUARD_TABLES) { countsBefore[t] = (yield q.get(`SELECT COUNT(*) AS n FROM ${t}`)).n; deliberatelyRemoved[t] = 0; }
 
     // The one real tenant: the lowest users.id (same "household head" convention Tenancy Phase 2
     // used above; `chosenTenant` is that same computed value, still in scope). Any OTHER tenant_id
@@ -902,9 +1266,9 @@ export function init() {
       // nothing retrofits tenant_id onto them if it's already absent; skip a table here if it
       // doesn't currently have the column, rather than assume every gated table always does.
       for (const t of ['contract', 'contract_payment_dates', 'contractor_payments', 'contract_services', 'cash_in', 'cash_out', 'loans', 'ledger_customs']) {
-        const hasTenantCol = db.prepare(`PRAGMA table_info(${t})`).all().some((c) => c.name === 'tenant_id');
+        const hasTenantCol = (yield q.all(`PRAGMA table_info(${t})`)).some((c) => c.name === 'tenant_id');
         if (!hasTenantCol) continue;
-        const info = db.prepare(`DELETE FROM ${t} WHERE tenant_id <> ?`).run(chosenTenant);
+        const info = yield q.run(`DELETE FROM ${t} WHERE tenant_id <> ?`, [chosenTenant]);
         deliberatelyRemoved[t] += info.changes;
       }
     }
@@ -913,34 +1277,34 @@ export function init() {
     // still exists under more than one tenant (shouldn't happen after the delete above unless a row
     // for that key never belonged to chosenTenant to begin with), keep the lowest tenant_id's row.
     {
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`settings de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
-        db.exec('CREATE TABLE settings__detenant_rebuild (key TEXT NOT NULL PRIMARY KEY, value TEXT)');
-        const insInfo = db.prepare(`
+        yield q.exec('CREATE TABLE settings__detenant_rebuild (key TEXT NOT NULL PRIMARY KEY, value TEXT)');
+        const insInfo = yield q.run(`
           INSERT INTO settings__detenant_rebuild (key, value)
           SELECT s.key, s.value FROM settings s
           WHERE s.tenant_id = (SELECT MIN(tenant_id) FROM settings WHERE key = s.key)
-        `).run();
+        `);
         deliberatelyRemoved.settings = countsBefore.settings - insInfo.changes;
-        db.exec('DROP TABLE settings');
-        db.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
-        db.exec('COMMIT');
+        yield q.exec('DROP TABLE settings');
+        yield q.exec('ALTER TABLE settings__detenant_rebuild RENAME TO settings');
+        yield q.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
+      yield q.exec('PRAGMA foreign_keys = ON');
     }
 
     // Part 2 — contract: collapse the per-tenant single-live invariant to a database-wide one. If
     // more than one live contract still exists across tenants (shouldn't happen after the delete
     // above, since idx_contract_single_live_tenant already capped each tenant at one), keep the
     // lowest users.id's and soft-delete the rest — never a silent hard-delete of a live row.
-    db.exec(`
+    yield q.exec(`
       UPDATE contract SET deleted_at = datetime('now')
       WHERE deleted_at IS NULL
         AND tenant_id <> (SELECT MIN(tenant_id) FROM contract WHERE deleted_at IS NULL)
@@ -950,7 +1314,7 @@ export function init() {
     // tenant_id — this becomes a flat pick-list once the tenant dimension is gone, so ties break on
     // row age, not on ownership).
     {
-      const dedupInfo = db.prepare('DELETE FROM ledger_customs WHERE id NOT IN (SELECT MIN(id) FROM ledger_customs GROUP BY name)').run();
+      const dedupInfo = yield q.run('DELETE FROM ledger_customs WHERE id NOT IN (SELECT MIN(id) FROM ledger_customs GROUP BY name)');
       deliberatelyRemoved.ledger_customs += dedupInfo.changes;
     }
 
@@ -959,34 +1323,35 @@ export function init() {
     // reused), and replaying each table's OWN indexes afterward — skipping any that reference
     // tenant_id (the two that do, idx_contract_single_live_tenant and idx_ledger_customs_tenant_name,
     // are replaced with their tenant-free equivalents in Part 5, not replayed here).
-    const rebuildDroppingTenant = (table, bodySql, keptCols) => {
-      const seqRow = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+    // A generator (run with yield*), so its database calls go through the same runner.
+    const rebuildDroppingTenant = function* (table, bodySql, keptCols) {
+      const seqRow = yield q.get('SELECT seq FROM sqlite_sequence WHERE name = ?', [table]);
       const oldSeq = seqRow ? seqRow.seq : null;
-      const idxDdls = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL").all(table);
+      const idxDdls = yield q.all("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL", [table]);
       const tmp = `${table}__detenant_rebuild`;
-      db.exec('PRAGMA foreign_keys = OFF');
-      const fkOff = db.prepare('PRAGMA foreign_keys').get().foreign_keys;
+      yield q.exec('PRAGMA foreign_keys = OFF');
+      const fkOff = (yield q.get('PRAGMA foreign_keys')).foreign_keys;
       if (fkOff !== 0) throw new Error(`${table} de-tenant rebuild: foreign_keys still ${fkOff} after OFF — aborting to avoid an FK-blocked partial rebuild.`);
-      db.exec('BEGIN');
+      yield q.exec('BEGIN');
       try {
-        db.exec(`CREATE TABLE ${tmp} (${bodySql})`);
+        yield q.exec(`CREATE TABLE ${tmp} (${bodySql})`);
         const colList = keptCols.join(', ');
-        db.exec(`INSERT INTO ${tmp} (${colList}) SELECT ${colList} FROM ${table}`);
-        db.exec(`DROP TABLE ${table}`);
-        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
-        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(table);
-        if (oldSeq != null) db.prepare('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)').run(table, oldSeq);
-        db.exec('COMMIT');
+        yield q.exec(`INSERT INTO ${tmp} (${colList}) SELECT ${colList} FROM ${table}`);
+        yield q.exec(`DROP TABLE ${table}`);
+        yield q.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+        yield q.run('DELETE FROM sqlite_sequence WHERE name = ?', [table]);
+        if (oldSeq != null) yield q.run('INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)', [table, oldSeq]);
+        yield q.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
-        db.exec('PRAGMA foreign_keys = ON');
+        yield* rollbackQuietlyCalls();
+        yield q.exec('PRAGMA foreign_keys = ON');
         throw e;
       }
-      db.exec('PRAGMA foreign_keys = ON');
-      for (const idx of idxDdls) { if (!/tenant_id/i.test(idx.sql)) db.exec(idx.sql); }
+      yield q.exec('PRAGMA foreign_keys = ON');
+      for (const idx of idxDdls) { if (!/tenant_id/i.test(idx.sql)) yield q.exec(idx.sql); }
     };
 
-    rebuildDroppingTenant('contract', `
+    yield* rebuildDroppingTenant('contract', `
       id                      INTEGER PRIMARY KEY AUTOINCREMENT,
       contractor_name         TEXT,
       area_of_work            TEXT,
@@ -1006,14 +1371,14 @@ export function init() {
         'subledger_custom_name', 'amount_paise', 'price_of_contract_paise', 'contract_end_date',
         'date_signed', 'created_at', 'updated_at', 'deleted_at', 'company']);
 
-    rebuildDroppingTenant('contract_payment_dates', `
+    yield* rebuildDroppingTenant('contract_payment_dates', `
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
       pay_date    TEXT    NOT NULL,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     `, ['id', 'contract_id', 'pay_date', 'created_at']);
 
-    rebuildDroppingTenant('contractor_payments', `
+    yield* rebuildDroppingTenant('contractor_payments', `
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id           INTEGER NOT NULL REFERENCES contract(id),
       pay_date              TEXT    NOT NULL,
@@ -1038,8 +1403,8 @@ export function init() {
     // fresh install (the CREATE above has no such column), or a silent loss of the old prices before
     // A3 gets the chance to archive them. So: copy the column when it is there, skip it when it is
     // not. Either way A3 removes it a few hundred lines below, with its own data-loss guard.
-    const csHasPrice = db.prepare('PRAGMA table_info(contract_services)').all().some((c) => c.name === 'price_paise');
-    rebuildDroppingTenant('contract_services', `
+    const csHasPrice = (yield q.all('PRAGMA table_info(contract_services)')).some((c) => c.name === 'price_paise');
+    yield* rebuildDroppingTenant('contract_services', `
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL REFERENCES contract(id) ON DELETE CASCADE,
       name        TEXT    NOT NULL,${csHasPrice ? '\n      price_paise INTEGER,' : ''}
@@ -1048,7 +1413,7 @@ export function init() {
       deleted_at  TEXT
     `, ['id', 'contract_id', 'name', ...(csHasPrice ? ['price_paise'] : []), 'created_at', 'updated_at', 'deleted_at']);
 
-    rebuildDroppingTenant('cash_in', `
+    yield* rebuildDroppingTenant('cash_in', `
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise INTEGER NOT NULL,
       tx_date      TEXT,
@@ -1062,7 +1427,7 @@ export function init() {
     `, ['id', 'amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason',
         'created_at', 'updated_at', 'deleted_at']);
 
-    rebuildDroppingTenant('cash_out', `
+    yield* rebuildDroppingTenant('cash_out', `
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise          INTEGER NOT NULL,
       tx_date               TEXT,
@@ -1087,7 +1452,7 @@ export function init() {
         'contract_stated_paise', 'phase', 'subpart', 'created_at', 'updated_at', 'deleted_at',
         'contract_service_id']);
 
-    rebuildDroppingTenant('loans', `
+    yield* rebuildDroppingTenant('loans', `
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       amount_paise  INTEGER,
       bank_name     TEXT,
@@ -1098,7 +1463,7 @@ export function init() {
       deleted_at    TEXT
     `, ['id', 'amount_paise', 'bank_name', 'interest_rate', 'tenure', 'created_at', 'updated_at', 'deleted_at']);
 
-    rebuildDroppingTenant('ledger_customs', `
+    yield* rebuildDroppingTenant('ledger_customs', `
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       name       TEXT    NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1111,9 +1476,9 @@ export function init() {
     // replaced, by a plain unique index on name. (The table rebuilds above already dropped both
     // along with their tables via DROP TABLE; the explicit DROP INDEX here is just defensive in case
     // either survives on an unusual DB.)
-    db.exec('DROP INDEX IF EXISTS idx_contract_single_live_tenant');
-    db.exec('DROP INDEX IF EXISTS idx_ledger_customs_tenant_name');
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_name ON ledger_customs(name)');
+    yield q.exec('DROP INDEX IF EXISTS idx_contract_single_live_tenant');
+    yield q.exec('DROP INDEX IF EXISTS idx_ledger_customs_tenant_name');
+    yield q.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_customs_name ON ledger_customs(name)');
 
     // Part 6 — row-count guard. A create-copy-swap that silently drops (or duplicates) a row is the
     // failure mode this migration most needs to catch. `deliberatelyRemoved` tracks, per table, only
@@ -1123,7 +1488,7 @@ export function init() {
     // stricter than "no more than expected", so it also catches an unexpected UNDER-removal, not
     // only silent loss during the rebuilds.
     for (const t of GUARD_TABLES) {
-      const after = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+      const after = (yield q.get(`SELECT COUNT(*) AS n FROM ${t}`)).n;
       const expected = countsBefore[t] - deliberatelyRemoved[t];
       if (after !== expected) {
         throw new Error(`Tenancy collapse (Step 2a): row-count guard failed for ${t} — before=${countsBefore[t]}, deliberately removed=${deliberatelyRemoved[t]}, expected after=${expected}, found ${after}. Refusing to stamp the migration as complete.`);
@@ -1133,7 +1498,7 @@ export function init() {
     // Part 7 — integrity check before this migration is allowed to be marked done (user_version is
     // stamped unconditionally at the end of init(), so a throw here leaves it at 0 and the whole
     // chain retries next boot).
-    const fkViol = db.prepare('PRAGMA foreign_key_check').all();
+    const fkViol = yield q.all('PRAGMA foreign_key_check');
     if (fkViol.length) throw new Error('Tenancy collapse (Step 2a): foreign_key_check found ' + JSON.stringify(fkViol));
   }
 
@@ -1153,22 +1518,22 @@ export function init() {
   // nullable column is always correct and can never drop or overwrite anything. Existing rows get
   // NULL, which is the right value — every one of these fields is optional, and a NULL rate/area
   // just means the contract keeps whatever stated price was typed.
-  const contractColsPA = db.prepare('PRAGMA table_info(contract)').all().map((c) => c.name);
+  const contractColsPA = (yield q.all('PRAGMA table_info(contract)')).map((c) => c.name);
   for (const [col, type] of [
     ['rate_per_sqft_paise', 'INTEGER'], ['measured_area_milli_sqft', 'INTEGER'],
     ['completion_period_months', 'INTEGER'], ['supervision_rate_pct', 'REAL'],
     ['specified_brands', 'TEXT'], ['excluded_scope', 'TEXT'], ['owner_obligations', 'TEXT'],
   ]) {
-    if (!contractColsPA.includes(col)) db.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
+    if (!contractColsPA.includes(col)) yield q.exec(`ALTER TABLE contract ADD COLUMN ${col} ${type}`);
   }
 
   // --- A2. ADDITIVE: the allowance link on cash_out, and its rollup index --------------------
-  const cashOutColsAllow = db.prepare('PRAGMA table_info(cash_out)').all().map((c) => c.name);
-  if (!cashOutColsAllow.includes('contract_allowance_id')) db.exec('ALTER TABLE cash_out ADD COLUMN contract_allowance_id INTEGER REFERENCES contract_allowances(id)');
+  const cashOutColsAllow = (yield q.all('PRAGMA table_info(cash_out)')).map((c) => c.name);
+  if (!cashOutColsAllow.includes('contract_allowance_id')) yield q.exec('ALTER TABLE cash_out ADD COLUMN contract_allowance_id INTEGER REFERENCES contract_allowances(id)');
   // NOT unique, unlike idx_cash_out_service_live. A service is claimed by at most one live debit;
   // an allowance is a CAP that many debits draw against, so uniqueness here would break the
   // feature rather than protect it. Partial + non-null, so an ordinary unlinked debit costs nothing.
-  db.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
+  yield q.exec('CREATE INDEX IF NOT EXISTS idx_cash_out_allowance_live ON cash_out(contract_allowance_id) WHERE contract_allowance_id IS NOT NULL AND deleted_at IS NULL');
 
   // --- A3. DESTRUCTIVE: drop contract_services.price_paise ------------------------------------
   // A fixed unit-rate lump sum contract prices nothing per service: the schedule of work lists scope items
@@ -1193,12 +1558,12 @@ export function init() {
   // export, so the figures survive in every future backup even though the column does not — the
   // guard's "export a backup first" advice would otherwise be hollow, since the export's column
   // list no longer mentions price_paise.
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_service_price_removed_v1'").get()) {
-    const svcCols = db.prepare('PRAGMA table_info(contract_services)').all().map((c) => c.name);
+  if (!(yield q.get("SELECT 1 FROM settings WHERE key = '_migrated_service_price_removed_v1'"))) {
+    const svcCols = (yield q.all('PRAGMA table_info(contract_services)')).map((c) => c.name);
     if (svcCols.includes('price_paise')) {
-      const priced = db.prepare('SELECT id, name, price_paise FROM contract_services WHERE price_paise IS NOT NULL ORDER BY id ASC').all();
+      const priced = yield q.all('SELECT id, name, price_paise FROM contract_services WHERE price_paise IS NOT NULL ORDER BY id ASC');
       const approved = (isNode && process.env.PLANNR_ALLOW_SERVICE_PRICE_DROP === '1')
-        || !!db.prepare("SELECT 1 FROM settings WHERE key = '_service_price_drop_approved' AND value = '1'").get();
+        || !!(yield q.get("SELECT 1 FROM settings WHERE key = '_service_price_drop_approved' AND value = '1'"));
       if (priced.length > 0 && !approved) {
         const shown = priced.slice(0, 20).map((r) => `  · ${r.name}: ₹${(r.price_paise / 100).toFixed(2)}`).join('\n');
         const more = priced.length > 20 ? `\n  … and ${priced.length - 20} more` : '';
@@ -1218,14 +1583,13 @@ export function init() {
         );
       }
       if (priced.length > 0) {
-        db.prepare("INSERT INTO settings (key, value) VALUES ('_archived_service_prices_v1', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-          .run(JSON.stringify(priced));
+        yield q.run("INSERT INTO settings (key, value) VALUES ('_archived_service_prices_v1', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(priced)]);
       }
       // price_paise is in no index and no constraint, so a plain DROP COLUMN is enough — no
       // create-copy-swap rebuild, and nothing else about the table changes.
-      db.exec('ALTER TABLE contract_services DROP COLUMN price_paise');
+      yield q.exec('ALTER TABLE contract_services DROP COLUMN price_paise');
     }
-    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_service_price_removed_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    yield q.exec("INSERT INTO settings (key, value) VALUES ('_migrated_service_price_removed_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Phase 10a — the 23-category ledger taxonomy (public/ledgers.js) was replaced with a fresh
@@ -1252,11 +1616,11 @@ export function init() {
   // shared "< N" gate would re-fire this one every time they do that, wiping cash_out rows those
   // tests insert for unrelated reasons and need to survive. This migration only cares "has THIS
   // cleanup run yet", independent of whatever the version counter is otherwise made to say.
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'").get()) {
+  if (!(yield q.get("SELECT 1 FROM settings WHERE key = '_migrated_ledger_taxonomy_v1'"))) {
     // ---- DATA-LOSS GUARD (added after this block silently wiped a real ledger) -------------------
     // The DELETE below removes EVERY cash_out row, and this block is MARKER-gated, not version-gated
     // (see the note above for why). So `user_version` is no warning at all: a database already
-    // stamped at the current SCHEMA_VERSION still runs this on its first pass. Installing an update
+    // stamped at the current schema version still runs this on its first pass. Installing an update
     // onto any database that predates Phase 10a therefore wipes the whole Money Debited history with
     // no prompt and no error. A silent DELETE of a construction ledger is the worst failure this app
     // can have, so: if there is anything to lose, REFUSE TO BOOT and say why.
@@ -1273,9 +1637,9 @@ export function init() {
     //
     // Throwing here leaves the marker UNSET, so the refusal is stable and repeats on every boot
     // rather than being a one-shot the user can miss.
-    const doomed = db.prepare('SELECT COUNT(*) n FROM cash_out').get().n;
+    const doomed = (yield q.get('SELECT COUNT(*) n FROM cash_out')).n;
     const approved = (isNode && process.env.PLANNR_ALLOW_TAXONOMY_WIPE === '1')
-      || !!db.prepare("SELECT 1 FROM settings WHERE key = '_taxonomy_wipe_approved' AND value = '1'").get();
+      || !!(yield q.get("SELECT 1 FROM settings WHERE key = '_taxonomy_wipe_approved' AND value = '1'"));
     if (doomed > 0 && !approved) {
       throw new Error(
         `Plannr stopped to protect your data.\n\n`
@@ -1292,10 +1656,10 @@ export function init() {
       );
     }
     // ---- end guard -------------------------------------------------------------------------------
-    db.exec('DELETE FROM cash_out');
-    db.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
-    db.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
-    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    yield q.exec('DELETE FROM cash_out');
+    yield q.exec("UPDATE contract SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    yield q.exec("UPDATE contractor_payments SET ledger_code = NULL, subledger_code = NULL WHERE ledger_code IS NOT NULL AND ledger_code <> 'CUSTOM'");
+    yield q.exec("INSERT INTO settings (key, value) VALUES ('_migrated_ledger_taxonomy_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Generic-taxonomy rename — five seeded sub-ledger LABELS were copied out of one construction
@@ -1315,16 +1679,15 @@ export function init() {
   // these via the Ledger List CSV round trip is never stomped: a row that no longer reads exactly as
   // seeded is left exactly as the owner left it. Marker-gated, so a later deliberate rename BACK to one
   // of these is not undone on the next boot.
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = '_migrated_generic_ledger_names_v1'").get()) {
-    const rename = db.prepare('UPDATE ledger_subs SET name = ? WHERE code = ? AND name = ?');
+  if (!(yield q.get("SELECT 1 FROM settings WHERE key = '_migrated_generic_ledger_names_v1'"))) {
     for (const [code, from, to] of [
       ['20.1', 'Electricity connection (KSEB)', 'Electricity connection'],
       ['21.1', 'Equipment rental — mixer, JCB', 'Equipment rental — mixer, excavator'],
       ['23.4', 'Plastic waste — Harithakarmasena', 'Plastic waste handover'],
       ['24.2', 'Foundation depth beyond 2.5 ft', 'Additional foundation work'],
       ['24.3', 'Plinth height beyond 1.5 ft', 'Additional plinth work'],
-    ]) rename.run(to, code, from);
-    db.exec("INSERT INTO settings (key, value) VALUES ('_migrated_generic_ledger_names_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    ]) yield q.run('UPDATE ledger_subs SET name = ? WHERE code = ? AND name = ?', [to, code, from]);
+    yield q.exec("INSERT INTO settings (key, value) VALUES ('_migrated_generic_ledger_names_v1', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   }
 
   // Schema-version marker (Phase 11B) — stamped ONLY here, after every migration above has succeeded,
@@ -1332,7 +1695,9 @@ export function init() {
   // the historical presence-keyed DESTRUCTIVE rebuild(s) above: those run only while user_version is 0,
   // so re-adding a same-named column later can never re-arm them. Additive ADD-COLUMN guards stay
   // presence-keyed on purpose — adding an absent column is always correct, so they need no version gate.
-  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  // Phase 2: only ever RAISE the version here — a database already past the baseline (stamped by a
+  // later MIGRATIONS step) must never be pulled back to 2, or that step would re-run on every start.
+  if ((yield q.get('PRAGMA user_version')).user_version < BASELINE_VERSION) yield q.exec(`PRAGMA user_version = ${BASELINE_VERSION}`);
 }
 
 // Phase 4a/4c (WASM SQLite port prep): recognize a SQLITE_IOERR-family error regardless of which
@@ -1345,8 +1710,20 @@ export function init() {
 // storage-ceiling spike: exceeding the quota surfaces as a clean, atomically-rolled-back SQLITE_IOERR,
 // never silent corruption — so a write path seeing this can safely tell the user "storage is full"
 // instead of a raw SQLite message.
+// Roll back after a failed write, without hiding why it failed. When a write hits the phone's storage
+// limit (SQLITE_IOERR from kvvfs) SQLite has usually rolled the transaction back by itself already, and
+// a second ROLLBACK throws "cannot rollback - no transaction is active" — which would replace the real
+// error, so the user saw "Something went wrong" instead of "Storage is full" (measured in Phase 2,
+// Step 3; test-ui/storage-limit.js). Every catch block that rolls back uses this and then rethrows
+// the ORIGINAL error. Any other rollback failure is still thrown.
+export function rollbackQuietly(dbh = db) {
+  try { dbh.exec('ROLLBACK'); } catch (e) { if (!/no transaction is active/i.test(String(e && e.message))) throw e; }
+}
+
 export function isStorageFullError(err) {
   const code = err && (err.errcode ?? err.resultCode);
-  if (typeof code === 'number' && (code & 0xff) === 10) return true;
-  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error/i.test(err.message));
+  // 10 = SQLITE_IOERR (kvvfs: localStorage over its limit); 13 = SQLITE_FULL (a database file on a
+  // full disk: the phone after the move, step 1.4 C11, and the desktop).
+  if (typeof code === 'number' && ((code & 0xff) === 10 || (code & 0xff) === 13)) return true;
+  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error|SQLITE_FULL|database or disk is full/i.test(err.message));
 }

@@ -144,6 +144,35 @@ const closed = (page) => page.waitForSelector('.lb-backdrop', { state: 'hidden',
 
   check('no console or page errors throughout', errors.length === 0, errors.slice(0, 3).join(' | '));
 
+  // Review finding F1: a JSON backup is checked for non-empty ledger codes only, so a crafted one can
+  // carry markup in a code. Every place the code goes into HTML must escape it: the option values of
+  // the ledger selects and the picker's data-code attributes. Restore such a backup, open the three
+  // pages, open the picker: nothing runs, and the option holds the code as text.
+  console.log('\n── a ledger code with markup, from a restored backup ─────────────────────────');
+  const PROBE = '77.0"><img src=x onerror="window.__plannrXss=1">';
+  const backup = await page.evaluate(() => fetch('/api/backup/export?includeContacts=1').then((r) => r.json()));
+  const main = { ...backup.tables.ledger_mains[0], code: PROBE, name: 'Markup probe', sort_order: 9999 };
+  backup.tables.ledger_mains.push(main);
+  const sub0 = backup.tables.ledger_subs.find((s) => s.main_code === backup.tables.ledger_mains[0].code);
+  if (sub0) backup.tables.ledger_subs.push({ ...sub0, code: '77.1"><img src=x onerror="window.__plannrXss=2">', main_code: PROBE, name: 'Markup probe sub', sort_order: 9999 });
+  const imported = await page.evaluate((b) => fetch('/api/backup/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.status), backup);
+  check('the crafted backup is accepted by the import (codes are only checked for being non-empty)', imported === 200, String(imported));
+  for (const [path, trig, sel] of [['/cash-outflow', '#ledgerTrigger', '#ledgerSelect'], ['/contract-details', '#cLedgerTrigger', '#cLedgerSelect'], ['/contractor-payments', '#cpLedgerTrigger', '#cpLedgerSelect']]) {
+    await page.goto(base + path, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    await openPicker(page, trig);
+    await page.fill('.lb-search', 'Markup probe');
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Escape');
+    await closed(page);
+    await page.waitForTimeout(500);
+    const ran = await page.evaluate(() => window.__plannrXss);
+    const asText = await page.$eval(sel, (s, code) => [...s.options].some((o) => o.value === code), PROBE);
+    const imgs = await page.evaluate(() => document.querySelectorAll('img[src="x"]').length);
+    check(`${path}: the code's markup does not run and adds no element`, ran === undefined && imgs === 0, `ran=${ran} imgs=${imgs}`);
+    check(`${path}: the select holds the code exactly, as text`, asText);
+  }
+
   await browser.close();
   await H.stopApp();
   console.log(failures === 0 ? '\n✓ LEDGER PICKER PASSED' : `\n✗ ${failures} check(s) failed`);

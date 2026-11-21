@@ -6,20 +6,12 @@
 // waits for the module's synchronous portion to run), so relying on script ordering alone is not
 // enough to guarantee this finishes before a page's own fetch() calls run.
 //
-// First, probe whether a real API server is actually there (server.js, still the reference
-// implementation the Node tests run against). If it is, this is NOT local-only mode — leave
-// window.fetch alone entirely and do nothing further; installing the shim here would hijack every
-// fetch() call on a server.js-backed page too (exactly what broke test-ui/run.js the first time this
-// was written). Only when there is no real backend do we open the local kvvfs database and install
-// the shim.
-//
-// The probe can't just fetch a nonexistent /api/* path and check for a 404 — Chrome logs "Failed to
-// load resource: 404" to the console for ANY failed fetch, regardless of how the JS handles it, which
-// would itself be a console error on every page load in local mode (the opposite of what this app
-// wants). Instead it HEADs the current page's own URL (guaranteed to exist, 200 in both modes) and
-// checks for an ETag response header — express.static sets one by default (server.js relies on this
-// default; see its own comment on the static middleware), and local-server.js's plain http server
-// does not set one at all. No request ever 404s, so there is nothing for Chrome to log either way.
+// Then decide which backend answers /api (runtime-mode.js, Phase 2 Step 6): inside the Capacitor app
+// it is always the local database, with no probe at all; in a plain browser it is the desktop dev
+// server (server.js) only if the page carries server.js's X-Plannr-Dev-Server marker. In server mode
+// window.fetch is left alone (installing the shim there would hijack every fetch() on a
+// server.js-backed page — what broke test-ui/run.js the first time this was written). Otherwise the
+// local kvvfs database is opened and the shim installed.
 
 // Phase 6b — registers the local-notification tap listener (always opens Overview). Unconditional
 // and outside the local-only branch below: it must be active on EVERY page under EVERY environment
@@ -27,15 +19,72 @@
 // it is a deliberate no-op under server.js/local-server.js (no native Capacitor bridge there).
 await import('./notifications.js');
 
-const probe = await fetch(location.pathname, { method: 'HEAD' }).catch(() => null);
-if (probe && probe.headers.has('etag')) {
-  console.log('[local-bootstrap] a real API server is present (ETag from express.static) — leaving fetch alone (not local-only mode).');
+const { Capacitor } = await import('@capacitor/core');
+const { detectMode } = await import('./runtime-mode.js');
+const mode = await detectMode({ isNative: Capacitor.isNativePlatform(), path: location.pathname });
+window.__plannrMode = mode; // read by test-ui/runtime-mode.js
+if (mode === 'server') {
+  console.log('[local-bootstrap] desktop dev server (server.js) detected — leaving fetch alone (not local-only mode).');
 } else {
-  const { ready, init } = await import('./db.js');
+  const { ready, init, planMigrations, useAdapter } = await import('./db.js');
+  // Step 1.4 C9: which copy holds the data, before anything reads it (docs/step-1.4-storage-plan.md
+  // §2.2). Without the phone's two storage plugins (the browser preview, the UI suites) this answers
+  // "localstorage" at once and touches nothing. A file that is missing or damaged stops here, on the
+  // recovery screen, with nothing changed.
+  let storage;
+  try {
+    const { chooseStorage } = await import('./storage-native.js');
+    storage = await chooseStorage({ plugins: window.__plannrTestPlugins });
+  } catch (e) {
+    showStartupError(e);
+    throw e;
+  }
+  window.__plannrStorage = { use: storage.use, native: storage.native, prompt: storage.prompt || null, marker: storage.marker || null };
+  if (storage.use === 'recovery') {
+    const { showRecoveryScreen } = await import('./storage-recovery.js');
+    await showRecoveryScreen(storage);
+    throw new Error('Plannr: the database file is ' + storage.reason + '; the recovery screen is shown.');
+  }
+  if (storage.use === 'native') useAdapter(storage.adapter);
   await ready();
-  init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
+  // Phase 2 (Step 2): before a schema upgrade touches existing data, copy the whole database into the
+  // app's private folder (safety-snapshots.js). If that copy cannot be written and verified, stop
+  // here: the data stays exactly as it is, at its old version. init() itself refuses a database from
+  // a newer app version (an older APK installed over newer data) without changing anything.
+  const plan = await planMigrations(); // through the async interface, like init() (step 1.4 B9)
+  try {
+    let snapshots = null;
+    if (plan.needsSnapshot && !plan.tooNew) {
+      snapshots = await import('./safety-snapshots.js');
+      // Keeps the snapshot from before an earlier, unfinished try of this upgrade (safety-snapshots.js).
+      if (!(await snapshots.writePreMigrationSnapshot(plan))) snapshots = null;
+    }
+    await init(); // creates/migrates the schema — must run before repo.js prepares any statement against it
+    if (snapshots) await snapshots.finishUpgrade(); // the upgrade finished: back to the normal rotation
+  } catch (e) {
+    showStartupError(e);
+    throw e;
+  }
   const repo = await import('./repo.js');
   const { installFetchShim } = await import('./local-api.js');
-  installFetchShim(repo);
+  const shim = installFetchShim(repo);
+  try {
+    await shim.ready; // the ledger list's first read (step 1.4 B10)
+  } catch (e) {
+    showStartupError(e);
+    throw e;
+  }
   console.log('[local-bootstrap] local-only mode: fetch shim installed, no network requests will be made for /api/*.');
+}
+
+// A start-up failure would otherwise leave a blank page. Show the reason (plain text, never HTML).
+function showStartupError(e) {
+  const show = () => {
+    const box = document.createElement('div');
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'margin:16px;padding:16px;border:2px solid #b00020;border-radius:8px;background:#fff4f4;color:#5f0010;font:16px/1.4 system-ui,sans-serif;white-space:pre-wrap';
+    box.textContent = 'Plannr could not open your data. ' + (e && e.message ? e.message : String(e));
+    document.body.prepend(box);
+  };
+  if (document.body) show(); else document.addEventListener('DOMContentLoaded', show, { once: true });
 }

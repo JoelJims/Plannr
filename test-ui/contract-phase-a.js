@@ -123,7 +123,8 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('and no remainder line', (await page.$('#remainderLine')) === null);
   await page.fill('#svcName', 'Electrical rough-in');
   await page.click('#svcAddBtn');
-  await page.waitForTimeout(500);
+  // Wait for the row rather than a fixed 500 ms (that flaked once under load in the full suite).
+  await page.waitForFunction(() => document.querySelectorAll('.cd-svc-row').length >= 1, null, { timeout: 5000 }).catch(() => {});
   check('a scope item can be added', (await page.$$('.cd-svc-row')).length === 1);
 
   // ---- allowances: entered by hand, because there is no seeded set ------------------------------

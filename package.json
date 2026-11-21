@@ -5,7 +5,7 @@
   "description": "Plannr — a single-user offline construction-spend ledger, built as an Android app with Capacitor",
   "main": "server.js",
   "author": "Joel Jims (https://github.com/JoelJims)",
-  "license": "Unlicense",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/JoelJims/plannr"
@@ -26,23 +26,34 @@
     "test:contract-layout": "node test-ui/contract-details-layout.js",
     "test:ledger-picker": "node test-ui/ledger-picker.js",
     "test:disclosure": "node test-ui/disclosure.js",
+    "test:backup-roundtrip": "node test-ui/backup-roundtrip.js",
+    "test:storage-limit": "node test-ui/storage-limit.js",
+    "test:runtime-mode": "node test-ui/runtime-mode.js",
+    "test:offline": "node test-ui/offline.js",
+    "test:db-adapter-kvvfs": "node test-ui/db-adapter-kvvfs.js",
+    "test:storage-startup": "node test-ui/storage-startup.js",
+    "test:storage-move-ui": "node test-ui/storage-move-ui.js",
     "sync:public-modules": "node sync-public-modules.js",
-    "android:sync": "node sync-public-modules.js && npx cap sync android"
+    "android:sync": "node sync-public-modules.js && npx cap sync android",
+    "release:android": "node release-android.js"
   },
   "engines": {
     "node": ">=22.12.0"
   },
   "dependencies": {
+    "@capacitor-community/sqlite": "8.1.1",
     "@capacitor/android": "^8.5.0",
-    "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0",
     "@capacitor/filesystem": "^8.1.3",
     "@capacitor/local-notifications": "^8.3.1",
     "@capacitor/share": "^8.0.1",
     "@capgo/capacitor-pdf-generator": "^8.0.36",
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
-    "express": "^4.21.2",
-    "playwright": "^1.61.1",
     "scrypt-js": "^3.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "express": "^4.21.2",
+    "playwright": "^1.61.1"
   }
 }

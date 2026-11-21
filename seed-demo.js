@@ -9,12 +9,12 @@
 
 const { guardDbTarget } = require('./db-guard');
 guardDbTarget();                          // refuses data/plannr.db unless --i-really-mean-the-live-db
-const { db, init } = require('./db');
-init();
+const { db, init } = require('./db'); // init() runs first thing in main() (step 1.4 B17)
 // Phase 10b: the taxonomy is DB-backed now (seeded from ledgers.js on first run, but potentially
 // edited since) — read the live table, not the seed file, so a demo re-seed reflects reality.
+// Read in main() below: the list comes through the async interface (step 1.4 B10).
 const { ledgers: repoLedgers } = require('./repo');
-const LEDGERS = repoLedgers.list();
+let LEDGERS = [];
 
 // ---- deterministic RNG (LCG) — no Math.random, so seed:demo reproduces exactly ----
 let _s = 20260803;
@@ -78,6 +78,8 @@ const LONG_REMARKS = [
 const now = new Date();
 const nowIso = now.toISOString().replace('T', ' ').slice(0, 19);
 
+async function main() {
+await init();
 console.error('[seed] wiping ledger tables on the target (isolated) DB and re-seeding…');
 db.exec('DELETE FROM cash_out; DELETE FROM cash_in; DELETE FROM contractor_payments; DELETE FROM contract_payment_dates; DELETE FROM contract; DELETE FROM loans;');
 db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('cash_out','cash_in','contractor_payments','contract','loans')").run();
@@ -89,6 +91,7 @@ if (!owner) owner = { id: Number(db.prepare('INSERT INTO users (username, displa
 const ownerId = owner.id;
 
 db.exec('BEGIN');
+LEDGERS = await repoLedgers.list();
 try {
   // ---- contract ~₹25,00,000 ----
   const contractId = Number(db.prepare(
@@ -188,3 +191,5 @@ try {
   console.error('[seed] FAILED, rolled back —', e);
   process.exit(1);
 }
+}
+main().catch((e) => { console.error('[seed] FAILED —', e); process.exit(1); });

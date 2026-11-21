@@ -4,6 +4,12 @@ node_modules/
 # data & secrets — NEVER commit
 data/
 .env
+# any SQLite database or backup, wherever it lands (a stray .db once reached the history)
+*.db
+*.db-wal
+*.db-shm
+*.db.enc
+plannr-safety-snapshot-*.json
 
 # WhatsApp session / state — and every sibling (_old, _snapshot, _snapshot_dead, .state.json, _diag)
 .wwebjs_auth*
@@ -32,6 +38,9 @@ PLANNR-AUDIT-LIVE.md
 /public/db-engine.js
 /public/node-builtins-browser-stub.js
 /public/ledgers.js
+/public/backup-format.js
+/public/request-rules.js
+/public/core/
 /public/allowances.js
 /public/node_modules/
 
@@ -52,3 +61,24 @@ PLANNR-AUDIT-LIVE.md
 
 *.keystore
 keystore.properties
+# other signing keys and certificates, and per-environment .env files (review S9)
+*.jks
+*.p12
+*.pem
+.env.*
+!.env.example
+# what the app exports or a phone pull brings back: plain JSON backups, CSV and PDF exports,
+# compressed databases, the import's automatic snapshot (they hold ledger data)
+plannr-backup-*.json
+plannr-*.csv
+plannr-overview-*.pdf
+*.db.gz
+auto-snapshot-before-import-*.json
+
+# The owner's personal notes and interview prep (kept next to the code, never committed).
+/Interview_Prep_Plannr.pdf
+/Plannr_Tech_Cheat_Sheet.pdf
+/review_notes_plannr.docx
+
+# scripts/phone-test.ps1 screenshots and results (may show ledger data)
+/docs/phone-test-evidence/
