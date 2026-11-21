@@ -135,14 +135,14 @@
 
     function buildLedgers() {
       els.ledgerSelect.innerHTML = '<option value="">— select ledger —</option>' +
-        LEDGERS.map((l) => `<option value="${l.code}">${escapeHtml(l.code + ' ' + l.name)}</option>`).join('') +
+        LEDGERS.map((l) => `<option value="${escapeHtml(l.code)}">${escapeHtml(l.code + ' ' + l.name)}</option>`).join('') +
         `<option value="${CUSTOM_CODE}">Custom…</option>`;
     }
     function buildSubs(ledgerCode) {
       const l = ledgerCode === CUSTOM_CODE ? null : LEDGERS.find((x) => x.code === ledgerCode);
       const subs = l ? l.subLedgers : [];
       els.subSelect.innerHTML = '<option value="">— none —</option>' +
-        subs.map((s) => `<option value="${s.code}">${escapeHtml(s.code + ' ' + s.name)}</option>`).join('') +
+        subs.map((s) => `<option value="${escapeHtml(s.code)}">${escapeHtml(s.code + ' ' + s.name)}</option>`).join('') +
         `<option value="${CUSTOM_CODE}">Custom…</option>`;
       els.subSelect.disabled = !ledgerCode;
     }
@@ -308,14 +308,14 @@
     const LEDGERS = root.LEDGERS || [];
     function buildLedgers() {
       els.ledgerSelect.innerHTML = '<option value="">— select ledger —</option>' +
-        LEDGERS.map((l) => `<option value="${l.code}">${escapeHtml(l.code + ' ' + l.name)}</option>`).join('') +
+        LEDGERS.map((l) => `<option value="${escapeHtml(l.code)}">${escapeHtml(l.code + ' ' + l.name)}</option>`).join('') +
         `<option value="${CUSTOM_CODE}">Custom…</option>`;
     }
     function buildSubs(ledgerCode) {
       const l = ledgerCode === CUSTOM_CODE ? null : LEDGERS.find((x) => x.code === ledgerCode);
       const subs = l ? l.subLedgers : [];
       els.subSelect.innerHTML = '<option value="">— none —</option>' +
-        subs.map((s) => `<option value="${s.code}">${escapeHtml(s.code + ' ' + s.name)}</option>`).join('') +
+        subs.map((s) => `<option value="${escapeHtml(s.code)}">${escapeHtml(s.code + ' ' + s.name)}</option>`).join('') +
         `<option value="${CUSTOM_CODE}">Custom…</option>`;
       els.subSelect.disabled = !ledgerCode;
     }
@@ -1004,7 +1004,7 @@
 
     function rowHtml(code, name, sub) {
       const cls = sub ? 'lb-row lb-row-sub' : 'lb-row lb-row-main';
-      const attrs = sub ? `data-act="sub" data-code="${code}" data-sub="${sub}"` : `data-act="main" data-code="${code}"`;
+      const attrs = sub ? `data-act="sub" data-code="${escapeHtml(code)}" data-sub="${escapeHtml(sub)}"` : `data-act="main" data-code="${escapeHtml(code)}"`;
       const shown = sub || code;
       return `<button type="button" class="${cls}" ${attrs}><span class="lb-code">${escapeHtml(shown)}</span><span class="lb-name">${escapeHtml(name)}</span></button>`;
     }
@@ -1019,7 +1019,7 @@
           return '<div class="lb-main">' +
             '<div class="lb-mainline">' +
               rowHtml(l.code, l.name) +
-              `<button type="button" class="lb-expand" data-act="expand" data-code="${l.code}" aria-expanded="${mOpen}" aria-label="Sub-ledgers of ${escapeHtml(l.name)}"><span class="lb-caret">▸</span></button>` +
+              `<button type="button" class="lb-expand" data-act="expand" data-code="${escapeHtml(l.code)}" aria-expanded="${mOpen}" aria-label="Sub-ledgers of ${escapeHtml(l.name)}"><span class="lb-caret">▸</span></button>` +
             '</div>' +
             `<div class="lb-subs"${mOpen ? '' : ' hidden'}>${subs}</div>` +
           '</div>';
@@ -1057,7 +1057,7 @@
       const shown = hits.slice(0, SEARCH_RESULT_CAP);
       body.innerHTML = shown.map((h) => {
         const cls = h.sub ? 'lb-row lb-row-sub lb-row-flat' : 'lb-row lb-row-main lb-row-flat';
-        const attrs = h.sub ? `data-act="sub" data-code="${h.code}" data-sub="${h.sub}"` : `data-act="main" data-code="${h.code}"`;
+        const attrs = h.sub ? `data-act="sub" data-code="${escapeHtml(h.code)}" data-sub="${escapeHtml(h.sub)}"` : `data-act="main" data-code="${escapeHtml(h.code)}"`;
         const parent = h.parent ? `<span class="lb-parent">${escapeHtml(h.parent)}</span>` : '';
         return `<button type="button" class="${cls}" ${attrs}><span class="lb-code">${escapeHtml(h.sub || h.code)}</span><span class="lb-name">${escapeHtml(h.name)}</span>${parent}</button>`;
       }).join('')
