@@ -39,9 +39,12 @@ const OPTIONAL_V1_TABLES = ['contract_payment_dates', 'contractor_payments', 'co
 // and never leans on an implicit ON DELETE CASCADE. settings is never cleared (it is UPSERTed: keys the
 // file lacks keep this install's value — several are migration markers). assertImportOwnershipComplete()
 // fails at startup if a table with a foreign key into one of these is ever left out.
+// `sessions` is the removed login's table (sessions.user_id -> users): databases first made by the
+// two oldest schemas still have it after their upgrade, with dead rows. Owned, so the import clears it
+// before `users` (only where it exists) and the start-up check accepts those databases (review Q1).
 export const IMPORT_OWNED_TABLES = [
   'cash_out', 'contract_services', 'contract_allowances', 'contract_payment_dates', 'contractor_payments',
-  'contract', 'cash_in', 'loans', 'settings', 'ledger_customs', 'ledger_subs', 'ledger_mains', 'users',
+  'contract', 'cash_in', 'loans', 'settings', 'ledger_customs', 'ledger_subs', 'ledger_mains', 'sessions', 'users',
 ];
 
 // The exact columns exported and restored, per table. Every column of the live schema must be listed:
