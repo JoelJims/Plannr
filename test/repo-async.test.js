@@ -78,9 +78,8 @@ test('B11: every repo.contract function answers with a Promise', async () => {
     existsLive: () => repo.contract.existsLive(cid),
     liveCount: () => repo.contract.liveCount(),
     deletedAt: () => repo.contract.deletedAt(cid),
-    update: () => repo.contract.update(cid, ['area_of_work'], ['B11 area']),
+    updateWithPayDates: () => repo.contract.updateWithPayDates(cid, ['area_of_work'], ['B11 area'], ['2026-08-01', '2026-09-01']),
     payDatesFor: () => repo.contract.payDatesFor(cid),
-    writePayDates: () => repo.contract.writePayDates(cid, ['2026-08-01', '2026-09-01']),
     servicesFor: () => repo.contract.servicesFor(cid),
     insertService: () => keepId(repo.contract.insertService(cid, 'B11 service'), (id) => { sid = id; }),
     serviceLive: () => repo.contract.serviceLive(sid),
@@ -107,7 +106,7 @@ test('B11: every repo.contract function answers with a Promise', async () => {
     softDeleteAllowance: () => repo.contract.softDeleteAllowance(aid),
     cashOutReferencingAllowances: () => repo.contract.cashOutReferencingAllowances(cid),
     softDelete: () => repo.contract.softDelete(cid),
-    insert: () => repo.contract.insert(['contractor_name', 'area_of_work', 'ledger_code'], ['B11', 'B11 area', '5.0']),
+    insertWithPayDates: () => repo.contract.insertWithPayDates(['contractor_name', 'area_of_work', 'ledger_code'], ['B11', 'B11 area', '5.0'], []),
   };
   assert.deepStrictEqual(Object.keys(calls).sort(), Object.keys(repo.contract).sort(), 'every function is checked');
   for (const [name, call] of Object.entries(calls)) {

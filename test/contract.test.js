@@ -114,3 +114,30 @@ test('a contractor payment needs a live contract: a missing or deleted one is re
     assert.strictEqual(r.json.error, 'Select a valid contract.');
   }
 });
+
+// Review finding Q3: saving a contract wrote the contract row and its payment dates as separate
+// statements. A failure part-way left the edit half-done: the new name with only some of the new
+// dates, the old dates deleted. A trigger makes one date's insert fail; nothing of the save may stay.
+test('a contract and its payment dates are saved all or nothing (create and edit)', async () => {
+  const dates = () => H.db.prepare('SELECT pay_date FROM contract_payment_dates ORDER BY pay_date').all().map((r) => r.pay_date);
+  const made = await H.post('/api/contracts', { ...C('Before'), paymentDates: ['2026-08-01', '2026-09-01'] }, { cookie });
+  assert.strictEqual(made.status, 201);
+  const id = made.json.contract.id;
+  H.db.exec("CREATE TRIGGER q3_fail_one_date BEFORE INSERT ON contract_payment_dates WHEN NEW.pay_date = '2099-01-01' BEGIN SELECT RAISE(ABORT, 'injected: this date cannot be saved'); END");
+  try {
+    const edit = await H.put(`/api/contracts/${id}`, { ...C('After'), paymentDates: ['2026-10-01', '2099-01-01'] }, { cookie });
+    assert.strictEqual(edit.status, 500, JSON.stringify(edit.json));
+    assert.strictEqual(H.db.prepare('SELECT contractor_name n FROM contract WHERE id = ?').get(id).n, 'Before', 'the edit is undone');
+    assert.deepStrictEqual(dates(), ['2026-08-01', '2026-09-01'], 'the old dates are all still there');
+
+    assert.strictEqual((await del(id)).status, 200);
+    const create2 = await H.post('/api/contracts', { ...C('New'), paymentDates: ['2026-11-01', '2099-01-01'] }, { cookie });
+    assert.strictEqual(create2.status, 500, JSON.stringify(create2.json));
+    assert.strictEqual(liveCount(), 0, 'no contract without its dates');
+    assert.deepStrictEqual(dates(), ['2026-08-01', '2026-09-01'], 'no stray dates from the failed create');
+  } finally {
+    H.db.exec('DROP TRIGGER IF EXISTS q3_fail_one_date');
+  }
+  const ok = await H.post('/api/contracts', { ...C('New'), paymentDates: ['2026-11-01'] }, { cookie });
+  assert.strictEqual(ok.status, 201, 'saves work again');
+});

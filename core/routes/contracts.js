@@ -295,9 +295,6 @@ export function register(app, ctx) {
     };
   }
 
-  // Replace a contract's scheduled payment-date children with a fresh list.
-  const writePaymentDates = (contractId, dates) => repo.contract.writePayDates(contractId, dates);
-
   // Contracts CRUD. Phase 5D: AT MOST ONE live contract (enforced by the idx_contract_single_live
   // partial unique index). The path + the { contracts: [...] } response shape are UNCHANGED so the
   // frontend fetch doesn't churn — it is simply always an array of 0 or 1. paymentDatesFor() is
@@ -317,8 +314,8 @@ export function register(app, ctx) {
     if ((await repo.contract.liveCount()) > 0) {
       return res.status(409).json({ error: 'A contract already exists — Plannr tracks a single contract. Edit the existing one instead of adding another (or delete it first).' });
     }
-    const info = await repo.contract.insert(CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
-    await writePaymentDates(info.lastInsertRowid, v.paymentDates);
+    // The contract and its payment dates in one transaction (review finding Q3).
+    const info = await repo.contract.insertWithPayDates(CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]), v.paymentDates);
     res.status(201).json({ ok: true, contract: await contractRow(await getContractRow(info.lastInsertRowid)) });
   });
 
@@ -327,8 +324,7 @@ export function register(app, ctx) {
     if (!Number.isInteger(id) || !(await getContractRow(id))) return res.status(404).json({ error: 'Contract not found.' });
     const v = readContractBody(req);
     if (v.error) return res.status(400).json({ error: v.error });
-    await repo.contract.update(id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]));
-    await writePaymentDates(id, v.paymentDates);
+    await repo.contract.updateWithPayDates(id, CONTRACT_COLS, CONTRACT_COLS.map((c) => v.values[c]), v.paymentDates);
     res.json({ ok: true, contract: await contractRow(await getContractRow(id)) });
   });
 
