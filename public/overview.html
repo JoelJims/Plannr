@@ -372,13 +372,13 @@
            balance Owed to Contractors (F), shown on-screen using the SAME value the PDF prints. -->
       <div class="ov-section">
         <div class="ov-figs6">
-          <div class="ov-fig"><div class="ov-fig-label">Spent by self (C)</div><div class="ov-fig-val" id="figC">₹0.00</div><div class="ov-fig-note">Σ all cash outflow</div></div>
-          <div class="ov-fig"><div class="ov-fig-label">Paid to contractors (B)</div><div class="ov-fig-val" id="figB">₹0.00</div><div class="ov-fig-note">Σ contractor payments</div></div>
-          <div class="ov-fig"><div class="ov-fig-label">Total money paid</div><div class="ov-fig-val" id="figD">₹0.00</div><div class="ov-fig-note">B + C</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Spent by self (C)</div><div class="ov-fig-val" id="figC">…</div><div class="ov-fig-note">Σ all cash outflow</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Paid to contractors (B)</div><div class="ov-fig-val" id="figB">…</div><div class="ov-fig-note">Σ contractor payments</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Total money paid</div><div class="ov-fig-val" id="figD">…</div><div class="ov-fig-note">B + C</div></div>
         </div>
         <div class="ov-owed" id="ovOwed" hidden>
           <div class="ov-fig-label">Owed to contractors (F)</div>
-          <div class="ov-fig-val" id="figF">₹0.00</div>
+          <div class="ov-fig-val" id="figF">…</div>
           <div class="ov-owed-note">Total contract value − payments paid, cumulative. Same figure as the PDF.</div>
         </div>
       </div>
@@ -399,7 +399,7 @@
           <div class="ov-bar-marker" id="ovBarMarker" hidden></div>
         </div>
         <div class="ov-bar-labels">
-          <span id="ovBarSpent">Spent ₹0.00</span>
+          <span id="ovBarSpent">Spent …</span>
           <span id="ovBarBudget">No budget set</span>
         </div>
       </div>
@@ -616,10 +616,33 @@
       if (!txTable.isEditing()) await loadOutflows();
     });
 
+    // F3 (review 2026-11-21): a failed load showed ₹0.00 everywhere with no message, which reads as
+    // "nothing spent". Now the figures say "…" while loading, "—" if the first load fails, and the
+    // message says what happened. A failed refresh after an edit keeps the last figures and says
+    // they may be out of date.
+    async function fetchOverview() {
+      let r;
+      try { r = await fetch(overviewUrl()); }
+      catch (err) { return { error: (err && err.message) || String(err) }; }
+      if (r.status === 401) { location.href = '/login.html'; return { redirected: true }; }
+      const body = await r.json().catch(() => null);
+      if (!r.ok || !body || !body.money) return { error: (body && body.error) || `the app answered ${r.status}` };
+      return { data: body };
+    }
+    function showNoFigures() {
+      for (const id of ['figC', 'figB', 'figD', 'figF']) $(id).textContent = '—';
+      $('ovBarSpent').textContent = 'Spent —';
+    }
+
     async function load() {
-      const r = await fetch(overviewUrl());
-      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
-      data = await r.json();
+      const got = await fetchOverview();
+      if (got.redirected) return;
+      if (got.error) {
+        showNoFigures();
+        ovMsg.show('The Overview could not be loaded, so no figures are shown. Reload the page to try again. (' + got.error + ')', 'error');
+        return;
+      }
+      data = got.data;
       $('budgetInput').value = data.budgetPaise != null ? (Math.floor(data.budgetPaise / 100) + '.' + String(data.budgetPaise % 100).padStart(2, '0')) : '';
       renderAll();
       // Editable-table setup: give the shared table the session user (fallback) AND the full
@@ -634,9 +657,13 @@
     // Re-read the SERVER's computed summary after an edit (ONE source of truth — no
     // client-side recompute) and re-render the whole analytics section.
     async function refreshOverview() {
-      const r = await fetch(overviewUrl());
-      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
-      data = await r.json();
+      const got = await fetchOverview();
+      if (got.redirected) return;
+      if (got.error) {
+        ovMsg.show('The figures could not be updated, so they may be out of date. Reload the page to see the latest. (' + got.error + ')', 'error');
+        return;
+      }
+      data = got.data;
       renderAll();
     }
 

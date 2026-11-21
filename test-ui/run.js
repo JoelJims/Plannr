@@ -109,6 +109,35 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('a real change: Save All issues a request and persists', batchReqs > reqsBeforeRevertSave && stored === 77777, `batch requests=${batchReqs - reqsBeforeRevertSave}, stored=${stored} paise`);
   await ctxE.close();
 
+  // ---- F3 (review 2026-11-21): while the Overview loads, and when its load fails, the figures do not
+  // say ₹0.00 (which reads as "nothing spent"); a failed load says so in a message the user can see.
+  {
+    const ctxF = await browser.newContext({ viewport: { width: 1500, height: 1700 } });
+    const pF = await ctxF.newPage();
+    const figs = () => pF.evaluate(() => ['figC', 'figB', 'figD'].map((id) => document.getElementById(id).textContent.trim()).concat(document.getElementById('ovBarSpent').textContent.trim()));
+    // While loading: hold the first answer back until the page has been read.
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await pF.route('**/api/overview*', async (route) => { await held; await route.continue(); });
+    await pF.goto(base + '/overview', { waitUntil: 'domcontentloaded' });
+    await pF.waitForFunction(() => document.getElementById('figC'));
+    const loading = await figs();
+    release();
+    await pF.waitForFunction(() => /\d/.test(document.getElementById('figC').textContent), null, { timeout: 15000 }).catch(() => {});
+    const loaded = await figs();
+    check('Overview while loading: no figure says ₹0.00', loading.every((t) => !/₹0\.00/.test(t)), loading.join(' | '));
+    check('…and the real figures replace them once loaded', loaded.slice(0, 3).every((t) => /₹[\d,]+\.\d\d/.test(t)) && !loaded.some((t) => t.includes('…')), loaded.join(' | '));
+    // A failed load: the app answers 500.
+    await pF.unroute('**/api/overview*');
+    await pF.route('**/api/overview*', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'test: the database could not be read' }) }));
+    await pF.reload({ waitUntil: 'networkidle' });
+    const failed = await figs();
+    const msg = await pF.$eval('#ovMsg', (el) => { const r = el.getBoundingClientRect(); return { text: el.textContent.trim(), shown: getComputedStyle(el).display !== 'none' && r.height > 0 && r.width > 0 }; });
+    check('Overview load fails: no figure says ₹0.00', failed.every((t) => !/₹0\.00/.test(t)), failed.join(' | '));
+    check('…and a visible message says the figures could not be loaded, with the reason', msg.shown && /could not be loaded/.test(msg.text) && /database could not be read/.test(msg.text), `shown=${msg.shown} "${msg.text}"`);
+    await ctxF.close();
+  }
+
   await browser.close();
   await H.stopApp();
   console.log(`\n${failures === 0 ? '✓ VISUAL SUITE PASSED' : '✗ VISUAL SUITE FAILED (' + failures + ')'}`);
