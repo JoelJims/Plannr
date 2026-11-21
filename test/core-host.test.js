@@ -80,7 +80,7 @@ for (const [file, importLine] of [
     // its own backup helpers.
     assert.doesNotMatch(src, /\b(?:const|function)\s+(?:buildBackup|validateBackup)\b/);
     // A6: the clock is the real one on both platforms.
-    assert.match(src, /\n\s*now: \(\) => new Date\(\),\n/);
+    assert.match(src, /\n\s*now: \(\) => new Date\(\),\r?\n/); // \r?: a Windows checkout (autocrlf) has CRLF
     // C11: the encrypted backup and /api/storage are the core's; each platform keeps only its host part.
     assert.match(src, /\n\s*crypto: \{ encrypt: \(bytes, passphrase\) => encrypt\(bytes, passphrase\), decrypt: \(bytes, passphrase\) => decrypt\(bytes, passphrase\) \},\r?\n/);
     assert.match(src, /\n\s*storage: \{ info: /);
