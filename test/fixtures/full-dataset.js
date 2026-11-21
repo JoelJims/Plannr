@@ -24,9 +24,9 @@ const DATA = {
   ledgerEdits: [
     ["UPDATE ledger_mains SET name = ?, updated_at = ? WHERE code = '22.0'", ['TAXES, FINANCE & INSURANCE (renamed)', T1]],
     ["UPDATE ledger_subs SET name = ?, updated_at = ? WHERE code = '22.5'", ['Home-loan interest', T1]],
-    ['INSERT INTO ledger_mains (code, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', ['90', 'GARDEN & LANDSCAPING', 900, T0, T0]],
-    ['INSERT INTO ledger_subs (code, main_code, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', ['90.1', '90', 'Lawn & turf', 1, T0, T0]],
-    ['INSERT INTO ledger_subs (code, main_code, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', ['90.2', '90', 'Irrigation', 2, T0, T1]],
+    ['INSERT INTO ledger_mains (code, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', ['90.0', 'GARDEN & LANDSCAPING', 900, T0, T0]],
+    ['INSERT INTO ledger_subs (code, main_code, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', ['90.1', '90.0', 'Lawn & turf', 1, T0, T0]],
+    ['INSERT INTO ledger_subs (code, main_code, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', ['90.2', '90.0', 'Irrigation', 2, T0, T1]],
   ],
   rows: {
     users: [
@@ -76,13 +76,13 @@ const DATA = {
       { id: 5, amount_paise: 1, tx_date: '2026-02-01', by_type: 'user', by_user_id: 2, by_label: null, reason: 'Entered by mistake', created_at: T1, updated_at: T1, deleted_at: T1 },
     ],
     cash_out: [
-      { id: 1, amount_paise: 123456, tx_date: '2026-01-12', by_type: 'user', by_user_id: 1, by_label: null, ledger_code: '90', subledger_code: '90.1', ledger_custom_name: null, subledger_custom_name: null,
+      { id: 1, amount_paise: 123456, tx_date: '2026-01-12', by_type: 'user', by_user_id: 1, by_label: null, ledger_code: '90.0', subledger_code: '90.1', ledger_custom_name: null, subledger_custom_name: null,
         reason: 'Turf for the front yard', contract_scope: 'extra', contract_stated_paise: null, phase: null, subpart: null, contract_service_id: null, contract_allowance_id: null, created_at: T0, updated_at: T0, deleted_at: null },
       { id: 2, amount_paise: 7500000, tx_date: '2026-02-03', by_type: 'user', by_user_id: 2, by_label: null, ledger_code: '22.0', subledger_code: '22.5', ledger_custom_name: null, subledger_custom_name: null,
         reason: 'EMI interest — Feb', contract_scope: 'included', contract_stated_paise: 7400000, phase: 3, subpart: 'a', contract_service_id: 1, contract_allowance_id: null, created_at: T0, updated_at: T1, deleted_at: null },
       { id: 3, amount_paise: 250000, tx_date: null, by_type: 'custom', by_user_id: null, by_label: 'Mason', ledger_code: 'CUSTOM', subledger_code: 'CUSTOM', ledger_custom_name: 'Temple donation for bhoomi pooja', subledger_custom_name: 'Flowers',
         reason: null, contract_scope: 'included', contract_stated_paise: null, phase: null, subpart: null, contract_service_id: null, contract_allowance_id: 1, created_at: T1, updated_at: T1, deleted_at: null },
-      { id: 9, amount_paise: 42, tx_date: '2026-02-04', by_type: 'contractor', by_user_id: null, by_label: 'Legacy row', ledger_code: '90', subledger_code: null, ledger_custom_name: null, subledger_custom_name: null,
+      { id: 9, amount_paise: 42, tx_date: '2026-02-04', by_type: 'contractor', by_user_id: null, by_label: 'Legacy row', ledger_code: '90.0', subledger_code: null, ledger_custom_name: null, subledger_custom_name: null,
         reason: 'Deleted entry', contract_scope: 'extra', contract_stated_paise: null, phase: null, subpart: null, contract_service_id: null, contract_allowance_id: null, created_at: T1, updated_at: T1, deleted_at: T1 },
     ],
   },

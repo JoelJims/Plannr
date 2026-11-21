@@ -55,3 +55,31 @@ test('contractor_payments.amount_paise <= 0 is rejected', () => {
   assert.ok(good.tables.contractor_payments && good.tables.contractor_payments.length >= 1, 'export has a contractor_payments row');
   return rejects((b) => { b.tables.contractor_payments[0].amount_paise = 0; }, 'contractor_payments: amount_paise must be a positive integer');
 });
+
+// Review finding F1 (decided 2026-11-21): ledger codes in a backup must have the shapes Plannr itself
+// makes (ledgers.js, and the Ledger List CSV in repo.js): a category is "N.0", a sub-category "N.M"
+// under category "N.0". Anything else (markup, a path, a stray character) is refused at the door.
+const PROBE = '77.0"><img src=x onerror="window.__plannrXss=1">';
+test('F1: a category code that is not "N.0" is refused', async () => {
+  for (const code of [PROBE, '77', '77.1', 'x.0', ' 7.0', '7.0 ', '07.0x', '']) {
+    await rejects((b) => { b.tables.ledger_mains.push({ ...b.tables.ledger_mains[0], code, name: 'Probe', sort_order: 9999 }); },
+      code === '' ? 'ledger_mains: code must be a non-empty string.' : `ledger_mains: code ${JSON.stringify(code)} is not a category code`);
+  }
+});
+test('F1: a sub-category code that is not "N.M" under its own category is refused', async () => {
+  const mainOf = (b) => b.tables.ledger_mains[0].code; // "1.0"
+  for (const code of ['1.1"><b>', '1', '1.', 'a.1', '1.1.1']) {
+    await rejects((b) => { b.tables.ledger_subs.push({ ...b.tables.ledger_subs[0], code, main_code: mainOf(b), name: 'Probe', sort_order: 9999 }); },
+      `ledger_subs: code ${JSON.stringify(code)} is not a sub-category code`);
+  }
+  await rejects((b) => { b.tables.ledger_subs.push({ ...b.tables.ledger_subs[0], code: '2.77', main_code: mainOf(b), name: 'Probe', sort_order: 9999 }); },
+    'ledger_subs: sub-category "2.77" is listed under category "1.0", but its code says "2.0".');
+});
+test('F1: well-shaped new codes still import (a new category "77.0" with a sub-category "77.1")', async () => {
+  const b = clone(good);
+  b.tables.ledger_mains.push({ ...b.tables.ledger_mains[0], code: '77.0', name: 'New category', sort_order: 9999 });
+  b.tables.ledger_subs.push({ ...b.tables.ledger_subs[0], code: '77.1', main_code: '77.0', name: 'New sub-category', sort_order: 9999 });
+  const imp = await H.post('/api/backup/import', b, { cookie });
+  assert.strictEqual(imp.status, 200, JSON.stringify(imp.json));
+  assert.strictEqual(H.db.prepare("SELECT COUNT(*) n FROM ledger_subs WHERE code = '77.1' AND main_code = '77.0'").get().n, 1);
+});

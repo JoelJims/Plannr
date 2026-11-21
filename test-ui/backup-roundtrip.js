@@ -92,13 +92,13 @@ function sameDb(name, actual, expected) {
     check('JSON export is format v2', exp.status === 200 && exp.json.schemaVersion === 2, `status ${exp.status}, v${exp.json.schemaVersion}`);
     await wipe();
     const fresh = await dump();
-    check('the wipe gives a brand-new install (no entries, default categories)', fresh.tables.cash_out.length === 0 && !fresh.tables.ledger_mains.some((m) => m.code === '90'));
+    check('the wipe gives a brand-new install (no entries, default categories)', fresh.tables.cash_out.length === 0 && !fresh.tables.ledger_mains.some((m) => m.code === '90.0'));
     const imp = await api('POST', '/api/backup/import', exp.json);
     check('JSON restore succeeds on the new install', imp.status === 200, JSON.stringify(imp.json).slice(0, 300));
     sameDb('JSON restore: every table, counter and the schema version match the original', await dump(), original);
     const ledgers = await api('GET', '/api/ledgers');
     const list = ledgers.json.ledgers || ledgers.json;
-    check('restored categories are live without a restart (90 Garden & Landscaping is listed)', Array.isArray(list) && list.some((l) => l.code === '90'));
+    check('restored categories are live without a restart (90 Garden & Landscaping is listed)', Array.isArray(list) && list.some((l) => l.code === '90.0'));
 
     // ---- Recycle Bin shows the restored deleted rows (it used to throw for any deleted row and say
     // "Network error loading the Recycle Bin." — found on the emulator, Phase 2 Step 9) ----
