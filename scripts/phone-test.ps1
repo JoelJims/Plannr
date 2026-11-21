@@ -178,6 +178,56 @@ function Wait-ShareSheet([int]$TimeoutSec = 30) {
   while ((Get-Date) -lt $deadline) { if (Test-ShareSheet) { return $true }; Start-Sleep -Milliseconds 500 }
   return $false
 }
+# The screen's text once it has stopped changing: two reads 1.5 s apart that are the same. A page
+# shows its first controls before it has filled in (Home's welcome line and sections come later on a
+# slow device), so a check that reads the screen at once judges a half-built page. Gives up after
+# $TimeoutSec and returns the last read. ($Seconds: how long it took, for the report.)
+function Wait-SettledText([int]$TimeoutSec = 45) {
+  $t0 = Get-Date
+  $deadline = $t0.AddSeconds($TimeoutSec)
+  $last = Get-ScreenText (Get-Screen)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 1500
+    $now = Get-ScreenText (Get-Screen)
+    if ($now -and $now -eq $last) { break }
+    $last = $now
+  }
+  $script:SettledSeconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+  return $last
+}
+
+# Overview's PDF export, timed: taps PDF, then the Light theme, and waits for the share sheet. The app
+# itself gives up after 25 s (the print adapter's limit in public/local-api.js; review finding E1), so
+# this waits longer than that and reports which came first, and when: the share sheet, or the app's
+# message. Returns @{ Sheet; Seconds; Message }.
+function Invoke-PdfExport([int]$TimeoutSec = 90) {
+  $r = @{ Sheet = $false; Seconds = $null; Message = '' }
+  if (-not (Invoke-Tap -Id 'ovPdfBtn')) { $r.Message = 'the PDF button was not found'; return $r }
+  if (-not (Invoke-Tap -Text 'Light' -TimeoutSec 30)) { $r.Message = 'the theme choice did not appear'; return $r }
+  $t0 = Get-Date
+  $deadline = $t0.AddSeconds($TimeoutSec)
+  $nextRead = $t0
+  while ((Get-Date) -lt $deadline) {
+    if (Test-ShareSheet) { $r.Sheet = $true; $r.Seconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); return $r }
+    if ((Get-Date) -ge $nextRead) {
+      $t = Get-ScreenText (Get-Screen)
+      if ($t -match '(?i)(timed out[^\n]{0,90}|could not generate[^\n]{0,90}|PDF generation[^\n]{0,90})') {
+        $r.Message = $matches[1]; $r.Seconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); return $r
+      }
+      $nextRead = (Get-Date).AddSeconds(3)
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  $r.Seconds = $TimeoutSec
+  $r.Message = "no share sheet and no message after $TimeoutSec s"
+  return $r
+}
+function Format-Pdf($r) {
+  if ($r.Sheet) { return "share sheet after $($r.Seconds) s" }
+  if ($null -ne $r.Seconds) { return "no share sheet; after $($r.Seconds) s: '$($r.Message)'" }
+  return "no share sheet: $($r.Message)"
+}
+
 # Closes a share sheet with BACK only, never a tap inside it. $true once Plannr is on top again.
 function Close-ShareSheet {
   for ($i = 0; $i -lt 3; $i++) {
@@ -367,19 +417,19 @@ try {
       Add-Result '4' 'Airplane mode' 'SKIP' "could not switch airplane mode over adb on this device (airplane_mode_on=$air); do check 4 by hand"
     } else {
       $homeScreen = Start-Plannr
-      $text = Get-ScreenText $homeScreen
-      $okHome = [bool]$homeScreen -and ($text -notmatch '(?i)network error|could not|failed')
+      # Judge Home once it has filled in, not when its first button appears (the RC run on a slow
+      # emulator failed here while its screenshot showed Home open with no error, still filling).
+      $text = Wait-SettledText 45
+      $err = ''
+      if ($text -match '(?i)(network error[^\n]{0,60}|could not[^\n]{0,60}|failed[^\n]{0,60})') { $err = $matches[1] }
+      $okHome = [bool]$homeScreen -and $text -and -not $err
       $shot = Save-Screenshot 'offline-home'
-      Add-Result '4' 'Home opens offline, no error' ($(if ($okHome) { 'PASS' } else { 'FAIL' })) $shot
+      Add-Result '4' 'Home opens offline, no error' ($(if ($okHome) { 'PASS' } else { 'FAIL' })) "home=$([bool]$homeScreen), settled after $($script:SettledSeconds) s, error text: $(if ($err) { "'$err'" } else { 'none' }) $shot"
       $doc = Open-Section 'OVERVIEW' 'ovPdfBtn'
-      $sheet = $false
-      if ($doc -and (Invoke-Tap -Id 'ovPdfBtn')) {
-        [void](Invoke-Tap -Text 'Light' -TimeoutSec 30)
-        $sheet = Wait-ShareSheet 40
-      }
-      if ($sheet) { $shot = Save-Screenshot 'offline-pdf-share-sheet' } else { $shot = Save-Screenshot 'offline-pdf-no-sheet' }
+      $pdf = if ($doc) { Invoke-PdfExport } else { @{ Sheet = $false; Seconds = $null; Message = 'Overview did not open' } }
+      if ($pdf.Sheet) { $shot = Save-Screenshot 'offline-pdf-share-sheet' } else { $shot = Save-Screenshot 'offline-pdf-no-sheet' }
       $closed = Close-ShareSheet
-      Add-Result '4' 'PDF export opens the share sheet offline' ($(if ($sheet -and $closed) { 'PASS' } else { 'FAIL' })) $shot
+      Add-Result '4' 'PDF export opens the share sheet offline' ($(if ($pdf.Sheet -and $closed) { 'PASS' } else { 'FAIL' })) "$(Format-Pdf $pdf) $shot"
     }
     if ($airplaneBefore -ne '1') { [void](Invoke-Shell 'cmd connectivity airplane-mode disable') }
   }
@@ -388,11 +438,9 @@ try {
   # ---- 8. A share sheet left open 25 s, then closed --------------------------------------------------
   [void](Assert-Unlocked)
   $doc = Open-Section 'OVERVIEW' 'ovPdfBtn'
-  $sheet = $false
-  if ($doc -and (Invoke-Tap -Id 'ovPdfBtn')) {
-    [void](Invoke-Tap -Text 'Light' -TimeoutSec 30)
-    $sheet = Wait-ShareSheet 40
-  }
+  $pdf = if ($doc) { Invoke-PdfExport } else { @{ Sheet = $false; Seconds = $null; Message = 'Overview did not open' } }
+  $sheet = $pdf.Sheet
+  Add-Result '8' 'PDF time (tap to share sheet)' ($(if ($sheet) { 'INFO' } else { 'FAIL' })) (Format-Pdf $pdf)
   $stillOpen = $false
   if ($sheet) { Start-Sleep -Seconds 25; $stillOpen = Test-ShareSheet; $shot = Save-Screenshot 'share-sheet-after-25s' }
   $closed = Close-ShareSheet
