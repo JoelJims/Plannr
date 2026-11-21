@@ -353,8 +353,9 @@ there, and **Move data back** returns to the old storage.
 - On the old storage (`localStorage`), Android's WebView writes to disk a few seconds after the page
   does: a kill can lose the last seconds of saves (E3, E6; decisions 33, 34). On the file, a save is
   on disk when it answers. This is a reason to move.
-- The dev server listens on all network interfaces with no login: anyone on the same Wi-Fi can read
-  the data or replace it through either restore (decision 35).
+- The dev server on `plannr-phase2` binds 127.0.0.1 with a Host allow-list, and LAN use needs a
+  token (`a3d5571`); the open listener is on `main` (review S1). Corrected: this line first said the
+  dev server listened on all interfaces (decision 42).
 - An empty `PLANNR_DB` falls back to the real database (R2); a v1 database from the two oldest
   schemas cannot start after its upgrade (R1); `node:sqlite` binds a whole number as REAL (R3).
 - The static-hosting check can fail on sqlite-wasm's "wasm streaming compile failed" fallback
@@ -371,3 +372,121 @@ there, and **Move data back** returns to the old storage.
   ```
 
 - **Pushing** (A7) and **the real phone** (A8) are yours.
+
+## B. The 3-hour session (2026-11-21)
+
+Autonomous session on `plannr-phase2`, from `53db636` to `e691756`. It ran 01:35–02:28 and
+07:42–10:45 (paused in between; resumed on "Try again"). Nothing touched the real phone, `data/plannr.db`
+or the real backups; the emulator `plannr-test` was the only device. Nothing was force-pushed,
+merged into `main`, opened as a pull request or changed in the repository's settings.
+
+### B1. What was done, part by part
+
+| Part | Done | Commits |
+|---|---|---|
+| 1. The step 1.4 run's results | Recorded in section A of this file (parts, tests, speed, the RC, decisions 1–38, bundles, real-phone order, incidents) | `6e26df4`, `71b9fce` |
+| 2. Pre-push check, push, CI | 51 commits checked (decision 39) and pushed (`e044c32..53db636`). **INCIDENT 3** (B7): the next push carried a user-folder path; fixed and the push is now gated. CI: the repository has no workflow, so nothing ran | `71b9fce` |
+| 3. Unfinished work | Step 1.4: the RC section and E1 in the phone checklist, this report. Then the security and quality review: Phase 1 audit complete (37 rows), Phase 2 fixed Q1 (High), F1, R2 and S9; Phases 3 and 4 not started (decision 45). Nothing moved or migrated real data | `dec4e81`, `ed52850`, `678092c`, `a3ea627`, `d33953b` |
+| 4. Emulator | E1 (update from the real phone's build `9d7fd97` with 1,000 entries, then the move) on the RC: pass (16). `scripts/phone-test.ps1` against the emulator: tap timing fixed; S, 1, 2, 3 pass; the PDF checks (4, 8) fail on the app's 25 s PDF limit on a slow emulator (finding E1); "4 Home opens offline" failed while its screenshot shows Home open offline with no error (decision 47). E6 (move back, move again, delete the old copy) on the RC: pass (27 of 27); run 2 had stopped on a script race after 11 passing checks, and the script's page open now retries (decision 48). Results in `docs/PHONE-TEST-CHECKLIST.md` | `986ac78`, `4bca469` |
+| 5. Documents and bundle | `docs/share-and-reminder-pdf-plan.md` was already written (`7ff468d`); `docs/pr-plannr-phase2.md` (not opened as a PR); `docs/security-quality-review-2026-11-21.md`; bundle in `D:\Backups\plannr\` | `e691756`; the PR description and this section in the commit after it |
+
+### B2. Tests and CI
+
+At `d33953b` (the last code change), the full run:
+
+| Suite | Result |
+|---|---|
+| `npm test`, desktop pass | 665 tests: 662 pass, 3 skipped, 0 fail |
+| `npm test`, phone-code pass | 213 of 230 (the same 17 known differences, nothing new) |
+| UI suites | all 15 pass (on the stand-in Chromium, decision 37) |
+| `npm run test:slow` | 2 of 2 pass |
+
+Every new test was proven by breaking the code it guards first: Q1's 3 starts failed, F1's 6 checks
+failed, R2's refusal failed, S9's list check failed. **CI:** none (no workflow in the repository);
+adding one is in NEEDS MY DECISION.
+
+### B3. Emulator, and what still needs the real phone
+
+On the RC (`53db636`): E1 pass (16 of 16); `phone-test.ps1` S, 1, 2, 3 pass; the PDF checks (4, 8) fail on the 25 s
+PDF limit, and "4 Home opens offline" failed while its screenshot shows Home open with no error (the emulator was slow that day: the Data Backup page took 13–15 s to fill on both the RC and
+`5736195`; the PDF path is unchanged since `5736195`, where both passed). E6 (move back, move again, delete the old copy) on the RC: pass (27 of 27); run 2 had stopped on a script race after 11 passing checks, and the script's page open now retries (decision 48).
+
+**Still needs the real phone** (checklist, "The owner's phone: the step 1.4 RC"): 0 phone details;
+1 data location; 2 the meter and the real `localStorage` limit; 3 export/restore with categories;
+4 airplane mode and the PDF time on a real phone; 5 update over the old version; 6 Auto Backup;
+8 this build's changes; S; 9 the storage move with test data. Then the real data, in the order in A8.
+
+### B4. NEEDS MY DECISION, REVERTED, SKIPPED
+
+**NEEDS MY DECISION** (options in `docs/security-quality-review-2026-11-21.md`, section 6):
+
+1. S1: `main` still listens on every interface with no login: merge this branch (recommended), a
+   one-line fix on `main` first, or stop running `main`'s server.
+2. S3/Q6: a restore that fails after the file is replaced: check a temporary copy before the swap
+   (recommended), put the safety copy back automatically, or only improve the message.
+3. F4: "₹X left" under a date range: intended (relabel), always the whole project, or hide it.
+4. S5: backup format v2 with stronger key derivation, or keep v1.
+5. INCIDENT 3: leave the path in `6e26df4`'s history, or rewrite and force-push it yourself.
+6. The UI suites' browser: `npx playwright install chromium`, or keep the stand-in.
+7. F1: also refuse badly shaped ledger codes at import, or escaping only (done).
+8. CI: add a GitHub Actions workflow, or keep running locally.
+9. S7: remove the unused biometric permissions from the manifest, or leave them.
+
+**REVERTED:** none.
+
+**SKIPPED:** the review's Phases 3 (efficiency) and 4 (quality clean-up); the other Medium findings
+(Q3 and F2 are the next ones that need no decision); S7; F1's stricter import. 
+
+### B5. Pushed, bundle, APK
+
+- **Pushed:** `e044c32..53db636` and `dec4e81..71b9fce` earlier in the session; `986ac78..e691756`
+  at the end of the session, after a clean pre-push check. This section's own commit goes in the same push.
+- **Bundle:** in `D:\Backups\plannr\`, named `plannr-phase2-2026-11-21-<commit>.bundle` after the commit that
+  adds this section, made right after it (verified: `git bundle verify`, a fresh clone's tree equal to
+  that commit's, `git fsck` clean). The older bundles are kept.
+- **Latest APK:** the RC, `D:\Backups\plannr\Plannr-debug-rc-53db636.apk`, SHA-256
+  `1c54c4c889dec806fcadfdb79c50ea2be6c6429f0b07f2ad817a00cd1990e1f0`. The changes after `53db636` are the review fixes, test and documentation changes;
+  F1 changes the phone's pages (`public/plannr-ui.js`), so the next APK should be built from
+  this branch's latest commit before the real-phone round (`npm run release:android` for a release, or the debug build).
+
+### B6. Next steps for you, in order
+
+1. Read `docs/security-quality-review-2026-11-21.md` sections 1, 2 and 6, and answer the NEEDS MY
+   DECISION list (S1 and S3/Q6 first).
+2. Build a new debug APK from this branch's latest commit (it carries F1), and save its SHA-256.
+3. Run the real-phone checks with **test data** (checklist: 0, 1, 2, 3, 4, 5, 6, 8, S, 9) and record
+   them in the checklist's owner table.
+4. Only after they pass: move the real data in the order in A8 (back up first, install over it,
+   check, move, verify, keep the old copy for a week).
+5. Open the pull request from `plannr-phase2` into `main` with `docs/pr-plannr-phase2.md` as its
+   description (this closes S1), once you are happy with steps 1–4.
+6. Optionally: `npx playwright install chromium` (the exact UI-test browser).
+
+### B7. INCIDENT 3 (2026-11-21): a user-folder path was pushed
+
+The pre-push scan of `dec4e81` and `6e26df4` and the push ran in one shell command with no stop
+between them. The scan found one hit and the push went ahead: decision 37's text quoted a Windows
+user-folder path from Playwright's records, so this PC's account name is in `6e26df4` on GitHub. It is
+not a secret, password, key, token or data, and the name is close to the author name every commit
+already shows. `71b9fce` replaced it (pushed after a clean scan). The old text stays in `6e26df4`'s
+history; removing it needs a history rewrite and a force-push (NEEDS MY DECISION 5). Since then every
+push goes through a script that pushes only when its check is clean (decision 41).
+
+### B8. Decisions in this session
+
+39–48:
+
+- 39: pushing allowed to `plannr-phase2` only; the 51 commits' pre-push check was clean; the golden
+  `.plbk` files are generated test vectors, not data.
+- 40: one report file for both runs.
+- 41: every push through a gated script (after INCIDENT 3).
+- 42: correction: the dev server on this branch binds 127.0.0.1 (A10's earlier line was wrong; `main`
+  is the exposed one).
+- 43: `phone-test.ps1`'s timing fixed; checks 4 and 8 left failing on the slow emulator (finding E1).
+- 44: F1 fixed by escaping only.
+- 45: the review's Phases 3 and 4 not started.
+- 46: S9 (`.gitignore`) got its own proving test and a full suite run.
+- 47: phone-test's "4 Home opens offline" failed in the last run while its screenshot shows Home open
+  offline with no error (still filling); recorded with that note; the real phone's check 4 decides.
+- 48: E6 run 2 stopped on a script race after 11 passing checks; the script's page open now retries
+  (app unchanged); run 3 passed 27 of 27.
