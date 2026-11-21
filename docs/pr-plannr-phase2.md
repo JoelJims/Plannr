@@ -1,7 +1,7 @@
 # Pull request: merge `plannr-phase2` into `main`
 
-> Ready-to-use description for a pull request from `plannr-phase2` into `main`. **Not opened.**
-> Paste everything below the line as the PR body when you open it.
+> The description of the pull request from `plannr-phase2` into `main` (everything below the line
+> is its body).
 
 ---
 
@@ -10,7 +10,7 @@
 `plannr-phase2` is everything since the senior review of `main` (2026-11-14): the safety fixes from
 that review, complete backups and versioned migrations, one shared core for the phone and the dev
 server, and step 1.4, which moves the phone's data out of the WebView's storage (full at about
-2.8 MB) into a database file of its own, with checks and a way back. 101 commits, all with
+2.8 MB) into a database file of its own, with checks and a way back. 109 commits, all with
 their tests; nothing in the shipped app needs the network.
 
 **Merging also closes a security gap on `main`:** `main`'s `server.js` listens on every network
@@ -57,18 +57,31 @@ DNS rebinding, and an opt-in LAN mode that needs a 16+ character token (`a3d5571
 - `d33953b` S9: `.gitignore` also covers other keys, `.env` variants and exported data files.
 - The full review, with the open findings and the decisions they need: `docs/security-quality-review-2026-11-21.md`.
 
-## Test results (at `e691756` and later documentation commits)
+**The GitHub page (2026-11-21)**
+- CI: `.github/workflows/tests.yml` runs `npm test` (both passes) on Ubuntu and Windows and every UI suite on Ubuntu;
+  `permissions: contents: read`, actions pinned to commit SHAs. Two portability bugs it found are fixed: the
+  shallow checkout lacked the commit one test compares against (full history now), and one test expected LF
+  line endings.
+- Home showed an empty red "Back up now" banner on every load (a `display: flex` rule beat the `hidden`
+  attribute); fixed, and the UI check now asserts what is rendered, not the attribute.
+- A short README in plain English with screenshots made from demo data only (`docs/images/`); the
+  technical detail moved to `docs/DEVELOPERS.md`.
+- License: MIT, copyright Joel Jims (cross-platform plan step 5.3); `package.json` says `"license": "MIT"`.
+
+## Test results
 
 | Suite | Result |
 |---|---|
 | `npm test`, desktop pass | 665 tests: 662 pass, 3 skipped |
 | `npm test`, phone-code pass | 213 of 230 (the 17 known differences, nothing new) |
 | UI suites (Playwright) | all 15 pass |
+| GitHub Actions | green on this branch: https://github.com/JoelJims/Plannr/actions/runs/44873798123 |
 | `npm run test:slow` | 2 of 2 pass |
 | Emulator (`plannr-test`, Android 16) | E1–E6 pass on `5736195`; on the RC `53db636`: E1 (16 of 16) and E6 (27 of 27); `phone-test.ps1`: S, 1, 2, 3 pass, its PDF checks hit the app's 25 s limit on a slow emulator |
 
-Every new test was proven by breaking the code it guards and watching it fail. No CI is set up
-(no workflow in the repository): these were run locally.
+Every new test was proven by breaking the code it guards and watching it fail. The table above is
+the local full run (the slow suite and the emulator are local only); CI repeats `npm test` and the UI
+suites on every push and on this pull request.
 
 ## Known limits
 
@@ -87,10 +100,10 @@ Every new test was proven by breaking the code it guards and watching it fail. N
 - Not covered by tests on a device: the share sheet target, a real phone's storage limit, and the
   Auto Backup restore on a real Google account.
 
-## Real-phone checks still needed before merging
+## Real-phone checks still needed before the real data moves
 
-On the RC (`D:\Backups\plannr\Plannr-debug-rc-53db636.apk`, SHA-256 `1c54c4c8…e1f0`), with **test
-data only**, from `docs/PHONE-TEST-CHECKLIST.md`:
+On a release candidate built from this branch (the last one, `Plannr-debug-rc-53db636.apk`,
+SHA-256 `1c54c4c8…e1f0`, predates the Home banner fix), with **test data only**, from `docs/PHONE-TEST-CHECKLIST.md`:
 
 - [ ] 0 phone details; 1 data location; 2 meter and the real `localStorage` limit
 - [ ] 3 JSON and encrypted export/restore with categories
