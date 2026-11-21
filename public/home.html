@@ -114,6 +114,9 @@
       color: #ff6b6b;
       font-size: 13.5px;
     }
+    /* `display: flex` above beats the hidden attribute's own display: none, so say it again here:
+       without this the empty banner showed on every load, overdue or not. */
+    .backup-banner[hidden] { display: none; }
     .backup-banner a { color: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; }
     #backupReminderSettings select { margin-left: 8px; background: var(--panel); color: inherit; border: 1px solid var(--accent-line); padding: 6px 8px; font-family: inherit; }
     #backupReminderSettings label { font-size: 13px; }
