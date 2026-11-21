@@ -60,3 +60,28 @@ test('outside the test runner (the desktop server, the scripts) the live databas
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(fs.existsSync(LIVE), 'opened (and so created) in the temp copy');
 });
+
+// Review R2/S10: a PLANNR_DB that is set but empty (or only spaces) is refused, inside and outside the
+// test runner, before anything is opened. On its own copy of db.js, so a broken check could only ever
+// open that copy's data/plannr.db.
+test('a PLANNR_DB that is set but empty is refused and nothing is opened (outside and inside the test runner)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-blank-db-env-'));
+  try {
+    for (const f of ['db.js', 'ledgers.js', path.join('core', 'db-adapter.js')]) {
+      fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
+    }
+    fs.writeFileSync(path.join(dir, 'opens.test.js'), "require('node:test').test('loads db.js', () => { require('./db.js'); });\n");
+    const live = path.join(dir, 'data', 'plannr.db');
+    for (const value of ['', '   ']) {
+      const plain = spawnSync(process.execPath, ['-e', "require('./db.js')"], { cwd: dir, encoding: 'utf8', env: envWith({ PLANNR_DB: value }), timeout: 60000 });
+      assert.notStrictEqual(plain.status, 0, `outside the test runner, PLANNR_DB=${JSON.stringify(value)} must not start`);
+      assert.match(plain.stderr, /PLANNR_DB is set but empty/);
+      const runner = spawnSync(process.execPath, ['--test', 'opens.test.js'], { cwd: dir, encoding: 'utf8', env: envWith({ PLANNR_DB: value }), timeout: 60000 });
+      assert.notStrictEqual(runner.status, 0, `under the test runner, PLANNR_DB=${JSON.stringify(value)} must not start`);
+      assert.ok(!fs.existsSync(live), `nothing opened (and so created) data/plannr.db for PLANNR_DB=${JSON.stringify(value)}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});

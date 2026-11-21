@@ -56,6 +56,12 @@ const samePath = (a, b) => String(a).replace(/\\/g, '/').toLowerCase() === Strin
 if (isNode && process.env.NODE_TEST_CONTEXT && samePath(DB_PATH, LIVE_DB)) {
   throw new Error('db.js: a test was about to open the live database (data/plannr.db). Set PLANNR_DB to a file of its own first (test/helpers.js does).');
 }
+// A PLANNR_DB that is set but empty (a failed `$(...)` in a script, `PLANNR_DB=` in a .env file) used
+// to fall back to the live database, because '' is falsy (review R2/S10, incident 1). Unset means the
+// live database; set means a file; set but empty is refused before anything is opened.
+if (isNode && process.env.PLANNR_DB !== undefined && !String(process.env.PLANNR_DB).trim()) {
+  throw new Error('db.js: PLANNR_DB is set but empty. Unset it to use data/plannr.db, or set it to a database file. Nothing was opened.');
+}
 
 if (isNode) {
   mkdirSync(DATA_DIR, { recursive: true }); // make sure the folder for the database file exists
