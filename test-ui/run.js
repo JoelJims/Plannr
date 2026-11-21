@@ -138,6 +138,19 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     await ctxF.close();
   }
 
+  // ---- F5 (review 2026-11-21): Home said "First login — welcome." on every start, left from the
+  // removed login (nothing has sent a last login since). The rendered page no longer says it.
+  {
+    const ctxH = await browser.newContext({ viewport: { width: 1500, height: 1700 } });
+    const pH = await ctxH.newPage();
+    await pH.goto(base + '/home.html', { waitUntil: 'networkidle' });
+    await pH.waitForFunction(() => document.getElementById('name').textContent.trim() !== '…', null, { timeout: 15000 }).catch(() => {});
+    const home = await pH.evaluate(() => ({ name: document.getElementById('name').textContent.trim(), text: document.body.innerText }));
+    check('Home: the welcome shows the name, and no "First login" or "Last login" line', home.name && home.name !== '…' && !/First login|Last login/i.test(home.text),
+      `name "${home.name}"; ${(home.text.match(/(First|Last) login[^\n]*/i) || ['no login line'])[0]}`);
+    await ctxH.close();
+  }
+
   await browser.close();
   await H.stopApp();
   console.log(`\n${failures === 0 ? '✓ VISUAL SUITE PASSED' : '✗ VISUAL SUITE FAILED (' + failures + ')'}`);

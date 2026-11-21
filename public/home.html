@@ -171,9 +171,6 @@
       <section class="form-panel">
         <div class="welcome">
           <p class="big">Welcome, <span id="name">…</span></p>
-          <!-- Part D — last login (time + IP) and any failed attempts since then. Populated from /api/me;
-               built via textContent (CSP-safe). The failed-attempts note is the part that does the work. -->
-          <p class="home-lastlogin" id="lastLogin" hidden></p>
         </div>
 
         <div class="notif-settings">
@@ -228,37 +225,7 @@
     fetch('/api/me').then(async (r) => {
       const data = await r.json();
       nameEl.textContent = data.user.displayName;
-      renderLastLogin(data);
     });
-
-    // Part D — "last login" line (previous successful login + IP) and, when non-zero, the failed
-    // attempts since then. classList/textContent only — CSP-safe (no inline style=).
-    function renderLastLogin(data) {
-      const el = document.getElementById('lastLogin');
-      if (!el) return;
-      el.replaceChildren();
-      if (data.lastLogin) {
-        el.append(document.createTextNode('Last login: ' + data.lastLogin.atIST + (data.lastLogin.ip ? ' · ' + data.lastLogin.ip : '')));
-      } else {
-        el.append(document.createTextNode('First login — welcome.'));
-      }
-      const n = data.failedSinceLastLogin || 0;
-      if (n > 0) {
-        const warn = document.createElement('span');
-        warn.className = 'home-fail';
-        warn.textContent = ' ⚠ ' + n + ' failed sign-in attempt' + (n === 1 ? '' : 's') + ' since then.';
-        el.append(warn);
-      }
-      // Part D (follow-up) — username-enumeration signal: attempts on usernames that don't exist.
-      const u = (data.unknownLoginFailures && data.unknownLoginFailures.sinceLastLogin) || 0;
-      if (u > 0) {
-        const warn2 = document.createElement('span');
-        warn2.className = 'home-fail';
-        warn2.textContent = ' ⚠ ' + u + ' attempt' + (u === 1 ? '' : 's') + ' on unknown usernames since then (possible enumeration).';
-        el.append(warn2);
-      }
-      el.hidden = false;
-    }
 
     // Nav buttons: one with a data-href navigates there (Cash Flow -> /cash-flow);
     // the rest are still placeholders (deliberate no-op until their pages exist).
