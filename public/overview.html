@@ -333,9 +333,9 @@
       <!-- Phase 10G — discreet reconciliation warning: shown only when reconciliation.ok is false. -->
       <div class="ov-recon" id="ovRecon" role="status" hidden></div>
 
-      <!-- 0. Date range — scopes the spending figures (B, C, D), the budget bar, and the
-           Spending by Ledger pie. Default = all transactions. A / E / F stay cumulative, and so does
-           the budget's "left of total budget" figure (F4 option (b)). -->
+      <!-- 0. Date range — scopes the spending figures (B, C, D) and the Spending by Ledger pie.
+           Default = all transactions. A / E / F stay cumulative, and so does the whole budget block
+           (bar, "Spent … in total", "left of total budget"), F4 option (b). -->
       <div class="ov-section">
         <p class="ov-section-title">Date range</p>
         <!-- Collapsed (default): Edit + the current span text, mirroring the Outflow
@@ -540,8 +540,8 @@
 
     let data = null;
 
-    // ---- Date range: scopes the spending figures (B/C/D), budget bar, and pie.
-    // Default = all (both bounds null). A/E/F are cumulative server-side. ----
+    // ---- Date range: scopes the spending figures (B/C/D) and the pie.
+    // Default = all (both bounds null). A/E/F and the budget bar are cumulative (F4 option (b)). ----
     const startPicker = createDatePicker({ day: $('ovStartDay'), month: $('ovStartMonth'), year: $('ovStartYear') });
     const endPicker = createDatePicker({ day: $('ovEndDay'), month: $('ovEndMonth'), year: $('ovEndYear') });
     let range = { start: null, end: null };
@@ -715,24 +715,28 @@
       $('ovOwed').hidden = !(m.totalContractPaise > 0);
     }
 
-    // ---- 3. Total-spent bar (spent = D, total money out = self + contractor payments) ----
+    // ---- 3. Total-spent bar: the WHOLE project's spend against the budget (self + contractor payments).
+    // F4 option (b), decided by the owner 2026-11-22: the budget is for the whole project, so the whole
+    // block uses the whole project's spend, even when a date range is set: the fill, the amber "over"
+    // colour, the budget marker, the "Spent" caption and the "left / over total budget" label. Then the
+    // bar and the label cannot disagree. With a range set the caption says "in total", because the
+    // range's own figures (B, C, D) are in the cards above. With no range the whole spend IS D.
+    // Same rule as the PDF's budget line (core/overview-pdf.js, budgetBlock).
     function renderTotalBar() {
-      const spent = data.money.totalSpentPaise, budget = data.budgetPaise;
-      const scale = Math.max(spent, budget || 0, 1);
-      const over = budget != null && spent > budget;
+      const whole = data.money.wholeProjectSpentPaise, budget = data.budgetPaise;
+      const scale = Math.max(whole, budget || 0, 1);
+      const over = budget != null && whole > budget;
       const fill = $('ovBarFill');
-      fill.style.width = (spent / scale * 100).toFixed(2) + '%';
+      fill.style.width = (whole / scale * 100).toFixed(2) + '%';
       fill.className = 'ov-bar-fill' + (over ? ' over' : '');
       const marker = $('ovBarMarker');
       if (budget != null) { marker.hidden = false; marker.style.left = (budget / scale * 100).toFixed(2) + '%'; }
       else { marker.hidden = true; }
-      $('ovBarSpent').textContent = 'Spent ' + fmtPaise(spent);
-      // F4 option (b): the label compares the WHOLE project's spend with the budget, even when a range
-      // is set (the bar and "Spent" above stay the range's D). Same rule as the PDF (core/overview-pdf.js).
-      const whole = data.money.wholeProjectSpentPaise;
+      const rangeSet = !!(range.start || range.end);
+      $('ovBarSpent').textContent = 'Spent ' + fmtPaise(whole) + (rangeSet ? ' in total' : '');
       const bl = $('ovBarBudget');
       if (budget == null) { bl.textContent = 'No budget set'; bl.className = ''; }
-      else if (whole > budget) { bl.textContent = fmtPaise(whole - budget) + ' over total budget · Budget ' + fmtPaise(budget); bl.className = 'over'; }
+      else if (over) { bl.textContent = fmtPaise(whole - budget) + ' over total budget · Budget ' + fmtPaise(budget); bl.className = 'over'; }
       else { bl.textContent = fmtPaise(budget - whole) + ' left of total budget · Budget ' + fmtPaise(budget); bl.className = ''; }
     }
 

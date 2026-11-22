@@ -117,10 +117,15 @@ export function createOverviewPdf(ctx) {
     };
     const budgetBlock = () => {
       if (o.budgetPaise == null) return '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>' + fmtRs(m.totalSpentPaise) + '</b>.</p>';
-      // F4 option (b): "left" / "over" compares the WHOLE project's spend with the budget, even when a
-      // range is set; "Spent" stays the range's D. Same rule as the screen (public/overview.html).
-      const diff = o.budgetPaise - m.wholeProjectSpentPaise;
-      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(m.totalSpentPaise)}</b> · ${diff < 0 ? '<b class="neg">' + fmtRs(-diff) + '</b> over total budget' : '<b>' + fmtRs(diff) + '</b> left of total budget'}.</p>`;
+      // F4 option (b), decided by the owner 2026-11-22: the budget is for the whole project, so this
+      // line uses the WHOLE project's spend, even when a range is set: "Spent" and "left" / "over" alike,
+      // so it adds up (budget − spent = left). With a range set, "Spent" says "in total", because the
+      // range's own D is in the headline figures. With no range the whole spend IS D.
+      // Same rule as the screen's budget bar (public/overview.html, renderTotalBar).
+      const whole = m.wholeProjectSpentPaise;
+      const diff = o.budgetPaise - whole;
+      const inTotal = (range.start || range.end) ? ' in total' : '';
+      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(whole)}</b>${inTotal} · ${diff < 0 ? '<b class="neg">' + fmtRs(-diff) + '</b> over total budget' : '<b>' + fmtRs(diff) + '</b> left of total budget'}.</p>`;
     };
     const pieBlock = () => {
       if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';

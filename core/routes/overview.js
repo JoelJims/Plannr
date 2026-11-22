@@ -122,9 +122,10 @@ export function register(app, ctx) {
 
     const loanReceived = (await repo.overview.loansSum()).s; // E (cumulative)
     const totalSpent = paidToContractors + spentBySelf; // D = B + C (range)
-    // F4 option (b): the budget's "left" / "over" figure compares the WHOLE project's spend with the
-    // budget, even when a range is set (the budget is for the whole project). With no range this is
-    // D itself; with a range, the same two tables are summed with no date bound (dateless rows count).
+    // F4 option (b), decided by the owner 2026-11-22: the budget block (the bar, its "Spent" caption and
+    // "left" / "over") compares the WHOLE project's spend with the budget, even when a range is set (the
+    // budget is for the whole project); so does the PDF's budget line. With no range this is D itself;
+    // with a range, the same two tables are summed with no date bound (live rows only; dateless rows count).
     let wholeProjectSpent = totalSpent;
     if (bounded) {
       wholeProjectSpent = 0;
@@ -196,7 +197,7 @@ export function register(app, ctx) {
         paidToContractorsPaise: paidToContractors, // B (range)
         spentBySelfPaise: spentBySelf,            // C (range)
         totalSpentPaise: totalSpent,              // D = B + C (range)
-        wholeProjectSpentPaise: wholeProjectSpent, // D over the whole project, ignoring the range (budget "left")
+        wholeProjectSpentPaise: wholeProjectSpent, // D over the whole project, ignoring the range (the budget block)
         loanReceivedPaise: loanReceived,          // E (cumulative)
         owedToContractorsPaise: owedToContractors, // F = stated − Σ paid (cumulative)
       },
