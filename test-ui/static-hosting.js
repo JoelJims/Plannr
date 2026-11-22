@@ -36,11 +36,32 @@ function startServer() {
   });
 }
 
+// sqlite-wasm's own fallback (review finding F7). If its first way of loading sqlite3.wasm
+// (WebAssembly.instantiateStreaming) fails, sqlite-wasm logs these two lines with console.error,
+// one right after the other, and then loads the file a second way. In this suite the first way
+// fails with "Failed to fetch" when the suite leaves a page while its .wasm is still downloading:
+// cash-flow.html can look idle to 'networkidle' for seconds before it asks for the file. That made
+// this check fail on 2026-11-20 and on CI on 2026-11-22 (on a branch that changed only docs).
+// Only this pair, in this order, is ignored. Everything else still fails the check: any other
+// error, either line on its own, and the second way failing too (sqlite-wasm then logs "failed to
+// asynchronously prepare wasm").
+const WASM_STREAMING_FAILED = 'wasm streaming compile failed: ';
+const WASM_FALLING_BACK = 'falling back to ArrayBuffer instantiation';
+
 // Load a page (by clicking a nav element, not page.goto — a reintroduced clean URL must fail the
 // way a real tap would) and collect every console/page error seen up to the next call.
 function attachErrorCollector(page) {
   const errors = [];
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(`[console.error] ${m.text()}`); });
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    const text = m.text();
+    const prev = errors[errors.length - 1];
+    if (text.startsWith(WASM_FALLING_BACK) && prev && prev.startsWith(`[console.error] ${WASM_STREAMING_FAILED}`)) {
+      errors.pop(); // the streaming line logged just before it: the pair goes, nothing else does
+      return;
+    }
+    errors.push(`[console.error] ${text}`);
+  });
   page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
   return errors;
 }
