@@ -40,12 +40,15 @@ it found. Keep two offline backup copies of the key and both passwords in a pass
 
 ```sh
 npm run release:android -- --dry-run   # shows the version bump and the steps; changes nothing
-npm run release:android                # or: npm run release:android -- --version-name 1.2
+npm run release:android                # or: npm run release:android -- --version-name 1.1.0
 ```
 
 It runs every test (`npm test` and every `npm run test:*` UI suite except `test:slow`) and stops
-at the first failure before changing anything. Then it raises `versionCode` by one and bumps
-`versionName`, runs `npm run android:sync`, and builds
+at the first failure before changing anything. Then it raises `versionCode` by one (it only ever
+goes up, and a number is never reused) and bumps `versionName`: the first public release is
+`1.0.0`, which the plain command makes from today's `1.0`; after that it bumps the last number
+(`1.0.0` → `1.0.1`). Use `--version-name` for a minor or major release (`docs/release-plan.md` §2).
+It then runs `npm run android:sync`, and builds
 `android/app/build/outputs/apk/release/Plannr.apk`. If the sync or the build fails,
 `build.gradle` is put back.
 

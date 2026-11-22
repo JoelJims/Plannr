@@ -103,10 +103,14 @@ The current values in `android/app/build.gradle` (`defaultConfig`) are `versionC
   - PATCH (1.0.0 → 1.0.1): fixes only.
   - MINOR (1.0.1 → 1.1.0): new features; old backups still restore.
   - MAJOR (1.1.0 → 2.0.0): a change people must act on (for example a new install path).
-- The script's automatic bump adds 1 to the **last** number (`nextVersionName()`): `1.0` becomes
-  `1.1`, `1.0.0` becomes `1.0.1`. So:
-  - the first public release: `npm run release:android -- --version-name 1.0.0`
-    (versionCode 1 → 2);
+- **Decided (owner, 2026-11-22): the first public `versionName` is `1.0.0`**, and `versionCode`
+  keeps going up by 1 for every published build, never reused.
+- The script's automatic bump (`nextVersionName()` in `release-android.js`) turns a two-part name
+  into the first three-part one, `1.0` → `1.0.0`, and after that adds 1 to the **last** (patch)
+  number: `1.0.0` → `1.0.1`, `1.2.9` → `1.2.10`. Any other form must be given with
+  `--version-name`. So:
+  - the first public release: plain `npm run release:android` (versionName 1.0 → 1.0.0,
+    versionCode 1 → 2);
   - a patch release after that: `npm run release:android` (1.0.0 → 1.0.1);
   - a minor or major release: pass `--version-name 1.1.0` or `--version-name 2.0.0`.
 - Use the same name for the git tag, with a `v`: `v1.0.0`.

@@ -11,9 +11,11 @@
 //      present; the key never leaves the machine and is never printed).
 // If the sync or the build fails, build.gradle is put back as it was.
 //
-// Usage:  npm run release:android                        versionName 1.0 -> 1.1, versionCode +1
-//         npm run release:android -- --version-name 2.0  choose the versionName
-//         npm run release:android -- --dry-run           show what would happen; change nothing
+// Usage:  npm run release:android                          versionCode +1; versionName 1.0 -> 1.0.0
+//                                                          (the first public release), then
+//                                                          1.0.0 -> 1.0.1, 1.0.1 -> 1.0.2, ...
+//         npm run release:android -- --version-name 1.1.0  choose the versionName
+//         npm run release:android -- --dry-run             show what would happen; change nothing
 // Without keystore.properties it stops before doing anything: an unsigned APK cannot be installed
 // over the app on the phone (add --allow-unsigned to build one anyway, e.g. to test the build).
 // The key itself lives outside the project (SETUP.md section 2); keystore.properties' storeFile line
@@ -34,9 +36,13 @@ function testCommands(pkg) {
   return [['npm', ['test']], ...ui.map((k) => ['npm', ['run', '-s', k]])];
 }
 
-// "1.0" -> "1.1", "1.2.9" -> "1.2.10"; anything else must be given with --version-name.
+// Version names are MAJOR.MINOR.PATCH (docs/release-plan.md section 2). The first public release is
+// 1.0.0 (owner decision, 2026-11-22), so a two-part name gets its patch number: "1.0" -> "1.0.0".
+// A three-part name bumps the patch number: "1.0.0" -> "1.0.1", "1.2.9" -> "1.2.10".
+// Anything else must be given with --version-name.
 function nextVersionName(name) {
-  const m = /^(.*?)(\d+)$/.exec(name);
+  if (/^\d+\.\d+$/.test(name)) return `${name}.0`;
+  const m = /^(\d+\.\d+\.)(\d+)$/.exec(name);
   if (!m) throw new Error(`cannot bump versionName "${name}" automatically; pass --version-name`);
   return m[1] + (Number(m[2]) + 1);
 }
@@ -123,7 +129,7 @@ function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const i = argv.indexOf('--version-name');
   const versionName = i >= 0 ? argv[i + 1] : undefined;
-  if (i >= 0 && !versionName) throw new Error('--version-name needs a value, e.g. --version-name 1.1');
+  if (i >= 0 && !versionName) throw new Error('--version-name needs a value, e.g. --version-name 1.1.0');
 
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const original = fs.readFileSync(GRADLE_FILE, 'utf8');

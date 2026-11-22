@@ -38,6 +38,9 @@ Fixes from the security and quality review of 2026-11-21
   path. `npm run release:android` now also checks that the key file is there before it builds,
   shows its path on the "Signing:" line, and stops, naming the path, if it is missing. It reads
   only the `storeFile` line of `keystore.properties`.
+- **Version names (decided).** The first public `versionName` is `1.0.0`; `versionCode` keeps
+  going up by 1 per published build. `npm run release:android` now turns `1.0` into `1.0.0`
+  (before: `1.1`), then bumps the last number (`1.0.0` → `1.0.1`).
 
 ## Merged into `main` — Phase 2 (branch `plannr-phase2`, pull requests #1 and #2)
 
