@@ -3,7 +3,83 @@
 Notable changes to Plannr. The phone app is the product; the desktop server (`server.js`) is a
 development and test tool.
 
-## Unreleased — Phase 2 (branch `plannr-phase2`)
+## In review — Phase 3 (branch `plannr-phase3`, pull request #3, not merged into `main`)
+
+Fixes from the security and quality review of 2026-11-21
+(`docs/security-quality-review-2026-11-21.md`; finding ids in brackets). Not released.
+
+### Fixed
+- **Restore is all or nothing (S3/Q6).** An encrypted restore that failed a check after the backup
+  was copied in left the backup's data live while saying the restore had failed. Now the data from
+  just before the restore is put back, and the message says "Nothing was changed: your data is as
+  it was before." The safety copy is still written first.
+- **Contracts (Q3).** A contract and its payment dates are saved together or not at all. Before, a
+  date that failed to save left the contract saved with some dates missing.
+- **CSV export on the phone (F2).** "Download CSV (for Excel)" saved nothing on the phone while
+  saying it was downloading. The CSV files now go through the same path as every other file on the
+  Data Backup page: written, checked, then one share sheet with all of them.
+- **Overview figures (F3).** The figures no longer show ₹0.00 while loading or after a failed load
+  (which read as "nothing spent"). They show "…" while loading and "—" with a message and the
+  reason if the load fails.
+- **Home (F5).** The "First login — welcome." line, left over from the removed login, is gone.
+
+### Safety
+- **Import refuses badly shaped ledger codes (F1).** A JSON backup whose category or sub-category
+  codes are not in the `N.0` / `N.M` form, or whose sub-category sits under the wrong category, is
+  refused before anything changes.
+- **Android permissions (S7).** The APK no longer asks for the fingerprint and biometric
+  permissions, which came from a plugin's dependency and were never used.
+
+### Tools
+- `scripts/phone-test.ps1` waits until Home has settled before its offline check, waits up to
+  90 s for the PDF's share sheet and reports how long the PDF took.
+
+## Merged into `main` — Phase 2 (branch `plannr-phase2`, pull requests #1 and #2)
+
+Merged on 2026-11-21. Not released: no public APK has been published yet. The items under "Added
+since the first Phase 2 notes" came after the notes further down.
+
+### Added since the first Phase 2 notes
+
+#### Storage on the phone (step 1.4)
+- **The phone's database can move to a file.** The Data Backup page has a "Where your data is
+  kept" section with **Move to the new storage**: it saves an encrypted backup first, copies the
+  data from the WebView's `localStorage` into a database file (the `@capacitor-community/sqlite`
+  plugin, pinned at 8.1.1), checks the copy and only then switches. An interrupted move offers
+  **Continue** or **Not now**. Afterwards **Move data back** returns to the old storage and
+  **Delete the old copy** removes it (only after a backup made since the move).
+- A move that runs out of space says so with both numbers (needed and free) and leaves the old
+  data untouched.
+- **Recovery screen.** If the database file is missing or damaged at start-up, Plannr stops on a
+  recovery screen instead of opening empty: use the old copy, or restore an encrypted backup into a
+  new file.
+- **Android Auto Backup** now includes the database file and its marker. Safety snapshots are no
+  longer included; they stay on the phone (this changes the Auto Backup note further down).
+- The encrypted backup format is one shared implementation for the phone and the desktop; files
+  from either restore on the other.
+- A database whose first upgrade failed part-way no longer loses the contract services on the next
+  start, and the snapshot from before the upgrade is kept until an upgrade finishes.
+
+#### Fixes from the review (2026-11-21)
+- **Old databases (Q1).** A database first made by the two oldest schemas starts again (the dev
+  server refused it, and so did the phone after restoring an encrypted backup made from one).
+- **Ledger codes (F1).** Ledger codes are escaped wherever they go into a page, so a crafted backup
+  cannot put markup into the ledger lists.
+- **Home backup banner.** The empty red "Back up now" banner no longer shows on every start when no
+  backup is overdue.
+- **Dev tools (R2).** A `PLANNR_DB` that is set but empty is refused instead of opening the real
+  database. `.gitignore` also covers other key files, `.env` variants and exported data (S9).
+
+#### Project
+- The server routes moved into shared modules under `core/` (step 1.3) and the storage work above
+  (step 1.4), so the phone and the dev server run the same code. Nothing visible changes.
+- CI: GitHub Actions runs `npm test` on Ubuntu and Windows and the UI suites on Ubuntu.
+- A short plain-English README with screenshots; technical detail moved to `docs/DEVELOPERS.md`.
+- MIT license (`LICENSE`).
+- `scripts/phone-test.ps1` runs the phone checks that can be automated over adb.
+- `docs/share-and-reminder-pdf-plan.md`: a plan (not built) for sending the PDF to WhatsApp or
+  e-mail, also from a reminder.
+
 
 ### Backups and data safety
 - **Complete backups.** The JSON backup (format v2) now holds everything needed to rebuild the app
