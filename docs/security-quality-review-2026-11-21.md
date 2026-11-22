@@ -33,7 +33,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F1 | Medium | Ledger codes from a restored JSON backup go into HTML attributes unescaped (a crafted backup could run script in the app) | `public/plannr-ui.js:138,145,311,318,1007,1022,1060`; `backup-format.js:157-170` (codes only checked non-empty) | **Fixed** (`678092c`); the stricter import too, 2026-11-22 (`b623200`) |
 | F2 | Medium | "Download CSV (for Excel)" uses a plain download link, a dead end in the Android WebView, and reports success | `public/data-backup.html:875-878` (vs `saveFile()` elsewhere) | **Fixed** 2026-11-22 (`8b9101e`) |
 | F3 | Medium | The Overview shows ₹0.00 while loading and after a failed load, with no message | `public/overview.html:375-381, 620-621, 637-638` | **Fixed** 2026-11-22 (`e5b30ca`) |
-| F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:691-706`; `core/overview-pdf.js:121` | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) |
+| F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:725-741` (renderTotalBar); `core/overview-pdf.js:118-135` (budgetBlock) | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) |
 | Q5 | Low | An unreadable marker file plus a lost `localStorage` key after a kill could lead startup to delete the database file (two faults) | `public/storage-native.js:128-135,177`; `core/storage-move.js:227` | Open |
 | S2 | Low | Dev server: no Origin check; two body-less POST routes (mark exported, restore from bin) can be triggered by a web page while it runs | `core/routes/backup-reminder.js:78`; `core/routes/trash.js:45` | Open |
 | S4 | Low | A crafted backup can bring triggers or views; the `localStorage` restore runs schema SQL from the file | `public/local-snapshot.js:59-60,76-77`; `db-adapter-node.js:95` | Open |
@@ -177,4 +177,4 @@ measurements and what is still open are in `docs/session-report-2026-11-22.md`.
 | S5 | Not built. Planned as backup format v2 (scrypt N = 2^17, the parameters in the header); v1 files always stay readable | none |
 | Incident 3 | Left as it is, as decided | none |
 | Playwright browser | `npx playwright install chromium` run: the UI suites use Chromium revision 1228 again | none |
-| F4 | Still NEEDS MY DECISION (options in section 6) | none |
+| F4 | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) | `50997b1`, `eb73860`, `ade8d3d`, `7e3a915` |
