@@ -51,8 +51,8 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
 | F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | **Fixed** 2026-11-22 (`5e6afb7`) |
-| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `db-engine.js:39` | Open |
-| F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open |
+| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `db-engine.js:39` | **Fixed** 2026-11-22 (`c927071`, `ws-a-fixes`) |
+| F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open (partly: `contract-phase-a` waits for the condition, `8b5546a`) |
 | F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | Open |
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
 | F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | Open |
@@ -192,6 +192,8 @@ a test that failed on the code before it.
 | Q9 | A backup whose `sequences` names a table without an id is refused with a 400 | `d8ef781` |
 | Q13 | If planning the upgrade throws, the phone shows the reason instead of a blank page | `76d4c3d` |
 | Q12 | A storage-move snapshot no longer cuts the rotation of regular safety snapshots | `7b2d695` |
+| F7 | The static-hosting "no console errors" check ignores sqlite-wasm's own two-line fallback message ("wasm streaming compile failed: ..." then "falling back to ArrayBuffer instantiation"), and only that pair; any other console error still fails it. The pair appears when the suite leaves a page while its `.wasm` is still downloading | `c927071` |
+| F8 / F9 (partly) | `contract-phase-a` waits for what it reads next (15 s at most) instead of sleeping a fixed time; the fixed ports, the other suites and the node tests named in the finding are unchanged | `8b5546a` |
 
 Elsewhere the same day (other branches, statuses to be set here when they merge): F4 option (b)
 is on `ws-b-f4` as a draft, awaiting the decision; F18 (modal focus) is fixed on `ws-c-cleanup`.
