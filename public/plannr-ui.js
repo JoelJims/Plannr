@@ -366,6 +366,24 @@
   // Used for the "save an edit to an EXISTING record" confirmation.
   //   confirmModal({ title, message, confirmLabel }) -> Promise<boolean>
   // ---------------------------------------------------------------------------
+  // Modal focus (finding F18), shared by confirmModal and choiceModal below. Tab and Shift+Tab stay
+  // inside the dialog: from the last button Tab wraps to the first, and Shift+Tab the other way.
+  function keepTabInside(dialog, e) {
+    if (e.key !== 'Tab') return;
+    const buttons = Array.from(dialog.querySelectorAll('button:not([disabled])'));
+    if (!buttons.length) return;
+    const at = buttons.indexOf(document.activeElement);
+    const next = e.shiftKey
+      ? (at <= 0 ? buttons.length - 1 : at - 1)
+      : (at === -1 || at === buttons.length - 1 ? 0 : at + 1);
+    e.preventDefault();
+    buttons[next].focus();
+  }
+  // When a dialog closes, focus goes back to the control that opened it (if it is still on the page).
+  function focusOpener(opener) {
+    if (opener && opener !== document.body && typeof opener.focus === 'function' && document.contains(opener)) opener.focus();
+  }
+
   let _confirmWrap = null;
   function confirmModal(o) {
     o = o || {};
@@ -391,6 +409,7 @@
     const ok = wrap.querySelector('[data-plc="ok"]');
     const cancel = wrap.querySelector('[data-plc="cancel"]');
     ok.textContent = o.confirmLabel || 'Confirm';
+    const opener = document.activeElement;
     return new Promise((resolve) => {
       let done = false;
       const finish = (v) => {
@@ -400,12 +419,13 @@
         cancel.removeEventListener('click', onCancel);
         wrap.removeEventListener('mousedown', onBackdrop);
         document.removeEventListener('keydown', onKey);
+        focusOpener(opener);
         resolve(v);
       };
       const onOk = () => finish(true);
       const onCancel = () => finish(false);
       const onBackdrop = (e) => { if (e.target === wrap) finish(false); };
-      const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(false); else keepTabInside(wrap, e); };
       ok.addEventListener('click', onOk);
       cancel.addEventListener('click', onCancel);
       wrap.addEventListener('mousedown', onBackdrop);
@@ -441,6 +461,7 @@
     const actions = wrap.querySelector('#plChActions');
     actions.innerHTML = opts.map((op, i) => `<button type="button" class="btn ${i === 0 ? 'primary' : 'ghost'}" data-ch="${i}">${escapeHtml(op.label)}</button>`).join('') +
       '<button type="button" class="btn ghost" data-ch="cancel">Cancel</button>';
+    const opener = document.activeElement;
     return new Promise((resolve) => {
       let done = false;
       const finish = (v) => {
@@ -449,11 +470,12 @@
         actions.removeEventListener('click', onClick);
         wrap.removeEventListener('mousedown', onBackdrop);
         document.removeEventListener('keydown', onKey);
+        focusOpener(opener);
         resolve(v);
       };
       const onClick = (e) => { const b = e.target.closest && e.target.closest('[data-ch]'); if (!b) return; const c = b.getAttribute('data-ch'); finish(c === 'cancel' ? null : opts[Number(c)].value); };
       const onBackdrop = (e) => { if (e.target === wrap) finish(null); };
-      const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); else keepTabInside(wrap, e); };
       actions.addEventListener('click', onClick);
       wrap.addEventListener('mousedown', onBackdrop);
       document.addEventListener('keydown', onKey);
