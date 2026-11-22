@@ -153,6 +153,41 @@ test('signingFacts resolves storeFile against the project root, checks the key f
   assert.deepStrictEqual(signingFacts(proj), { signed: false, storeFile: null, keyPath: null, keyFound: false });
 });
 
+// Runs a copy of release-android.js with --dry-run in <tmp>/proj, next to a small package.json, the
+// sample build.gradle and the given keystore.properties. Returns what it printed.
+function dryRunIn({ proj, props }, propsContent) {
+  fs.copyFileSync(path.join(ROOT, 'release-android.js'), path.join(proj, 'release-android.js'));
+  fs.writeFileSync(path.join(proj, 'package.json'), JSON.stringify({ scripts: { test: 'node run-tests.js' } }));
+  fs.mkdirSync(path.join(proj, 'android', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'android', 'app', 'build.gradle'), sample);
+  fs.writeFileSync(props, propsContent);
+  const r = spawnSync(process.execPath, ['release-android.js', '--dry-run'], { cwd: proj, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  return r.stdout;
+}
+
+// The "Signing:" line comes before the reason the release stops. It must not say the key is fine
+// when the release is about to stop: for example for an absolute storeFile that points at a real file.
+test('the Signing: line names the key only when the release can go ahead', (t) => {
+  const p = tempProject(t);
+  fs.writeFileSync(p.keyPath, 'stand-in, not a real key');
+
+  const ready = dryRunIn(p, 'storeFile=../keys/demo.keystore\n');
+  assert.ok(ready.includes(`Signing: release key at ${p.keyPath} (keystore.properties found).`), ready);
+  assert.doesNotMatch(ready, /Would stop/);
+
+  const absolute = p.keyPath.split(path.sep).join('/'); // a real file, but refused
+  const refused = dryRunIn(p, `storeFile=${absolute}\n`);
+  assert.match(refused, /Would stop: The storeFile line in keystore\.properties must be a path relative/);
+  assert.doesNotMatch(refused, /release key at/);
+  assert.match(refused, /^Signing: NOT ready/m);
+
+  fs.rmSync(p.keyPath);
+  const missing = dryRunIn(p, 'storeFile=../keys/demo.keystore\n');
+  assert.match(missing, /Would stop: The release key is missing/);
+  assert.match(missing, /^Signing: NOT ready/m);
+});
+
 test('--dry-run shows the plan and changes nothing', () => {
   const before = fs.readFileSync(GRADLE, 'utf8');
   const r = spawnSync(process.execPath, ['release-android.js', '--dry-run'], { cwd: ROOT, encoding: 'utf8' });

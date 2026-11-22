@@ -38,8 +38,8 @@ path cannot change drive and an absolute path does not work. On a PC with only `
 the same). Without `keystore.properties` the release APK would be **unsigned** and the phone
 would refuse it; without the key file the Gradle build fails. In both cases
 `npm run release:android` stops before changing anything. Its "Signing:" line shows the key path
-it found. Keep two offline backup copies of the key and both passwords in a password manager
-(`SETUP.md` §2).
+when the key is ready to use; otherwise it says "NOT ready" and the reason follows. Keep two
+offline backup copies of the key and both passwords in a password manager (`SETUP.md` §2).
 
 ```sh
 npm run release:android -- --dry-run   # shows the version bump and the steps; changes nothing

@@ -124,6 +124,14 @@ function signingFacts(root) {
   return { signed, storeFile, keyPath, keyFound };
 }
 
+// The "Signing:" line printed before anything runs. problem is signingProblem's answer. The line
+// names the key only when the release can go ahead; otherwise the reason is printed right after it.
+function signingLine({ signed, keyPath }, problem) {
+  if (!signed) return 'Signing: keystore.properties NOT found.';
+  if (problem) return 'Signing: NOT ready. keystore.properties is there, but the release key cannot be used (reason below).';
+  return `Signing: release key at ${keyPath} (keystore.properties found).`;
+}
+
 function run(cmd, args, opts = {}) {
   console.log(`\n> ${cmd} ${args.join(' ')}`);
   const r = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32', ...opts });
@@ -144,10 +152,8 @@ function main(argv) {
   const tests = testCommands(pkg);
 
   console.log(`Plannr Android release: versionCode ${bump.from.code} -> ${bump.to.code}, versionName ${bump.from.name} -> ${bump.to.name}`);
-  if (!signed) console.log('Signing: keystore.properties NOT found.');
-  else if (facts.keyFound) console.log(`Signing: release key at ${facts.keyPath} (keystore.properties found).`);
-  else console.log(`Signing: keystore.properties found, but the release key is MISSING${facts.keyPath ? ` at ${facts.keyPath}` : ''}.`);
   const problem = signingProblem({ ...facts, allowUnsigned: argv.includes('--allow-unsigned') });
+  console.log(signingLine(facts, problem));
   if (dryRun) {
     if (problem) console.log(`Would stop: ${problem}`);
     console.log('\nDry run — would run, in order:');

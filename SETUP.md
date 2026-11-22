@@ -86,9 +86,10 @@ from the project root. If the project is somewhere else on that drive, change th
 `../` so the path still reaches `Keys\plannr\plannr-release.keystore` on that drive.
 
 `npm run release:android` checks both files before it changes anything. It reads only the
-`storeFile` line, resolves it against the project root, prints that path on its "Signing:" line,
-and stops (naming the path it expected) if no key file is there. It also stops if the line is an
-absolute path or starts with a drive letter.
+`storeFile` line and resolves it against the project root. It stops (naming the path it expected)
+if no key file is there, and it also stops if the line is an absolute path or starts with a drive
+letter. Its "Signing:" line shows the key's path only when the release can go ahead; otherwise it
+says "NOT ready" and the reason follows.
 
 `.gitignore` still blocks key files even though the key no longer lives in the project:
 `*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`. A copy dropped into the
