@@ -33,7 +33,7 @@ import { createLedgerIndex } from './core/ledger-index.js';
 import { createOwnerQueries } from './core/owner.js';
 import { istDateStamp } from './core/ist-date.js';
 import { checkHost, hostError } from './core/host.js';
-import { createRequestQueue, queuedRoutes } from './core/request-queue.js';
+import { createRequestQueue, queuedRoutes, createStartJobs } from './core/request-queue.js';
 import * as peopleRoutes from './core/routes/people.js';
 import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import * as cashAndLoansRoutes from './core/routes/cash-and-loans.js';
@@ -139,8 +139,8 @@ export function installFetchShim(repo) {
   // Start-up work that reads the database (step 1.4 B10, B13): each is a job in the request queue,
   // ahead of any request. The first: the ledger list, so no request can read it empty.
   // local-bootstrap.js awaits them all (`ready`, returned below) and shows a start-up error if one fails.
-  const startJobs = [];
-  const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
+  const startJobs = createStartJobs(requestQueue); // core/request-queue.js, the same as the dev server's
+  const { atStart } = startJobs;
   atStart(() => ledgerIndex.refresh());
   // The platform services the core may call (core/host.js, step 1.4 A4): the phone's. The PDF goes
   // through the print-adapter plugin (renderPdfOnPhone, below); the safety copy before a JSON
@@ -319,7 +319,7 @@ export function installFetchShim(repo) {
   };
 
   // For the tests (test/shim-target.js, test/request-queue-wiring.test.js); local-bootstrap.js does not use it.
-  const ready = Promise.all(startJobs);
+  const ready = startJobs.whenDone();
   ready.catch(() => {}); // reported where it is awaited
   return { requestQueue, routes, ready };
 }

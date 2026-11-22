@@ -117,7 +117,7 @@ const requestRules = require('./request-rules');
 const { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs } = require('./core/parsers.js');
 const { createLedgerIndex } = require('./core/ledger-index.js');
 const { checkHost, hostError } = require('./core/host.js');
-const { createRequestQueue, queuedRoutes } = require('./core/request-queue.js');
+const { createRequestQueue, queuedRoutes, createStartJobs } = require('./core/request-queue.js');
 
 // Prepared statements go here or later, AFTER init() has created and migrated every table, so each
 // binds to the final schema (preparing before init() would bind to a pre-migration or dropped
@@ -167,8 +167,8 @@ const api = queuedRoutes(app, requestQueue);
 // job in the request queue, ahead of any request. app._ready settles once all have finished, and the
 // start below listens only after it. The first: init() (above); then the ledger list, so no request
 // can read it empty.
-const startJobs = [];
-const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
+const startJobs = createStartJobs(requestQueue); // core/request-queue.js, shared with the phone
+const { atStart } = startJobs;
 atStart(() => initDone);
 atStart(() => ledgerIndex.refresh());
 // The core reaches the database only through `adapter` and `repo` (step 1.4 B16): no synchronous handle.
@@ -549,7 +549,7 @@ app._closePdfBrowser = closeIdlePdfBrowser; // Phase 9: tests that hit /overview
 app._pdfBrowserActive = () => _pdfBrowserPromise !== null; // Phase 10A: read-only — is a PDF browser warmed?
 app._requestQueue = requestQueue; // step 1.4 B5: tests hold it to check every /api route waits its turn
 // Step 1.4 B10, B13: settles once every start job has finished (rejects with the first failure).
-app._ready = Promise.all(startJobs);
+app._ready = startJobs.whenDone();
 app._ready.catch(() => {}); // reported where it is awaited (the start below, the tests)
 app._accessGate = accessGate; // Phase 1 safety: LAN/Host gate, unit-tested with fake requests
 app._accessConfig = accessConfig;

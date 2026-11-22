@@ -46,3 +46,25 @@ test('the owner queries live once, in core/owner.js', async () => {
     assert.doesNotMatch(src, /const userExists = async/, `${file} must use core/owner.js, not its own userExists`);
   }
 });
+
+test('the start-up jobs helper lives once, in core/request-queue.js', async () => {
+  const { createRequestQueue, createStartJobs } = await import('../core/request-queue.js');
+  const queue = createRequestQueue();
+  const order = [];
+  const start = createStartJobs(queue);
+  start.atStart(async () => { await new Promise((r) => setTimeout(r, 20)); order.push('first'); });
+  const request = queue.run(async () => { order.push('request'); });
+  start.atStart(() => { order.push('second'); });
+  await start.whenDone();
+  await request;
+  assert.deepStrictEqual(order, ['first', 'request', 'second'], 'start-up jobs run in the request queue, in order');
+
+  const failing = createStartJobs(createRequestQueue());
+  failing.atStart(() => { throw new Error('start failed'); }); // no unhandled rejection: reported by whenDone()
+  failing.atStart(() => 'ok');
+  await assert.rejects(failing.whenDone(), /start failed/);
+
+  for (const file of ['server.js', 'public/local-api.js']) {
+    assert.doesNotMatch(read(file), /const startJobs = \[\];/, `${file} must use createStartJobs, not its own copy`);
+  }
+});
