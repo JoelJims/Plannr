@@ -54,7 +54,10 @@ export function snapshotsToDelete(entries, justWritten, keep = KEEP_SNAPSHOTS, p
   const others = entries
     .filter((e) => e && e.type !== 'directory' && SNAPSHOT_NAME.test(e.name) && e.name !== justWritten && e.name !== pinned)
     .sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0) || (b.name < a.name ? -1 : b.name > a.name ? 1 : 0));
-  return others.slice(Math.max(0, keep - 1 - (isPinned ? 1 : 0))).map((e) => e.name);
+  // Q12: a storage-move snapshot (plannr-pre-move-*, -old-copy-*, -pre-move-back-*) is not one of the
+  // rotation's snapshots, so it does not take one of the `keep` places.
+  const counts = SNAPSHOT_NAME.test(justWritten) ? 1 : 0;
+  return others.slice(Math.max(0, keep - counts - (isPinned ? 1 : 0))).map((e) => e.name);
 }
 
 // The snapshot an unfinished upgrade started from (a name in `names`), or null if there is none.
