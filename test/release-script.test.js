@@ -3,9 +3,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile } = require('../release-android');
+const { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile, signingFacts } = require('../release-android');
 
 const ROOT = path.join(__dirname, '..');
 const GRADLE = path.join(ROOT, 'android', 'app', 'build.gradle');
@@ -110,6 +111,46 @@ test('readStoreFile returns the storeFile value and nothing else from keystore.p
   assert.strictEqual(readStoreFile('storeFile ..\\\\k.keystore\n'), '..\\k.keystore');
   assert.strictEqual(readStoreFile(`keyAlias=demo\n${pw('store')}=abc\n`), null);
   assert.strictEqual(readStoreFile('storeFile=\n'), null);
+});
+
+// A temporary folder laid out like the real thing: <tmp>/proj is the project root and <tmp>/keys
+// holds the key, so keystore.properties says storeFile=../keys/demo.keystore. Removed after the test.
+function tempProject(t) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-signing-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const proj = path.join(tmp, 'proj');
+  const keyPath = path.join(tmp, 'keys', 'demo.keystore');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+  return { tmp, proj, keyPath, props: path.join(proj, 'keystore.properties') };
+}
+// Stand-ins for the password lines. Their key names are built from parts and the values are dummies,
+// so no secret scanner mistakes this for a real file.
+const pwKey = (who) => `${who}Pass` + 'word';
+
+// signingFacts is the only code that reads the real keystore.properties and looks for the key file.
+// The test runs from the project checkout, not from <tmp>/proj, so a storeFile resolved against the
+// current folder instead of the project root would point somewhere else and fail here.
+test('signingFacts resolves storeFile against the project root, checks the key file, and keeps no other value', (t) => {
+  const { proj, keyPath, props } = tempProject(t);
+  fs.writeFileSync(props, ['# stand-in', `${pwKey('store')}=dummyS1`, 'keyAlias=aliasA3',
+    'storeFile=../keys/demo.keystore', `${pwKey('key')}=dummyK2`, ''].join('\r\n'));
+  fs.writeFileSync(keyPath, 'stand-in, not a real key');
+  assert.notStrictEqual(path.resolve('../keys/demo.keystore'), keyPath, 'the current folder must not be <tmp>/proj');
+
+  const facts = signingFacts(proj);
+  assert.deepStrictEqual(facts, { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: true });
+  for (const other of ['dummyS1', 'dummyK2', 'aliasA3', 'keyAlias', 'stand-in']) {
+    assert.ok(!JSON.stringify(facts).includes(other), `signingFacts must not return "${other}"`);
+  }
+  assert.strictEqual(signingProblem({ ...facts, allowUnsigned: false }), null);
+
+  fs.rmSync(keyPath);
+  assert.deepStrictEqual(signingFacts(proj), { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: false });
+  fs.mkdirSync(keyPath); // a folder with the key's name is not a key file
+  assert.strictEqual(signingFacts(proj).keyFound, false);
+  fs.rmSync(props);
+  assert.deepStrictEqual(signingFacts(proj), { signed: false, storeFile: null, keyPath: null, keyFound: false });
 });
 
 test('--dry-run shows the plan and changes nothing', () => {

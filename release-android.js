@@ -112,6 +112,8 @@ function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound })
 }
 
 // Where keystore.properties says the key is, and whether it is there. Reads only the storeFile line.
+// root is the project root: storeFile is resolved against it, never against the current folder,
+// because android/app/build.gradle does the same (new File(projectRootDir, storeFile)).
 function signingFacts(root) {
   const propsFile = path.join(root, 'keystore.properties');
   const signed = fs.existsSync(propsFile);
@@ -180,7 +182,7 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile };
+module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile, signingFacts };
 if (require.main === module) {
   try { process.exit(main(process.argv.slice(2))); } catch (e) { console.error(`release:android: ${e.message}`); process.exit(1); }
 }
