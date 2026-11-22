@@ -48,7 +48,8 @@ keytool -genkeypair -v -storetype PKCS12 -keystore D:\Keys\plannr\plannr-release
 
 **A key already exists.** This laptop has `plannr-release.keystore`, now in `D:\Keys\plannr\`
 (section 1.2), and `keystore.properties` in the project root. Both file types stay git-ignored
-(`.gitignore`: `*.keystore`, `*.jks`, `keystore.properties`). Never open them, print them, paste
+(`.gitignore`: `*.keystore`, `*.jks`, `*.p12`, `*.pem`, `keystore.properties`). Never open them,
+print them, paste
 them anywhere or commit them. To check that they are there, list the folder; do not look inside.
 If a release has ever been installed on a phone with that key, **keep using it**: a new key cannot
 update those installs.
@@ -203,12 +204,14 @@ section 5 is done.
 
 - [ ] All work for this release is merged into `main`, and CI is green on `main`.
 - [ ] `CHANGELOG.md` has an entry for this version (moved out of "In review" / "Merged into main").
-- [ ] The release key is at `D:\Keys\plannr\plannr-release.keystore`, `keystore.properties` is in
-      the project root, and neither is staged (`git status` shows neither).
+- [ ] The release key is at `D:\Keys\plannr\plannr-release.keystore` (`C:\Keys\plannr\...` on a
+      PC with only `C:`), `keystore.properties` is in the project root, and neither is staged
+      (`git status` shows neither).
 - [ ] Two offline backup copies of the key exist, and both passwords and the alias are in a
       password manager (section 1.3).
 - [ ] `npm run release:android -- --dry-run` shows the expected `versionCode` (+1) and
-      `versionName`, and "Signing: release key at D:\Keys\plannr\plannr-release.keystore".
+      `versionName`, and "Signing: release key at D:\Keys\plannr\plannr-release.keystore"
+      (`C:\Keys\plannr\plannr-release.keystore` on a PC with only `C:`).
 - [ ] `npm run release:android` (with `--version-name` if needed) finished: every test passed and
       the APK was built.
 - [ ] `apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk` prints the

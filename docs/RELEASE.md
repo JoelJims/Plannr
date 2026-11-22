@@ -10,7 +10,7 @@ Uninstalling first deletes it. Follow these steps in order, every time.
 |---|---|---|
 | App id `com.plannr.app` | `capacitor.config.json`, `android/app/build.gradle`, `strings.xml` | `test/release-guards.test.js` |
 | Page origin `https://localhost` (scheme `https`, host `localhost`) — the data belongs to this origin | `capacitor.config.json` (`server.androidScheme`, `server.hostname`: leave them unset) and Capacitor's defaults | `test/release-guards.test.js` |
-| The signing key | `plannr-release.keystore` in `D:\Keys\plannr\` (outside the project and outside git); `keystore.properties` in the project root (git-ignored), whose `storeFile` line points to the key with a path relative to the project root | `.gitignore` still lists `*.keystore`, `*.jks` and `keystore.properties`; `test/release-guards.test.js` checks they can't be committed; `npm run release:android` stops if the key is not where `storeFile` says |
+| The signing key | `plannr-release.keystore` in `D:\Keys\plannr\` (outside the project and outside git); `keystore.properties` in the project root (git-ignored), whose `storeFile` line points to the key with a path relative to the project root | `.gitignore` still lists `*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`; `test/release-guards.test.js` checks they can't be committed; `npm run release:android` stops if the key is not where `storeFile` says |
 | `versionCode` goes **up** | `android/app/build.gradle` | `npm run release:android` bumps it |
 
 A debug APK (`Plannr-debug.apk`) is signed with the Android debug key, not the release key. A
@@ -38,8 +38,9 @@ path cannot change drive and an absolute path does not work. On a PC with only `
 the same). Without `keystore.properties` the release APK would be **unsigned** and the phone
 would refuse it; without the key file the Gradle build fails. In both cases
 `npm run release:android` stops before changing anything. Its "Signing:" line shows the key path
-when the key is ready to use; otherwise it says "NOT ready" and the reason follows. Keep two
-offline backup copies of the key and both passwords in a password manager (`SETUP.md` §2).
+when the key is ready to use; otherwise it says "NOT ready" (or "NOT found" when there is no
+`keystore.properties`) and the reason follows. Keep two offline backup copies of the key and both
+passwords in a password manager (`SETUP.md` §2).
 
 ```sh
 npm run release:android -- --dry-run   # shows the version bump and the steps (or why it would stop); changes nothing

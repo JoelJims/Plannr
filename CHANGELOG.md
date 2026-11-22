@@ -37,7 +37,8 @@ Fixes from the security and quality review of 2026-11-21
   `keystore.properties` stays in the project root and points to it with a relative `storeFile`
   path. `npm run release:android` now also checks that the key file is there before it builds,
   and stops, naming the path, if it is missing. Its "Signing:" line shows the key's path only
-  when the release can go ahead; otherwise it says "NOT ready" and the reason follows. It reads
+  when the release can go ahead; otherwise it says "NOT ready" (or "NOT found" when there is no
+  `keystore.properties`) and the reason follows. It reads
   only the `storeFile` line of `keystore.properties`. The key folder must be on the same drive
   as the project (`C:\Keys\plannr\` on a PC with only `C:`); an absolute `storeFile` line, or one
   that starts with a drive letter, is refused. A `keystore.properties` saved with a UTF-8

@@ -95,8 +95,9 @@ UTF-16, which Gradle cannot read at all. In Notepad, choose Save as, Encoding "U
 `npm run release:android` checks both files before it changes anything. It reads only the
 `storeFile` line and resolves it against the project root. It stops (naming the path it expected)
 if no key file is there, and it also stops if the line is an absolute path or starts with a drive
-letter, or if the file starts with a BOM or is saved as UTF-16. Its "Signing:" line shows the key's path only when the release can go ahead; otherwise it
-says "NOT ready" and the reason follows.
+letter, or if the file starts with a BOM or is saved as UTF-16. Its "Signing:" line shows the
+key's path only when the release can go ahead; otherwise it says "NOT ready" (or "NOT found" when
+there is no `keystore.properties`) and the reason follows.
 
 `.gitignore` still blocks key files even though the key no longer lives in the project:
 `*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`. A copy dropped into the
