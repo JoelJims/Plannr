@@ -14,11 +14,7 @@ const { encrypt, decrypt } = require('./backup-crypto'); // host.crypto: the enc
 
 // The IST date stamp (core/ist-date.js), shared with the phone: the Overview PDF filename and the
 // upcoming-payment day counts.
-const { IST_TZ, istDateStamp } = require('./core/ist-date.js');
-function istStampFull(d = new Date()) {
-  const hm = new Intl.DateTimeFormat('en-GB', { timeZone: IST_TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(d).replace(/^24:/, '00:');
-  return `${istDateStamp(d)} ${hm} IST`;
-}
+const { istDateStamp } = require('./core/ist-date.js');
 
 const app = express();
 app.disable('x-powered-by'); // don't advertise the framework/version
@@ -138,9 +134,6 @@ const { createRequestQueue, queuedRoutes } = require('./core/request-queue.js');
 const JSON_PARSERS = Object.fromEntries(Object.entries(requestRules.BODY_LIMITS)
   .map(([kind, limit]) => [kind, express.json({ limit })]));
 app.use((req, res, next) => JSON_PARSERS[requestRules.bodyKind(req.method, req.path)](req, res, next));
-
-// Single-user offline app: every request resolves to the fixed local owner, no session lookup.
-function currentUser(req) { return getOwner(); }
 
 // ---------------------------------------------------------------------------
 // API routes
