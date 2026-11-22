@@ -19,6 +19,18 @@
   // paise -> a plain rupees string for an edit input, exact (no float).
   const paiseToInput = (paise) => Math.floor(paise / 100) + '.' + String(paise % 100).padStart(2, '0');
 
+  // A typed rupee amount ('1,234.56') -> whole paise, with string math (no float drift). Returns a
+  // positive safe integer, or null when the text is not an amount greater than 0 with up to 2
+  // decimals. The same rule as the server's parsePaise (core/parsers.js), so a page can refuse a bad
+  // amount before it is sent; test/c-page-helpers.test.js checks the two agree.
+  function parsePaise(v) {
+    const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    const [ip, dp = ''] = s.split('.');
+    const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
+    return Number.isSafeInteger(p) && p > 0 ? p : null;
+  }
+
   const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // DISPLAY-ONLY date formatting. Storage/calculation stays ISO 'YYYY-MM-DD' everywhere;
@@ -1157,5 +1169,5 @@
     return { open, syncLabel };
   }
 
-  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createLedgerBrowser, LEDGER_GROUPS, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
+  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, parsePaise, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createLedgerBrowser, LEDGER_GROUPS, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
 })(window);
