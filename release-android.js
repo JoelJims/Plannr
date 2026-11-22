@@ -124,10 +124,10 @@ function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, b
 function signingFacts(root) {
   const propsFile = path.join(root, 'keystore.properties');
   const signed = fs.existsSync(propsFile);
+  const bytes = signed ? fs.readFileSync(propsFile) : Buffer.alloc(0);
+  const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf; // the UTF-8 byte-order mark
   // latin1: the encoding Java's Properties.load uses for this file.
-  const text = signed ? fs.readFileSync(propsFile, 'latin1') : '';
-  const bom = text.startsWith('ï»¿'); // the UTF-8 BOM bytes EF BB BF, read as Latin-1
-  const storeFile = signed ? readStoreFile(text) : null;
+  const storeFile = signed ? readStoreFile(bytes.toString('latin1')) : null;
   const keyPath = storeFile ? path.resolve(root, storeFile) : null;
   const keyFound = keyPath ? Boolean(fs.statSync(keyPath, { throwIfNoEntry: false })?.isFile()) : false;
   return { signed, storeFile, keyPath, keyFound, bom };
