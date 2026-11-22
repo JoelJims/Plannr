@@ -215,7 +215,8 @@ section 5 is done.
 - [ ] `npm run release:android` (with `--version-name` if needed) finished: every test passed and
       the APK was built.
 - [ ] `apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk` prints the
-      same certificate SHA-256 as the last release, and its Owner line has nothing personal in it.
+      same certificate SHA-256 as the last release, and its "certificate DN" line
+      (`Signer #1 certificate DN: CN=...`) has nothing personal in it.
 - [ ] The APK's own SHA-256 is computed and pasted into the release notes.
 - [ ] Installed **over** the previous release on a test phone or emulator: the data is still there
       (`docs/RELEASE.md` §3 and §4). For the first release: the debug-to-release steps of section 3
