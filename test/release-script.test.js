@@ -139,18 +139,18 @@ test('signingFacts resolves storeFile against the project root, checks the key f
   assert.notStrictEqual(path.resolve('../keys/demo.keystore'), keyPath, 'the current folder must not be <tmp>/proj');
 
   const facts = signingFacts(proj);
-  assert.deepStrictEqual(facts, { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: true, bom: false });
+  assert.deepStrictEqual(facts, { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: true, bom: false, utf16: false });
   for (const other of ['dummyS1', 'dummyK2', 'aliasA3', 'keyAlias', 'stand-in']) {
     assert.ok(!JSON.stringify(facts).includes(other), `signingFacts must not return "${other}"`);
   }
   assert.strictEqual(signingProblem({ ...facts, allowUnsigned: false }), null);
 
   fs.rmSync(keyPath);
-  assert.deepStrictEqual(signingFacts(proj), { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: false, bom: false });
+  assert.deepStrictEqual(signingFacts(proj), { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: false, bom: false, utf16: false });
   fs.mkdirSync(keyPath); // a folder with the key's name is not a key file
   assert.strictEqual(signingFacts(proj).keyFound, false);
   fs.rmSync(props);
-  assert.deepStrictEqual(signingFacts(proj), { signed: false, storeFile: null, keyPath: null, keyFound: false, bom: false });
+  assert.deepStrictEqual(signingFacts(proj), { signed: false, storeFile: null, keyPath: null, keyFound: false, bom: false, utf16: false });
 });
 
 // Windows PowerShell 5.1 saves "UTF-8" files with a byte-order mark (BOM). Gradle reads
@@ -174,6 +174,29 @@ test('a keystore.properties saved with a UTF-8 byte-order mark gets its own mess
   assert.match(problemFor('keyAlias=aliasA3\nstoreFile=../keys/demo.keystore\n', true), /byte-order mark/);
   // The same lines without a BOM are fine.
   assert.strictEqual(problemFor('storeFile=../keys/demo.keystore\nkeyAlias=aliasA3\n', false), null);
+});
+
+// Windows PowerShell 5.1's plain > and Out-File write UTF-16 (little-endian, starting FF FE). Gradle
+// reads keystore.properties as Latin-1, so every entry of such a file is lost, storeFile included. The
+// script must say how the file is saved, not "no storeFile line" when the owner can see one in Notepad.
+test('a keystore.properties saved as UTF-16 gets its own message', (t) => {
+  const p = tempProject(t);
+  fs.writeFileSync(p.keyPath, 'stand-in, not a real key');
+  const text = 'storeFile=../keys/demo.keystore\r\nkeyAlias=aliasA3\r\n';
+  const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  const be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+  for (const [label, bytes] of [['UTF-16LE', le], ['UTF-16BE', be]]) {
+    fs.writeFileSync(p.props, bytes);
+    const problem = signingProblem({ ...signingFacts(p.proj), allowUnsigned: false });
+    assert.match(problem, /saved as UTF-16/, label);
+    assert.match(problem, /Gradle cannot read it/, label);
+    assert.match(problem, /UTF-8 without a byte-order mark, or ASCII/, label);
+    assert.match(problem, /SETUP\.md section 2/, label);
+    assert.doesNotMatch(problem, /no storeFile line/, label);
+  }
+  // The same text saved as plain ASCII is fine.
+  fs.writeFileSync(p.props, text);
+  assert.strictEqual(signingProblem({ ...signingFacts(p.proj), allowUnsigned: false }), null);
 });
 
 // Runs a copy of release-android.js with --dry-run in <tmp>/proj, next to a small package.json, the

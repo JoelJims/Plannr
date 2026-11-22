@@ -21,8 +21,8 @@
 // The key itself lives outside the project (SETUP.md section 2); keystore.properties' storeFile line
 // points to it with a path relative to the project root, so the key folder must be on the same drive
 // as the project. If no key file is there, it also stops before doing anything. From
-// keystore.properties it reads only that storeFile line (and checks the file does not start with a
-// byte-order mark, which Gradle cannot read past).
+// keystore.properties it reads only that storeFile line (and checks the file is not saved with a
+// UTF-8 byte-order mark or as UTF-16, which Gradle cannot read).
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -94,15 +94,19 @@ function readStoreFile(propertiesText) {
 //   keyPath       storeFile resolved against the project root;
 //   keyFound      a file exists at keyPath;
 //   bom           keystore.properties starts with a UTF-8 byte-order mark;
+//   utf16         keystore.properties is saved as UTF-16 (it starts with FF FE or FE FF);
 //   allowUnsigned --allow-unsigned was given.
 // An unsigned release APK cannot update the installed app, and a keystore.properties that points to
 // a missing key makes the Gradle build fail after the version bump.
-function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, bom }) {
+function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, bom, utf16 }) {
   if (!signed) {
     if (allowUnsigned) return null;
     return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
   }
   // From here on keystore.properties exists, so Gradle WILL try to sign: --allow-unsigned cannot help.
+  // Windows PowerShell 5.1's plain > and Out-File write UTF-16. Read as Latin-1 (as Gradle does), every
+  // character comes with a NUL byte, so no entry is found, storeFile included.
+  if (utf16) return 'keystore.properties is saved as UTF-16 (what Windows PowerShell 5.1\'s > and plain Out-File write), so Gradle cannot read it: it reads this file as Latin-1 and finds none of its entries. Save it as UTF-8 without a byte-order mark, or ASCII (in Notepad: Save as, Encoding "UTF-8"). See SETUP.md section 2.';
   // Gradle reads the file as Latin-1, so a byte-order mark becomes part of the first entry's name and
   // that entry is lost (a storeFile line at the top then looks missing). The BOM is not stripped
   // here: Gradle would still fail, so the owner has to save the file without it.
@@ -118,7 +122,7 @@ function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, b
 }
 
 // Where keystore.properties says the key is, and whether it is there. Reads only the storeFile line
-// (and whether the file starts with a byte-order mark).
+// (and whether the file starts with a byte-order mark: UTF-8's, or UTF-16's).
 // root is the project root: storeFile is resolved against it, never against the current folder,
 // because android/app/build.gradle does the same (new File(projectRootDir, storeFile)).
 function signingFacts(root) {
@@ -126,11 +130,13 @@ function signingFacts(root) {
   const signed = fs.existsSync(propsFile);
   const bytes = signed ? fs.readFileSync(propsFile) : Buffer.alloc(0);
   const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf; // the UTF-8 byte-order mark
+  // The UTF-16 byte-order marks: FF FE (little-endian, what Windows PowerShell 5.1 writes) or FE FF.
+  const utf16 = (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff);
   // latin1: the encoding Java's Properties.load uses for this file.
   const storeFile = signed ? readStoreFile(bytes.toString('latin1')) : null;
   const keyPath = storeFile ? path.resolve(root, storeFile) : null;
   const keyFound = keyPath ? Boolean(fs.statSync(keyPath, { throwIfNoEntry: false })?.isFile()) : false;
-  return { signed, storeFile, keyPath, keyFound, bom };
+  return { signed, storeFile, keyPath, keyFound, bom, utf16 };
 }
 
 // The "Signing:" line printed before anything runs. problem is signingProblem's answer. The line
