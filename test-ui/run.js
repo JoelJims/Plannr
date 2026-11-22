@@ -254,17 +254,19 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
 
     // No budget: no marker, "No budget set", never amber, and the caption still shows the whole
     // project's spend (with a range set, "in total"). The PDF says the same (test/f4-budget-left.test.js).
+    // The bar is full: with no budget its scale is the whole project's spend itself, so the fill is
+    // whole / whole = 100% (within 1%), with a range set too (not the range's D / whole).
     const clearBudget = () => H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL").run();
     const settledNoBudget = (figD, spent) => pR.waitForFunction(([d, s]) => document.getElementById('figD').textContent.trim() === d
       && document.getElementById('ovBarSpent').textContent.trim() === s
       && document.getElementById('ovBarBudget').textContent.trim() === 'No budget set', [figD, spent], { timeout: 15000 }).catch(() => {});
     const noBudgetOk = (b, figD, spent) => b.marker == null && b.label === 'No budget set' && b.spent === spent && b.figD === figD
-      && !b.overClass && !b.colour.includes(AMBER);
+      && Math.abs(b.fill - 1) <= 0.01 && !b.overClass && !b.colour.includes(AMBER);
     clearBudget();
     await applyJuly();
     await settledNoBudget('₹7,000.00', 'Spent ₹15,000.00 in total'); // the label was "… Budget ₹15,000.00"
     const nob = await bar();
-    check('F4 (b), July range, no budget: no marker, "No budget set", caption "Spent ₹15,000.00 in total", not amber; card D keeps ₹7,000.00',
+    check('F4 (b), July range, no budget: the bar is full, no marker, "No budget set", caption "Spent ₹15,000.00 in total", not amber; card D keeps ₹7,000.00',
       noBudgetOk(nob, '₹7,000.00', 'Spent ₹15,000.00 in total'), show(nob));
 
     // A budget of 0 behaves like no budget (getBudgetPaise in core/routes/budget.js turns 0 or less
@@ -275,12 +277,12 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     await settledNoBudget('₹15,000.00', 'Spent ₹15,000.00');
     const zero = await bar();
     const zeroBox = await pR.inputValue('#budgetInput');
-    check('F4 (b), budget 0, no range: like no budget (no marker, "No budget set", "Spent ₹15,000.00", not amber, empty budget box)',
+    check('F4 (b), budget 0, no range: like no budget (the bar is full, no marker, "No budget set", "Spent ₹15,000.00", not amber, empty budget box)',
       noBudgetOk(zero, '₹15,000.00', 'Spent ₹15,000.00') && zeroBox === '', `${show(zero)} | budget box "${zeroBox}"`);
     await applyJuly();
     await settledNoBudget('₹7,000.00', 'Spent ₹15,000.00 in total');
     const zeroJuly = await bar();
-    check('F4 (b), budget 0, July range: like no budget (no marker, "No budget set", "Spent ₹15,000.00 in total", not amber)',
+    check('F4 (b), budget 0, July range: like no budget (the bar is full, no marker, "No budget set", "Spent ₹15,000.00 in total", not amber)',
       noBudgetOk(zeroJuly, '₹7,000.00', 'Spent ₹15,000.00 in total'), show(zeroJuly));
     await ctxR.close();
   }
