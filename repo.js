@@ -119,6 +119,11 @@ const ov = {
   paymentsAll: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL`),
   paymentsRange: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL AND pay_date >= ? AND pay_date <= ?`),
   loansSum: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM loans WHERE deleted_at IS NULL'),
+  // F4 (b): the whole project's spend, for the budget block while a date range is set. One SUM per
+  // table, so no row is sent back for it: live rows only, with no date bound, so an undated (legacy)
+  // cash_out row still counts. contractor_payments.pay_date is NOT NULL, so every payment has a date.
+  outsSumAll: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL'),
+  paymentsSumAll: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL'),
   // Part B — cash_out logged (created) since the last report's boundary timestamp (created_at is UTC ISO).
   outsSince: S("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
 };
@@ -131,6 +136,8 @@ const overview = {
   paymentsAll: () => ov.paymentsAll.all(),
   paymentsRange: (lo, hi) => ov.paymentsRange.all(lo, hi),
   loansSum: () => ov.loansSum.get(),
+  outsSumAll: () => ov.outsSumAll.get(),         // F4 (b) — { s }
+  paymentsSumAll: () => ov.paymentsSumAll.get(), // F4 (b) — { s }
   outsSince: (sinceIso) => ov.outsSince.get(sinceIso), // Part B — { c, s }
 };
 

@@ -126,11 +126,11 @@ export function register(app, ctx) {
     // "left" / "over") compares the WHOLE project's spend with the budget, even when a range is set (the
     // budget is for the whole project); so does the PDF's budget line. With no range this is D itself;
     // with a range, the same two tables are summed with no date bound (live rows only; dateless rows count).
+    // The sum is done in SQL, one SUM per table (repo.js, outsSumAll / paymentsSumAll), so a ranged
+    // Overview or PDF does not fetch every row of both tables just to add them up.
     let wholeProjectSpent = totalSpent;
     if (bounded) {
-      wholeProjectSpent = 0;
-      for (const r of await repo.overview.outsAll()) wholeProjectSpent += r.amount_paise;
-      for (const p of await repo.overview.paymentsAll()) wholeProjectSpent += p.amount_paise;
+      wholeProjectSpent = (await repo.overview.outsSumAll()).s + (await repo.overview.paymentsSumAll()).s;
     }
 
     const ledgers = [...ledMap.values()]
