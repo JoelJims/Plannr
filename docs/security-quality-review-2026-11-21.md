@@ -26,19 +26,19 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 |---|---|---|---|---|
 | Q1 | **High** | A database from the two oldest schemas (v1) keeps the removed login's `sessions` table, which the start-up ownership check refuses: the app cannot start (dev server; phone after restoring such an encrypted backup) | `backup-format.js:42-45` (list), `:82-97` (check), `core/routes/backup.js:36` (start job); fixtures 01, 02, L1–L5 | **Fixed** (`ed52850`) |
 | S1 | Medium | `main` (not this branch) listens on every interface with no login; export and import reachable from the Wi-Fi and by DNS rebinding | `main:server.js:2615` `app.listen(PORT, '0.0.0.0'…)`, `main:server.js:171` | Outside the code: merge (NEEDS MY DECISION) |
-| S3 / Q6 | Medium | A restore replaces the database, then runs migrations and the foreign-key check; if they fail, the backup's data stays live while the answer says it failed; on the phone the safety copy is out of reach | `db.js:372-376`; `core/routes/backup.js:133-134`; `public/local-snapshot.js:100,107` | Open (NEEDS MY DECISION: how to roll back) |
-| Q3 | Medium | Saving a contract writes it and its payment dates as separate statements, outside a transaction; a failure between them leaves dates deleted or a contract without dates | `repo.js:217`; `core/routes/contracts.js:321-331` | Open |
+| S3 / Q6 | Medium | A restore replaces the database, then runs migrations and the foreign-key check; if they fail, the backup's data stays live while the answer says it failed; on the phone the safety copy is out of reach | `db.js:372-376`; `core/routes/backup.js:133-134`; `public/local-snapshot.js:100,107` | **Fixed** 2026-11-22 (`5e98901`): automatic rollback, as decided |
+| Q3 | Medium | Saving a contract writes it and its payment dates as separate statements, outside a transaction; a failure between them leaves dates deleted or a contract without dates | `repo.js:217`; `core/routes/contracts.js:321-331` | **Fixed** 2026-11-22 (`00f6a59`) |
 | Q4 | Medium | "Move data back fits" counts only the incoming size, not the journal or what is already in `localStorage` | `core/storage-move.js:251`; `public/db-adapter-kvvfs.js:52-90` | Open (fails safely: rollback) |
 | Q2 | Medium | On `localStorage`, a kill loses the last seconds of saves (WebView writes late); nothing tells the user | measured on the emulator (E3, E6); `public/data-backup.html:233-238` | Open: known; the move is the fix (UI note proposed) |
-| F1 | Medium | Ledger codes from a restored JSON backup go into HTML attributes unescaped (a crafted backup could run script in the app) | `public/plannr-ui.js:138,145,311,318,1007,1022,1060`; `backup-format.js:157-170` (codes only checked non-empty) | **Fixed** (`678092c`) |
-| F2 | Medium | "Download CSV (for Excel)" uses a plain download link, a dead end in the Android WebView, and reports success | `public/data-backup.html:875-878` (vs `saveFile()` elsewhere) | Open (not checked on a device) |
-| F3 | Medium | The Overview shows ₹0.00 while loading and after a failed load, with no message | `public/overview.html:375-381, 620-621, 637-638` | Open |
-| F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:691-706`; `core/overview-pdf.js:121` | Open (NEEDS MY DECISION: intended?) |
+| F1 | Medium | Ledger codes from a restored JSON backup go into HTML attributes unescaped (a crafted backup could run script in the app) | `public/plannr-ui.js:138,145,311,318,1007,1022,1060`; `backup-format.js:157-170` (codes only checked non-empty) | **Fixed** (`678092c`); the stricter import too, 2026-11-22 (`b623200`) |
+| F2 | Medium | "Download CSV (for Excel)" uses a plain download link, a dead end in the Android WebView, and reports success | `public/data-backup.html:875-878` (vs `saveFile()` elsewhere) | **Fixed** 2026-11-22 (`8b9101e`) |
+| F3 | Medium | The Overview shows ₹0.00 while loading and after a failed load, with no message | `public/overview.html:375-381, 620-621, 637-638` | **Fixed** 2026-11-22 (`e5b30ca`) |
+| F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:691-706`; `core/overview-pdf.js:121` | Open (NEEDS MY DECISION, still: intended?) |
 | Q5 | Low | An unreadable marker file plus a lost `localStorage` key after a kill could lead startup to delete the database file (two faults) | `public/storage-native.js:128-135,177`; `core/storage-move.js:227` | Open |
 | S2 | Low | Dev server: no Origin check; two body-less POST routes (mark exported, restore from bin) can be triggered by a web page while it runs | `core/routes/backup-reminder.js:78`; `core/routes/trash.js:45` | Open |
 | S4 | Low | A crafted backup can bring triggers or views; the `localStorage` restore runs schema SQL from the file | `public/local-snapshot.js:59-60,76-77`; `db-adapter-node.js:95` | Open |
-| S5 | Low | Backup key derivation scrypt N=2^14 (below current advice), minimum passphrase 10 characters; parameters not in the header | `core/backup-crypto.js:29,34` | Open (needs format v2: NEEDS MY DECISION) |
-| S7 | Low | The APK has `USE_BIOMETRIC` and `USE_FINGERPRINT` from the storage plugin's dependencies; Plannr never uses them | merged manifest; `aapt dump permissions` of the RC | Open |
+| S5 | Low | Backup key derivation scrypt N=2^14 (below current advice), minimum passphrase 10 characters; parameters not in the header | `core/backup-crypto.js:29,34` | Planned, not built (decided 2026-11-21): backup format v2; v1 files always stay readable |
+| S7 | Low | The APK has `USE_BIOMETRIC` and `USE_FINGERPRINT` from the storage plugin's dependencies; Plannr never uses them | merged manifest; `aapt dump permissions` of the RC | **Fixed** 2026-11-22 (`4cf1784`), checked on the built APK and the emulator |
 | S9 / F19 | Low | `.gitignore` misses `*.jks`, `*.p12`, `*.pem`, `.env.*`, plain exports and pulled snapshots | `.gitignore` | **Fixed** (`d33953b`) |
 | S10 / R2 | Low | A `PLANNR_DB` that is set but empty opens the real database (incident 1) | `db.js:31` | **Fixed** (`a3ea627`) |
 | Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | Open |
@@ -50,16 +50,16 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q13 | Low | If planning the upgrade throws, the phone shows a blank page | `public/local-bootstrap.js:54` | Open |
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | Open |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
-| F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | Open |
+| F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | **Fixed** 2026-11-22 (`5e6afb7`) |
 | F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `db-engine.js:39` | Open |
 | F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open |
 | F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | Open |
-| F12 | Low | No CI, lint or format configuration | no `.github/` | Outside the code |
+| F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
 | F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | Open |
 | F14 | Low | Encrypted restore body limit 20 MB (base64), so a database over about 15 MB cannot be restored on the phone; export does not warn | `request-rules.js:11,26` | Open |
 | F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open |
 | F20 | Low | `engines` says Node ≥22.12.0; `node:sqlite` is unflagged from 22.13 (unchecked) | `package.json:41` | Open |
-| E1 | Low | The PDF export gives up after 25 s; a slow emulator reached it | `public/overview.html` (withTimeout), emulator 2026-11-21 | Open (measure on the phone) |
+| E1 | Low | The PDF export gives up after 25 s; a slow emulator reached it | `public/overview.html` (withTimeout), emulator 2026-11-21 | Open; `phone-test.ps1` now waits up to 90 s and reports the PDF time (`46d21ec`): 4.1 to 4.5 s on the emulator 2026-11-22 |
 | S6, S8, S11–S19, Q15, Q17–Q19, F6, F11, F21–F25 | Info | Auto Backup holds plain data (by design); broad FileProvider path; `run-tests.js` says "never opened" but checks mtime; error details and paths in answers; logging; PDF Chromium `--no-sandbox`; CSV formula prefix; `.env` read from the working folder; LAN token over HTTP; dead code and imports; README screenshots missing; docs say the storage move is not done and that snapshots are in Auto Backup | see the audit notes | Open (docs and clean-up) |
 
 ## 3. Secrets
@@ -157,3 +157,24 @@ The likely gains, from the audit (to be measured first):
   ```powershell
   git push origin plannr-phase2
   ```
+
+## 8. Follow-up, 2026-11-22 (`plannr-phase3`)
+
+The decisions from 2026-11-21 were carried out on `plannr-phase3`, one commit per change, each
+with a test that failed before the fix and the full suite after it. The details, the speed
+measurements and what is still open are in `docs/session-report-2026-11-22.md`.
+
+| Item | Decision | Commit |
+|---|---|---|
+| S3 / Q6 | Automatic rollback: a restore that fails after the database is replaced puts the data from before it back, and says so | `5e98901` |
+| F1 | Also refuse badly shaped ledger codes at import | `b623200` |
+| Q3 | A contract and its payment dates in one transaction | `00f6a59` |
+| S7 | Remove `USE_BIOMETRIC` and `USE_FINGERPRINT` | `4cf1784` |
+| `phone-test.ps1` | Wait for Home to settle offline; time the PDF on slow devices | `46d21ec` |
+| F2 | CSV export on the phone: all files in one share sheet | `8b9101e` |
+| F3 | Overview: no ₹0.00 while loading or after a failed load | `e5b30ca` |
+| F5 | Home: no "First login — welcome." line | `5e6afb7` |
+| S5 | Not built. Planned as backup format v2 (scrypt N = 2^17, the parameters in the header); v1 files always stay readable | none |
+| Incident 3 | Left as it is, as decided | none |
+| Playwright browser | `npx playwright install chromium` run: the UI suites use Chromium revision 1228 again | none |
+| F4 | Still NEEDS MY DECISION (options in section 6) | none |
