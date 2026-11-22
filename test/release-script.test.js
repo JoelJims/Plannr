@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { bumpVersions, nextVersionName, testCommands, signingProblem } = require('../release-android');
+const { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile } = require('../release-android');
 
 const ROOT = path.join(__dirname, '..');
 const GRADLE = path.join(ROOT, 'android', 'app', 'build.gradle');
@@ -54,10 +54,50 @@ test('the release runs npm test and every UI suite (except test:slow)', () => {
   assert.ok(!cmds.some((c) => c.includes('test:slow')));
 });
 
+// The key lives outside the project (SETUP.md section 2). keystore.properties' storeFile line points
+// to it with a path relative to the project root. These facts stand in for the real files.
+const KEY_REL = '../../Keys/demo/demo-release.keystore';
+const KEY_ABS = path.resolve(ROOT, KEY_REL);
+const keyFacts = (over) => ({ signed: true, allowUnsigned: false, storeFile: KEY_REL, keyPath: KEY_ABS, keyFound: true, ...over });
+
 test('no release without the signing key, unless --allow-unsigned', () => {
-  assert.strictEqual(signingProblem({ signed: true, allowUnsigned: false }), null);
+  assert.strictEqual(signingProblem(keyFacts()), null);
   assert.match(signingProblem({ signed: false, allowUnsigned: false }), /UNSIGNED/);
   assert.strictEqual(signingProblem({ signed: false, allowUnsigned: true }), null);
+});
+
+test('keystore.properties is there but the key file it points to is missing: stop, and name the path', () => {
+  const problem = signingProblem(keyFacts({ keyFound: false }));
+  assert.ok(problem, 'a missing key file must stop the release');
+  assert.ok(problem.includes(KEY_ABS), `the message names the expected path: ${problem}`);
+  assert.match(problem, /SETUP\.md section 2/);
+  // --allow-unsigned does not help: Gradle still tries to sign with the missing key and fails.
+  assert.ok(signingProblem(keyFacts({ keyFound: false, allowUnsigned: true })));
+});
+
+test('keystore.properties without a storeFile line, or with an absolute one, stops the release', () => {
+  assert.match(signingProblem(keyFacts({ storeFile: null, keyPath: null, keyFound: false })), /storeFile/);
+  // build.gradle joins storeFile to the project root, so an absolute path never reaches the key.
+  for (const abs of ['D:\\Keys\\demo\\demo-release.keystore', '/keys/demo-release.keystore']) {
+    assert.match(signingProblem(keyFacts({ storeFile: abs })), /relative to the project root/, abs);
+  }
+});
+
+test('readStoreFile returns the storeFile value and nothing else from keystore.properties', () => {
+  // The other entries hold the passwords. Their key names are built from parts, and the dummy values
+  // are short, so no secret scanner mistakes this sample for a real file.
+  const pw = (who) => `${who}Pass` + 'word';
+  const text = ['# release signing', '#storeFile=commented/out.keystore', 'storeFileOld=old.keystore',
+    `storeFile = ${KEY_REL}`, `${pw('store')}=abc`, 'keyAlias=alias1', `${pw('key')}=xyz`, ''].join('\r\n');
+  const value = readStoreFile(text);
+  assert.strictEqual(value, KEY_REL);
+  assert.strictEqual(typeof value, 'string');
+  for (const other of ['abc', 'xyz', 'alias1', 'keyAlias', 'old.keystore', 'commented', '\n']) assert.ok(!value.includes(other), other);
+  // The other separators Java's Properties allows, an escaped backslash, and no storeFile at all.
+  assert.strictEqual(readStoreFile('  storeFile: a/b.keystore\n'), 'a/b.keystore');
+  assert.strictEqual(readStoreFile('storeFile ..\\\\k.keystore\n'), '..\\k.keystore');
+  assert.strictEqual(readStoreFile(`keyAlias=demo\n${pw('store')}=abc\n`), null);
+  assert.strictEqual(readStoreFile('storeFile=\n'), null);
 });
 
 test('--dry-run shows the plan and changes nothing', () => {

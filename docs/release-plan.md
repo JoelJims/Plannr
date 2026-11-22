@@ -1,6 +1,8 @@
 # Plan: publishing a public release APK safely
 
-Status: **plan only.** Nothing here changes a signing setting or a signing file. Written 2026-11-22.
+Status: **plan only**, apart from the key's new place: on 2026-11-22 the owner decided to move the
+release key out of the project to `D:\Keys\plannr\` (section 1.2). Nothing else here changes a
+signing setting or a signing file. Written 2026-11-22.
 
 This page is about the first **public** release: an APK anyone can download from a GitHub Release.
 The step-by-step build and install routine for every release is already in
@@ -16,7 +18,7 @@ therefore the app's identity. Lose it and no update can ever be installed over t
 
 ### 1.1 Make one (free, on your own computer)
 
-**First check whether a key already exists** (see "A key may already exist" below). Making a
+**First check whether a key already exists** (see "A key already exists" below). Making a
 second key changes the app's identity. Only if there is none:
 
 A release key costs nothing. `keytool` comes with the Java that Android Studio ships (on Windows
@@ -32,12 +34,12 @@ keytool -genkeypair -v -storetype PKCS12 -keystore plannr-release.keystore \
 - `-validity 10000` is about 27 years. The key must outlive every update you will ever ship.
 - Choose long, random passwords and put them straight into a password manager (1.3).
 
-**A key may already exist.** This laptop may already have `plannr-release.keystore` and
-`keystore.properties` in the project root. Both are git-ignored (`.gitignore`: `*.keystore`,
-`*.jks`, `keystore.properties`). Never open them, print them, paste them anywhere or commit them. To
-check that they are there, list the folder; do not look inside. If a key exists and a release has
-ever been installed on a phone with it, **keep using that key**: a new key cannot update those
-installs.
+**A key already exists.** This laptop has `plannr-release.keystore`, now in `D:\Keys\plannr\`
+(section 1.2), and `keystore.properties` in the project root. Both file types stay git-ignored
+(`.gitignore`: `*.keystore`, `*.jks`, `keystore.properties`). Never open them, print them, paste
+them anywhere or commit them. To check that they are there, list the folder; do not look inside.
+If a release has ever been installed on a phone with that key, **keep using it**: a new key cannot
+update those installs.
 
 ### 1.2 Where to keep it
 
@@ -49,12 +51,18 @@ installs.
   root and joins its `storeFile` value to the project root (`new File(projectRootDir, ...)` in the
   `signingConfigs.release` block). `SETUP.md` §2 describes the file's four entries (the store file,
   the alias, and the two password lines).
-- Today `SETUP.md` §2 puts the key in the project root, where `.gitignore` keeps it out of git. That
-  works, but the key then lives inside the project folder. A safer place is a folder of its own on
-  the same drive, outside the project, for example `D:/plannr-keys/`, with `storeFile` written as a
-  path relative to the project root (for example `../../plannr-keys/plannr-release.keystore` for a
-  checkout at `D:/Projects/Plannr`). Moving the key is the owner's choice and is not done by this
-  plan. After any change, build once and print the certificate with `apksigner verify --print-certs <the APK>` (in the Android SDK's `build-tools\<version>\`
+- **Where it is now (owner decision, 2026-11-22):** the key is in `D:\Keys\plannr\`, a folder of
+  its own outside the project and outside git. `keystore.properties` stays in the project root
+  (git-ignored), and its `storeFile` line is the path relative to the project root:
+  `../../Keys/plannr/plannr-release.keystore` for a checkout at `D:\Projects\Plannr`. It has to be
+  relative because `build.gradle` joins it to the project root; an absolute `D:\...` path does not
+  work there. Gradle's `signingReport` confirmed that it opens the key at the new place.
+  `npm run release:android` checks that the key file is there before it builds (it reads only the
+  `storeFile` line) and stops, naming the path, if it is not.
+- `.gitignore` still blocks key files (`*.keystore`, `*.jks`, `*.p12`, `*.pem`,
+  `keystore.properties`), so a copy put back into the project by mistake still cannot be
+  committed. `test/release-guards.test.js` checks this.
+- After any change to where the key is, build once and print the certificate with `apksigner verify --print-certs <the APK>` (in the Android SDK's `build-tools\<version>\`
   folder): it must print the same
   certificate SHA-256 as before. (`keytool -printcert -jarfile`, used in `docs/RELEASE.md` §2, reads
   only the old v1 signature. With `minSdkVersion` 24 the build may sign with v2/v3 only, and then it
@@ -63,9 +71,11 @@ installs.
 
 ### 1.3 Back it up
 
+- The copy in `D:\Keys\plannr\` is the working copy on the laptop's disk, not a backup.
 - **Two offline copies** of `plannr-release.keystore`, for example on two USB sticks kept in two
-  different places. Check that each copy opens: `keytool -list -keystore <copy>` asks for the store
-  password and lists the key's entry (its alias).
+  different places. If only one backup copy exists today, make the second one now. Check that each
+  copy opens: `keytool -list -keystore <copy>` asks for the store password and lists the key's entry
+  (its alias).
 - **Both passwords and the alias in a password manager.** A key without its passwords is as lost as
   no key.
 - Write down the certificate's SHA-256 fingerprint (printed by `apksigner verify --print-certs` on
@@ -174,10 +184,12 @@ section 5 is done.
 
 - [ ] All work for this release is merged into `main`, and CI is green on `main`.
 - [ ] `CHANGELOG.md` has an entry for this version (moved out of "In review" / "Merged into main").
-- [ ] The release key and `keystore.properties` are present, git-ignored and not staged
-      (`git status` shows neither).
+- [ ] The release key is at `D:\Keys\plannr\plannr-release.keystore`, `keystore.properties` is in
+      the project root, and neither is staged (`git status` shows neither).
+- [ ] Two offline backup copies of the key exist, and both passwords and the alias are in a
+      password manager (section 1.3).
 - [ ] `npm run release:android -- --dry-run` shows the expected `versionCode` (+1) and
-      `versionName`, and "Signing: release key".
+      `versionName`, and "Signing: release key at D:\Keys\plannr\plannr-release.keystore".
 - [ ] `npm run release:android` (with `--version-name` if needed) finished: every test passed and
       the APK was built.
 - [ ] `apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk` prints the

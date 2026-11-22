@@ -63,19 +63,38 @@ which means the very first build needs an internet connection.
 ## 2. Files that do not come from the repository
 
 These are deliberately kept out of version control. `git clone` will not give you them;
-they have to be copied across by hand into the **project root**, next to `package.json`:
+they have to be copied across by hand. The key lives **outside the project**, in a folder of
+its own; only its properties file goes into the **project root**, next to `package.json`:
 
 | File | What it is | Where it goes |
 |---|---|---|
-| `plannr-release.keystore` | The signing key for release builds. | project root |
-| `keystore.properties` | Its passwords and alias. Four entries: `storeFile` (= `plannr-release.keystore`, relative to the project root), `storePassword`, `keyAlias`, `keyPassword`. | project root |
+| `plannr-release.keystore` | The signing key for release builds. | `D:\Keys\plannr\` — outside the project folder and outside git |
+| `keystore.properties` | Where the key is, its alias and its two passwords. Four entries: `storeFile`, the store password line, `keyAlias`, and the key password line. | project root (git-ignored) |
+
+**The `storeFile` line must be a path relative to the project root.** For a checkout at
+`D:\Projects\Plannr` it reads `storeFile=../../Keys/plannr/plannr-release.keystore` (two folders
+up from the project root is `D:\`). `android/app/build.gradle` joins this value to the project
+root (`new File(projectRootDir, storeFile)`), so an absolute path such as `D:\Keys\...` does
+**not** work. If you check the project out somewhere else, change the relative path so it still
+reaches `D:\Keys\plannr\plannr-release.keystore`.
+
+`npm run release:android` checks both files before it changes anything. It reads only the
+`storeFile` line, resolves it against the project root, prints that path on its "Signing:" line,
+and stops (naming the path it expected) if no key file is there.
+
+`.gitignore` still blocks key files even though the key no longer lives in the project:
+`*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`. A copy dropped into the
+project by mistake still cannot be committed. `test/release-guards.test.js` fails if those
+lines go or if such a file is ever tracked.
 
 > ### A missing keystore fails *silently*
 >
 > The build reads `keystore.properties` only if it is there — deliberately, so a fresh
 > checkout with no key can still produce debug builds. If the file is absent,
 > `assembleRelease` **does not fail**. It produces an **unsigned** release APK and says
-> nothing about it. You find out when the phone refuses the install.
+> nothing about it. You find out when the phone refuses the install. (If the file is there
+> but the key is not where `storeFile` says, Gradle does fail. `npm run release:android`
+> catches both cases before it builds anything.)
 >
 > So check, rather than assume, after your first release build:
 >
@@ -91,8 +110,11 @@ they have to be copied across by hand into the **project root**, next to `packag
 > Android refuses to upgrade an installed app with an APK signed by a different key
 > (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). The only way past it is to uninstall first —
 > **which destroys the database on the phone**, because Plannr's storage belongs to the
-> app itself. There is no copy of it anywhere else. Back the keystore up somewhere you
-> will still have it in five years, and take an encrypted backup from inside the app
+> app itself. There is no copy of it anywhere else. The copy in `D:\Keys\plannr\` is the
+> working copy, not a backup. Keep **two offline backup copies** of the keystore (for
+> example two USB sticks kept in different places; make the second one if only one
+> exists), and keep **both passwords and the alias in a password manager**: a key without
+> its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
 
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
@@ -265,7 +287,9 @@ live-database rule in section 3.2 first).
 
 ```sh
 git clone <repo> && cd Plannr
-# copy plannr-release.keystore + keystore.properties into this directory by hand
+# by hand, from your offline backup (section 2):
+#   plannr-release.keystore -> D:\Keys\plannr\   (outside the project; create the folder)
+#   keystore.properties     -> this directory    (storeFile = the key's path relative to here)
 npm ci
 npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs

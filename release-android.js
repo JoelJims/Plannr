@@ -16,6 +16,9 @@
 //         npm run release:android -- --dry-run           show what would happen; change nothing
 // Without keystore.properties it stops before doing anything: an unsigned APK cannot be installed
 // over the app on the phone (add --allow-unsigned to build one anyway, e.g. to test the build).
+// The key itself lives outside the project (SETUP.md section 2); keystore.properties' storeFile line
+// points to it with a path relative to the project root. If no key file is there, it also stops
+// before doing anything. From keystore.properties it reads only that storeFile line.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -56,10 +59,58 @@ function bumpVersions(gradleText, { versionName } = {}) {
   return { text, from: { code, name }, to };
 }
 
-// Why a release must not go ahead, or null. An unsigned release APK cannot update the installed app.
-function signingProblem({ signed, allowUnsigned }) {
-  if (signed || allowUnsigned) return null;
-  return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
+// The storeFile value from the text of keystore.properties, or null if there is none. That file also
+// holds the passwords, so this reads ONLY the storeFile key: no other line or value is returned, kept
+// or printed. It follows Java's Properties rules that this file can use (Gradle reads it with
+// Properties.load): comment lines start with # or !, the key ends at "=", ":" or a space, a
+// backslash escapes the next character, and the last storeFile line wins. Not handled: a value
+// split over several lines with a trailing backslash.
+function readStoreFile(propertiesText) {
+  let value = null;
+  for (const raw of String(propertiesText).split(/\r\n|\r|\n/)) {
+    const line = raw.replace(/^[ \t\f]+/, '');
+    if (line.startsWith('#') || line.startsWith('!')) continue;
+    const m = /^storeFile(?:[ \t\f]*[=:]|[ \t\f])[ \t\f]*(.*)$/.exec(line);
+    if (!m) continue;
+    const unescaped = m[1].replace(/\\u([0-9a-fA-F]{4})|\\(.)/g, (_, hex, c) =>
+      hex ? String.fromCharCode(parseInt(hex, 16)) : ({ t: '\t', n: '\n', r: '\r', f: '\f' }[c] ?? c));
+    value = unescaped.trim() || null;
+  }
+  return value;
+}
+
+// Why a release must not go ahead, or null. The facts are passed in, so this can be tested without
+// the real files:
+//   signed        keystore.properties exists in the project root;
+//   storeFile     its storeFile value (readStoreFile), or null;
+//   keyPath       storeFile resolved against the project root;
+//   keyFound      a file exists at keyPath;
+//   allowUnsigned --allow-unsigned was given.
+// An unsigned release APK cannot update the installed app, and a keystore.properties that points to
+// a missing key makes the Gradle build fail after the version bump.
+function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound }) {
+  if (!signed) {
+    if (allowUnsigned) return null;
+    return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
+  }
+  // From here on keystore.properties exists, so Gradle WILL try to sign: --allow-unsigned cannot help.
+  if (!storeFile) return 'keystore.properties has no storeFile line, so Gradle cannot find the release key. See SETUP.md section 2.';
+  if (path.win32.isAbsolute(storeFile) || path.posix.isAbsolute(storeFile)) {
+    return 'The storeFile line in keystore.properties must be a path relative to the project root (android/app/build.gradle joins it to the project root), not an absolute path. See SETUP.md section 2.';
+  }
+  if (!keyFound) return `The release key is missing: keystore.properties points to ${keyPath} (its storeFile line, relative to the project root), but there is no file there. Put the key back there or correct the storeFile line. See SETUP.md section 2.`;
+  return null;
+}
+
+// Where keystore.properties says the key is, and whether it is there. Reads only the storeFile line.
+function signingFacts(root) {
+  const propsFile = path.join(root, 'keystore.properties');
+  const signed = fs.existsSync(propsFile);
+  // latin1: the encoding Java's Properties.load uses for this file.
+  const storeFile = signed ? readStoreFile(fs.readFileSync(propsFile, 'latin1')) : null;
+  const keyPath = storeFile ? path.resolve(root, storeFile) : null;
+  const keyFound = keyPath ? Boolean(fs.statSync(keyPath, { throwIfNoEntry: false })?.isFile()) : false;
+  return { signed, storeFile, keyPath, keyFound };
 }
 
 function run(cmd, args, opts = {}) {
@@ -77,12 +128,15 @@ function main(argv) {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const original = fs.readFileSync(GRADLE_FILE, 'utf8');
   const bump = bumpVersions(original, { versionName });
-  const signed = fs.existsSync(path.join(ROOT, 'keystore.properties'));
+  const facts = signingFacts(ROOT);
+  const { signed } = facts;
   const tests = testCommands(pkg);
 
   console.log(`Plannr Android release: versionCode ${bump.from.code} -> ${bump.to.code}, versionName ${bump.from.name} -> ${bump.to.name}`);
-  console.log(signed ? 'Signing: release key (keystore.properties found).' : 'Signing: keystore.properties NOT found.');
-  const problem = signingProblem({ signed, allowUnsigned: argv.includes('--allow-unsigned') });
+  if (!signed) console.log('Signing: keystore.properties NOT found.');
+  else if (facts.keyFound) console.log(`Signing: release key at ${facts.keyPath} (keystore.properties found).`);
+  else console.log(`Signing: keystore.properties found, but the release key is MISSING${facts.keyPath ? ` at ${facts.keyPath}` : ''}.`);
+  const problem = signingProblem({ ...facts, allowUnsigned: argv.includes('--allow-unsigned') });
   if (dryRun) {
     if (problem) console.log(`Would stop: ${problem}`);
     console.log('\nDry run — would run, in order:');
@@ -117,7 +171,7 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem };
+module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile };
 if (require.main === module) {
   try { process.exit(main(process.argv.slice(2))); } catch (e) { console.error(`release:android: ${e.message}`); process.exit(1); }
 }

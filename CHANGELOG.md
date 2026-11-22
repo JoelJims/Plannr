@@ -33,6 +33,11 @@ Fixes from the security and quality review of 2026-11-21
 ### Tools
 - `scripts/phone-test.ps1` waits until Home has settled before its offline check, waits up to
   90 s for the PDF's share sheet and reports how long the PDF took.
+- **The release key lives outside the project**, in `D:\Keys\plannr\` (`SETUP.md` §2).
+  `keystore.properties` stays in the project root and points to it with a relative `storeFile`
+  path. `npm run release:android` now also checks that the key file is there before it builds,
+  shows its path on the "Signing:" line, and stops, naming the path, if it is missing. It reads
+  only the `storeFile` line of `keystore.properties`.
 
 ## Merged into `main` — Phase 2 (branch `plannr-phase2`, pull requests #1 and #2)
 
