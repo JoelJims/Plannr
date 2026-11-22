@@ -3,8 +3,8 @@
 // "left" (and "over") always compares the WHOLE project's spend with the budget, on the screen and
 // in the PDF, and says so: "₹X left of total budget" / "₹X over total budget". The budget line's
 // "Spent" is the same whole-project figure, so the line adds up (budget − spent = left); with a range
-// set it says "Spent ₹X in total". The range figures (B, C, D) are unchanged and stay in the figure
-// cards. Runs on both test passes (desktop and phone code).
+// set it says "Spent ₹X in total", and so does the no-budget line, as on the screen. The range figures
+// (B, C, D) are unchanged and stay in the figure cards. Runs on both test passes (desktop and phone code).
 const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
@@ -102,4 +102,49 @@ test('F4 (b): the PDF with no range keeps its budget line as before ("Spent", no
   setBudget(1000000);
   const over = budgetLine(await H.pdfHtml({ part: 'full' }));
   assert.strictEqual(over.text, 'Budget ₹10,000.00 · Spent ₹15,000.00 · ₹5,000.00 over total budget.');
+});
+
+// The PDF's budget block exactly as it is in the HTML: the heading and its one paragraph. With a
+// budget the heading is "Budget vs actual"; with none it is "Budget" and the line is muted.
+function budgetBlock(html) {
+  const m = /<h2>Budget(?: vs actual)?<\/h2><p[^>]*>[\s\S]*?<\/p>/.exec(html);
+  assert.ok(m, 'the PDF has a budget block');
+  return m[0];
+}
+// As after "Clear" on the Overview: the settings row stays, with no value.
+const clearBudget = () => H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL").run();
+// With no budget and a range set, the screen shows "No budget set" and, under the bar, the whole
+// project's spend: "Spent ₹15,000.00 in total" (public/overview.html, renderTotalBar). The PDF says
+// the same. With no range the line is the one the PDF has always printed.
+const NO_BUDGET_RANGED = '<h2>Budget</h2><p class="muted">No budget set. Spent <b>₹15,000.00</b> in total.</p>';
+const NO_BUDGET_ALL = '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>₹15,000.00</b>.</p>';
+
+test('F4 (b): the PDF with no budget and a range set shows the whole project\'s spend, like the screen', async () => {
+  seedSpend(); // no budget: beforeEach removed the settings row
+  const ranged = budgetBlock(await H.pdfHtml({ part: 'full', range: JULY }));
+  assert.strictEqual(ranged, NO_BUDGET_RANGED, 'not the range\'s "Total spent (D): ₹7,000.00"');
+  assert.strictEqual(budgetBlock(await H.pdfHtml({ part: 'full' })), NO_BUDGET_ALL, 'with no range the line is unchanged, byte for byte');
+});
+
+test('F4 (b): the PDF exactly at budget says "₹0.00 left of total budget", not "over"', async () => {
+  seedSpend();
+  setBudget(1500000); // ₹15,000 budget = the whole project's ₹15,000
+  const ranged = budgetLine(await H.pdfHtml({ part: 'full', range: JULY }));
+  assert.strictEqual(ranged.text, 'Budget ₹15,000.00 · Spent ₹15,000.00 in total · ₹0.00 left of total budget.');
+  const all = budgetLine(await H.pdfHtml({ part: 'full' }));
+  assert.strictEqual(all.text, 'Budget ₹15,000.00 · Spent ₹15,000.00 · ₹0.00 left of total budget.');
+});
+
+test('F4 (b): a budget of 0 counts as no budget, in the API and in the PDF (with and without a range)', async () => {
+  seedSpend();
+  setBudget(0); // getBudgetPaise (core/routes/budget.js) turns 0 or less into "no budget"
+  assert.strictEqual((await H.get('/api/budget', { cookie })).json.budgetPaise, null, '/api/budget: no budget');
+  const api = await H.get(`/api/overview?start=${JULY.start}&end=${JULY.end}`, { cookie });
+  assert.strictEqual(api.status, 200);
+  assert.strictEqual(api.json.budgetPaise, null, '/api/overview: no budget');
+  assert.strictEqual(budgetBlock(await H.pdfHtml({ part: 'full', range: JULY })), NO_BUDGET_RANGED, 'July range: the no-budget line');
+  assert.strictEqual(budgetBlock(await H.pdfHtml({ part: 'full' })), NO_BUDGET_ALL, 'no range: the no-budget line');
+  clearBudget(); // and the same as a cleared budget
+  assert.strictEqual(budgetBlock(await H.pdfHtml({ part: 'full', range: JULY })), NO_BUDGET_RANGED, 'cleared budget, July range');
+  assert.strictEqual(budgetBlock(await H.pdfHtml({ part: 'full' })), NO_BUDGET_ALL, 'cleared budget, no range');
 });

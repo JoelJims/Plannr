@@ -189,12 +189,14 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       // The fill and the marker are absolutely positioned in the track, so their % is of the track's
       // inner box: clientWidth wide, starting clientLeft (the border) in from its left edge.
       const innerLeft = track.getBoundingClientRect().left + track.clientLeft, w = track.clientWidth;
+      // The marker counts as shown only if it is actually drawn (not display: none), not by its attribute.
+      const markerShown = getComputedStyle(marker).display !== 'none';
       return {
         figD: $('figD').textContent.trim(),
         spent: $('ovBarSpent').textContent.trim(),
         label: $('ovBarBudget').textContent.trim(),
         fill: fill.getBoundingClientRect().width / w,
-        marker: marker.hidden ? null : (marker.getBoundingClientRect().left - innerLeft) / w,
+        marker: markerShown ? (marker.getBoundingClientRect().left - innerLeft) / w : null,
         overClass: fill.classList.contains('over'),
         colour: getComputedStyle(fill).backgroundImage,
       };
@@ -238,6 +240,48 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     const all = await bar();
     check('F4 (b), no range, over budget: the bar is as before (full, amber, "Spent ₹15,000.00", "₹5,000.00 over total budget")',
       agrees(all, 1000000) && all.overClass && all.spent === 'Spent ₹15,000.00' && all.label === '₹5,000.00 over total budget · Budget ₹10,000.00', show(all));
+
+    // ---- Edge cases. These agree today; the checks pin them. Each step changes something the wait
+    // can see (card D, the caption or the label), so a check never reads the step before it.
+    // Exactly at budget (July range): the fill is full, but it is NOT "over": no amber, "₹0.00 left".
+    setBudget(WHOLE);
+    await applyJuly();
+    await settled('₹7,000.00', '₹15,000.00');
+    const at = await bar();
+    check('F4 (b), July range, exactly at budget: the bar is full but not "over" (no over class, not amber), "₹0.00 left of total budget"',
+      agrees(at, WHOLE) && Math.abs(at.fill - 1) <= 0.01 && !at.overClass && !at.colour.includes(AMBER)
+        && at.label === '₹0.00 left of total budget · Budget ₹15,000.00' && at.spent === 'Spent ₹15,000.00 in total', show(at));
+
+    // No budget: no marker, "No budget set", never amber, and the caption still shows the whole
+    // project's spend (with a range set, "in total"). The PDF says the same (test/f4-budget-left.test.js).
+    const clearBudget = () => H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL").run();
+    const settledNoBudget = (figD, spent) => pR.waitForFunction(([d, s]) => document.getElementById('figD').textContent.trim() === d
+      && document.getElementById('ovBarSpent').textContent.trim() === s
+      && document.getElementById('ovBarBudget').textContent.trim() === 'No budget set', [figD, spent], { timeout: 15000 }).catch(() => {});
+    const noBudgetOk = (b, figD, spent) => b.marker == null && b.label === 'No budget set' && b.spent === spent && b.figD === figD
+      && !b.overClass && !b.colour.includes(AMBER);
+    clearBudget();
+    await applyJuly();
+    await settledNoBudget('₹7,000.00', 'Spent ₹15,000.00 in total'); // the label was "… Budget ₹15,000.00"
+    const nob = await bar();
+    check('F4 (b), July range, no budget: no marker, "No budget set", caption "Spent ₹15,000.00 in total", not amber; card D keeps ₹7,000.00',
+      noBudgetOk(nob, '₹7,000.00', 'Spent ₹15,000.00 in total'), show(nob));
+
+    // A budget of 0 behaves like no budget (getBudgetPaise in core/routes/budget.js turns 0 or less
+    // into "no budget"). A fresh load first (no range: the caption goes from "Spent …" to the figure),
+    // then the July range (card D and the caption change).
+    setBudget(0);
+    await pR.goto(base + '/overview', { waitUntil: 'networkidle' });
+    await settledNoBudget('₹15,000.00', 'Spent ₹15,000.00');
+    const zero = await bar();
+    const zeroBox = await pR.inputValue('#budgetInput');
+    check('F4 (b), budget 0, no range: like no budget (no marker, "No budget set", "Spent ₹15,000.00", not amber, empty budget box)',
+      noBudgetOk(zero, '₹15,000.00', 'Spent ₹15,000.00') && zeroBox === '', `${show(zero)} | budget box "${zeroBox}"`);
+    await applyJuly();
+    await settledNoBudget('₹7,000.00', 'Spent ₹15,000.00 in total');
+    const zeroJuly = await bar();
+    check('F4 (b), budget 0, July range: like no budget (no marker, "No budget set", "Spent ₹15,000.00 in total", not amber)',
+      noBudgetOk(zeroJuly, '₹7,000.00', 'Spent ₹15,000.00 in total'), show(zeroJuly));
     await ctxR.close();
   }
 
