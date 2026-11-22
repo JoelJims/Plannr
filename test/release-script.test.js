@@ -200,13 +200,14 @@ test('a keystore.properties saved as UTF-16 gets its own message', (t) => {
 });
 
 // Runs a copy of release-android.js with --dry-run in <tmp>/proj, next to a small package.json, the
-// sample build.gradle and the given keystore.properties. Returns what it printed.
+// sample build.gradle and the given keystore.properties (none for null). Returns what it printed.
 function dryRunIn({ proj, props }, propsContent) {
   fs.copyFileSync(path.join(ROOT, 'release-android.js'), path.join(proj, 'release-android.js'));
   fs.writeFileSync(path.join(proj, 'package.json'), JSON.stringify({ scripts: { test: 'node run-tests.js' } }));
   fs.mkdirSync(path.join(proj, 'android', 'app'), { recursive: true });
   fs.writeFileSync(path.join(proj, 'android', 'app', 'build.gradle'), sample);
-  fs.writeFileSync(props, propsContent);
+  if (propsContent === null) fs.rmSync(props, { force: true });
+  else fs.writeFileSync(props, propsContent);
   const r = spawnSync(process.execPath, ['release-android.js', '--dry-run'], { cwd: proj, encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
   return r.stdout;
@@ -234,12 +235,42 @@ test('the Signing: line names the key only when the release can go ahead', (t) =
   assert.match(missing, /^Signing: NOT ready/m);
 });
 
-test('--dry-run shows the plan and changes nothing', () => {
+// A dry run that would stop must say it stops there, and must not then list the tests, the version
+// bump, the sync and the build as if they would still run.
+test('a dry run that would stop says so and lists no step after the stop', (t) => {
+  const p = tempProject(t);
+  fs.writeFileSync(p.keyPath, 'stand-in, not a real key');
+  const steps = ['would run, in order', 'npm test', '(write the new versions', 'npm run android:sync', 'assembleRelease'];
+
+  const ready = dryRunIn(p, 'storeFile=../keys/demo.keystore\n');
+  for (const step of steps) assert.ok(ready.includes(step), `ready: ${step}\n${ready}`);
+  assert.doesNotMatch(ready, /would stop/i);
+
+  const absolute = p.keyPath.split(path.sep).join('/'); // a real file, but refused
+  const refused = dryRunIn(p, `storeFile=${absolute}\n`);
+  const unsigned = dryRunIn(p, null);
+  fs.rmSync(p.keyPath);
+  const missing = dryRunIn(p, 'storeFile=../keys/demo.keystore\n');
+  for (const [label, out] of [['refused', refused], ['unsigned', unsigned], ['missing key', missing]]) {
+    assert.match(out, /^Would stop: /m, label);
+    assert.match(out, /^Dry run: the release would stop here, before the tests\. Nothing after this would run/m, `${label}\n${out}`);
+    for (const step of steps) assert.ok(!out.includes(step), `${label}: "${step}" listed after the stop\n${out}`);
+    assert.match(out, /Nothing was changed\./, label);
+  }
+});
+
+// The real script on the real project. Whether it would stop depends on this checkout's
+// keystore.properties and key, which the test does not control (CI and a fresh clone have neither;
+// with --allow-unsigned they show the plan). So it checks what holds either way; the test above
+// checks both outcomes with files it controls.
+test('--dry-run on the real project changes nothing, and shows either the plan or the stop', () => {
   const before = fs.readFileSync(GRADLE, 'utf8');
-  const r = spawnSync(process.execPath, ['release-android.js', '--dry-run'], { cwd: ROOT, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['release-android.js', '--dry-run', '--allow-unsigned'], { cwd: ROOT, encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(r.stdout, /versionCode \d+ -> \d+/);
-  assert.match(r.stdout, /npm run android:sync/);
+  const plan = /would run, in order:/.test(r.stdout);
+  assert.notStrictEqual(plan, /would stop here/.test(r.stdout), `exactly one of the plan and the stop:\n${r.stdout}`);
+  assert.strictEqual(/npm run android:sync/.test(r.stdout), plan, r.stdout);
   assert.match(r.stdout, /Nothing was changed/);
   assert.strictEqual(fs.readFileSync(GRADLE, 'utf8'), before);
 });

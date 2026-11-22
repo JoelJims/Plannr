@@ -42,7 +42,7 @@ when the key is ready to use; otherwise it says "NOT ready" and the reason follo
 offline backup copies of the key and both passwords in a password manager (`SETUP.md` §2).
 
 ```sh
-npm run release:android -- --dry-run   # shows the version bump and the steps; changes nothing
+npm run release:android -- --dry-run   # shows the version bump and the steps (or why it would stop); changes nothing
 npm run release:android                # or: npm run release:android -- --version-name 1.1.0
 ```
 

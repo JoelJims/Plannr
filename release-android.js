@@ -169,13 +169,20 @@ function main(argv) {
   console.log(`Plannr Android release: versionCode ${bump.from.code} -> ${bump.to.code}, versionName ${bump.from.name} -> ${bump.to.name}`);
   const problem = signingProblem({ ...facts, allowUnsigned: argv.includes('--allow-unsigned') });
   console.log(signingLine(facts, problem));
+  // A dry run exits 0 either way: it only reports. The real-project dry run in
+  // test/release-script.test.js runs in every checkout, with or without keystore.properties and a key.
   if (dryRun) {
-    if (problem) console.log(`Would stop: ${problem}`);
-    console.log('\nDry run — would run, in order:');
-    for (const [c, a] of tests) console.log(`  ${c} ${a.join(' ')}`);
-    console.log('  (write the new versions to android/app/build.gradle)');
-    console.log('  npm run android:sync');
-    console.log(`  android/${process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'} assembleRelease`);
+    if (problem) {
+      // The real run stops here, so no step after this point is listed.
+      console.log(`Would stop: ${problem}`);
+      console.log('\nDry run: the release would stop here, before the tests. Nothing after this would run: no tests, no version bump, no sync, no build.');
+    } else {
+      console.log('\nDry run — would run, in order:');
+      for (const [c, a] of tests) console.log(`  ${c} ${a.join(' ')}`);
+      console.log('  (write the new versions to android/app/build.gradle)');
+      console.log('  npm run android:sync');
+      console.log(`  android/${process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'} assembleRelease`);
+    }
     console.log('Nothing was changed.');
     return 0;
   }
