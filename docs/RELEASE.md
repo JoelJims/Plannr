@@ -32,7 +32,10 @@ Always update a phone with the same kind of build it already has.
 You need the key at `D:\Keys\plannr\plannr-release.keystore` and `keystore.properties` in the
 project root, with its `storeFile` line set to the key's path relative to the project root
 (`../../Keys/plannr/plannr-release.keystore` for a checkout at `D:\Projects\Plannr`; see
-`SETUP.md` §2). Without `keystore.properties` the release APK would be **unsigned** and the phone
+`SETUP.md` §2). The key folder must be on the **same drive** as the project, because a relative
+path cannot change drive and an absolute path does not work. On a PC with only `C:`, use
+`C:\Keys\plannr\` and a checkout under `C:\` (at `C:\Projects\Plannr` the `storeFile` line stays
+the same). Without `keystore.properties` the release APK would be **unsigned** and the phone
 would refuse it; without the key file the Gradle build fails. In both cases
 `npm run release:android` stops before changing anything. Its "Signing:" line shows the key path
 it found. Keep two offline backup copies of the key and both passwords in a password manager

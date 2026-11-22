@@ -37,7 +37,9 @@ Fixes from the security and quality review of 2026-11-21
   `keystore.properties` stays in the project root and points to it with a relative `storeFile`
   path. `npm run release:android` now also checks that the key file is there before it builds,
   shows its path on the "Signing:" line, and stops, naming the path, if it is missing. It reads
-  only the `storeFile` line of `keystore.properties`.
+  only the `storeFile` line of `keystore.properties`. The key folder must be on the same drive
+  as the project (`C:\Keys\plannr\` on a PC with only `C:`); an absolute `storeFile` line, or one
+  that starts with a drive letter, is refused.
 - **Version names (decided).** The first public `versionName` is `1.0.0`; `versionCode` keeps
   going up by 1 per published build. `npm run release:android` now turns `1.0` into `1.0.0`
   (before: `1.1`), then bumps the last number (`1.0.0` → `1.0.1`).

@@ -68,19 +68,27 @@ its own; only its properties file goes into the **project root**, next to `packa
 
 | File | What it is | Where it goes |
 |---|---|---|
-| `plannr-release.keystore` | The signing key for release builds. | `D:\Keys\plannr\` — outside the project folder and outside git |
+| `plannr-release.keystore` | The signing key for release builds. | `D:\Keys\plannr\` — outside the project folder and outside git, on the same drive as the project (on a PC with only `C:`, use `C:\Keys\plannr\`) |
 | `keystore.properties` | Where the key is, its alias and its two passwords. Four entries: `storeFile`, the store password line, `keyAlias`, and the key password line. | project root (git-ignored) |
 
 **The `storeFile` line must be a path relative to the project root.** For a checkout at
 `D:\Projects\Plannr` it reads `storeFile=../../Keys/plannr/plannr-release.keystore` (two folders
 up from the project root is `D:\`). `android/app/build.gradle` joins this value to the project
 root (`new File(projectRootDir, storeFile)`), so an absolute path such as `D:\Keys\...` does
-**not** work. If you check the project out somewhere else, change the relative path so it still
-reaches `D:\Keys\plannr\plannr-release.keystore`.
+**not** work.
+
+**So the key folder must be on the same drive as the project.** A relative path cannot change
+drive: from a checkout on `C:` no relative path reaches `D:\Keys\plannr\`. On a PC with only
+`C:` (a typical laptop), put the key in `C:\Keys\plannr\` and the project under `C:\`, for
+example `C:\Projects\Plannr`. Then the line stays exactly the same,
+`storeFile=../../Keys/plannr/plannr-release.keystore`, because the key is again two folders up
+from the project root. If the project is somewhere else on that drive, change the number of
+`../` so the path still reaches `Keys\plannr\plannr-release.keystore` on that drive.
 
 `npm run release:android` checks both files before it changes anything. It reads only the
 `storeFile` line, resolves it against the project root, prints that path on its "Signing:" line,
-and stops (naming the path it expected) if no key file is there.
+and stops (naming the path it expected) if no key file is there. It also stops if the line is an
+absolute path or starts with a drive letter.
 
 `.gitignore` still blocks key files even though the key no longer lives in the project:
 `*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`. A copy dropped into the
@@ -286,10 +294,12 @@ live-database rule in section 3.2 first).
 ## 8. Quick reference — a fresh machine, start to finish
 
 ```sh
-git clone <repo> && cd Plannr
+git clone <repo> && cd Plannr               # e.g. in D:\Projects\ (C:\Projects\ on a C:-only PC)
 # by hand, from your offline backup (section 2):
-#   plannr-release.keystore -> D:\Keys\plannr\   (outside the project; create the folder)
-#   keystore.properties     -> this directory    (storeFile = the key's path relative to here)
+#   plannr-release.keystore -> D:\Keys\plannr\   (outside the project; create the folder;
+#                              same drive as the project, so C:\Keys\plannr\ on a C:-only PC)
+#   keystore.properties     -> this directory    (storeFile = the key's path relative to here,
+#                              ../../Keys/plannr/plannr-release.keystore for <drive>:\Projects\Plannr)
 npm ci
 npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs

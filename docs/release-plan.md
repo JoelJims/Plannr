@@ -56,7 +56,9 @@ update those installs.
   (git-ignored), and its `storeFile` line is the path relative to the project root:
   `../../Keys/plannr/plannr-release.keystore` for a checkout at `D:\Projects\Plannr`. It has to be
   relative because `build.gradle` joins it to the project root; an absolute `D:\...` path does not
-  work there. Gradle's `signingReport` confirmed that it opens the key at the new place.
+  work there. A relative path cannot change drive, so the key folder must be on the same drive as
+  the project: on a PC with only `C:`, use `C:\Keys\plannr\` and a checkout under `C:\`
+  (`SETUP.md` §2). Gradle's `signingReport` confirmed that it opens the key at the new place.
   `npm run release:android` checks that the key file is there before it builds (it reads only the
   `storeFile` line) and stops, naming the path, if it is not.
 - `.gitignore` still blocks key files (`*.keystore`, `*.jks`, `*.p12`, `*.pem`,

@@ -19,8 +19,9 @@
 // Without keystore.properties it stops before doing anything: an unsigned APK cannot be installed
 // over the app on the phone (add --allow-unsigned to build one anyway, e.g. to test the build).
 // The key itself lives outside the project (SETUP.md section 2); keystore.properties' storeFile line
-// points to it with a path relative to the project root. If no key file is there, it also stops
-// before doing anything. From keystore.properties it reads only that storeFile line.
+// points to it with a path relative to the project root, so the key folder must be on the same drive
+// as the project. If no key file is there, it also stops before doing anything. From
+// keystore.properties it reads only that storeFile line.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -101,8 +102,10 @@ function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound })
   }
   // From here on keystore.properties exists, so Gradle WILL try to sign: --allow-unsigned cannot help.
   if (!storeFile) return 'keystore.properties has no storeFile line, so Gradle cannot find the release key. See SETUP.md section 2.';
-  if (path.win32.isAbsolute(storeFile) || path.posix.isAbsolute(storeFile)) {
-    return 'The storeFile line in keystore.properties must be a path relative to the project root (android/app/build.gradle joins it to the project root), not an absolute path. See SETUP.md section 2.';
+  // A drive letter with no slash after it ("C:Keys\...") is not absolute, but it is not relative to
+  // the project root either, so it is refused too.
+  if (path.win32.isAbsolute(storeFile) || path.posix.isAbsolute(storeFile) || /^[A-Za-z]:/.test(storeFile)) {
+    return 'The storeFile line in keystore.properties must be a path relative to the project root, with no drive letter (android/app/build.gradle joins it to the project root, so an absolute path never reaches the key). A relative path cannot change drive, so the key folder must be on the same drive as the project: on a PC with only C:, keep the key in C:\\Keys\\plannr\\ and the project under C:\\. See SETUP.md section 2.';
   }
   if (!keyFound) return `The release key is missing: keystore.properties points to ${keyPath} (its storeFile line, relative to the project root), but there is no file there. Put the key back there or correct the storeFile line. See SETUP.md section 2.`;
   return null;

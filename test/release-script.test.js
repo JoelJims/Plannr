@@ -83,9 +83,15 @@ test('keystore.properties is there but the key file it points to is missing: sto
 
 test('keystore.properties without a storeFile line, or with an absolute one, stops the release', () => {
   assert.match(signingProblem(keyFacts({ storeFile: null, keyPath: null, keyFound: false })), /storeFile/);
-  // build.gradle joins storeFile to the project root, so an absolute path never reaches the key.
-  for (const abs of ['D:\\Keys\\demo\\demo-release.keystore', '/keys/demo-release.keystore']) {
-    assert.match(signingProblem(keyFacts({ storeFile: abs })), /relative to the project root/, abs);
+  // build.gradle joins storeFile to the project root, so an absolute path never reaches the key. A
+  // path with a drive letter but no slash after it ("C:Keys\...") is not relative to the project root
+  // either. A relative path cannot change drive, so the message says the key must be on the same drive.
+  const notRelative = ['D:\\Keys\\demo\\demo-release.keystore', '/keys/demo-release.keystore',
+    'C:Keys\\demo\\demo-release.keystore', 'c:../Keys/demo/demo-release.keystore'];
+  for (const abs of notRelative) {
+    const problem = signingProblem(keyFacts({ storeFile: abs }));
+    assert.match(problem, /relative to the project root/, abs);
+    assert.match(problem, /same drive/, abs);
   }
 });
 
