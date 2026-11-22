@@ -5,7 +5,7 @@
 //   3. Escape closes it (confirmModal answers false, choiceModal answers null);
 //   4. after it closes, focus is back on the control that opened it.
 //
-// Run: node test-ui/c-modal-focus.js
+// Run: npm run test:modal-focus (also part of the full suite and CI, like every test:* script)
 const H = require('../test/helpers');
 const { chromium } = require('playwright');
 
