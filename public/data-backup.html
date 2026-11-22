@@ -216,6 +216,9 @@
         <p id="storageText">Checking…</p>
         <div class="st-bar" id="storageBar" role="meter" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="st-fill" id="storageFill"></div></div>
         <div id="storageMsg" class="msg" role="status" aria-live="polite"></div>
+        <!-- Q2: on localStorage the WebView writes saves to disk a few seconds late (measured on the
+             emulator), so a sudden kill can lose them. Shown only while the data is in localStorage. -->
+        <p class="bk-note" id="storageKillNote" hidden>In this storage, Android writes your saves to the phone a few seconds late. If Plannr is force-stopped or crashes right after you save, the last few seconds of saves can be lost. Wait a few seconds after saving before you swipe Plannr away, and keep saving encrypted backups.</p>
       </section>
 
       <!-- Step 1.4 C10: the move to the phone's own database file (docs/step-1.4-storage-plan.md §2).
@@ -230,7 +233,7 @@
           </div>
         </div>
         <div id="moveStart" hidden>
-          <p id="moveStateText">Plannr keeps your data inside the app's web storage, which is full at about 2.8 MB. The new storage is a database file of its own on this phone, with room for years of entries.</p>
+          <p id="moveStateText">Plannr keeps your data inside the app's web storage, which is full at about 2.8 MB. The new storage is a database file of its own on this phone, with room for years of entries, and it writes each save to the phone straight away.</p>
           <details class="wt">
             <summary>What happens</summary>
             <div class="wt-body">
@@ -441,6 +444,7 @@
         }
         const pct = Math.min(100, Math.round(s.fraction * 100));
         text.textContent = `Used ${mb(s.usedBytes)} MB of about ${mb(s.limitBytes)} MB (${pct}%).`;
+        document.getElementById('storageKillNote').hidden = false; // Q2: the data is in localStorage
         bar.setAttribute('aria-valuenow', String(pct));
         bar.setAttribute('aria-valuetext', `${pct}% used`);
         fill.style.width = pct + '%';
