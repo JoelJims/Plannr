@@ -18,42 +18,157 @@ cd android && ./gradlew assembleDebug     # -> android/app/build/outputs/apk/deb
 Write the result of each check (pass/fail, numbers, phone model, Android and WebView version) in
 the table at the end.
 
-## The build for this round (real phone): the step 1.4 RC, 2026-11-21
+## The build for this round (real phone): plannr-phase3, 2026-11-22
+
+This build has the step 1.4 storage move (check 9) and the fixes from the review of 2026-11-21
+(`docs/security-quality-review-2026-11-21.md`). It replaces the step 1.4 RC (`53db636`), which was
+never run on the phone.
 
 | | |
 |---|---|
-| Branch / commit | `plannr-phase2`, built from `53db636` (step 1.4: the storage move, stages A–D) |
-| File | `D:\Backups\plannr\Plannr-debug-rc-53db636.apk` |
-| Size | 15,087,178 bytes |
-| SHA-256 | `1c54c4c889dec806fcadfdb79c50ea2be6c6429f0b07f2ad817a00cd1990e1f0` |
-| Version | versionCode 1, versionName 1.0; debug-signed with the same key as `9d7fd97`, so it installs over it with `adb install -r` |
-| Permissions | as `9d7fd97`, plus `USE_BIOMETRIC` and `USE_FINGERPRINT`, which the storage plugin (`@capacitor-community/sqlite` 8.1.1) declares; Plannr never asks for them and Android does not prompt for them |
+| Branch / commit | `plannr-phase3` at `24d1d92` (PR #3, not merged yet). The build's branch has one more commit, which only changes CI, so the app is `24d1d92`'s |
+| File | `D:\Projects\plannr-wt\apk\plannr-phase3-24d1d92-debug.apk` (a work folder: copy the file to `D:\Backups\plannr\` to keep it) |
+| Size | 15,099,506 bytes |
+| SHA-256 | `2b4f34f6944f48719def17b98e5a689610fa7e44a996f47b14c615d499a14888` |
+| Package / version | `com.plannr.app`, versionCode 1, versionName 1.0. Every Plannr build so far has these same numbers, so the version cannot tell the builds apart: check the SHA-256 |
+| Signing key | the laptop's Android debug key. Certificate SHA-256: `fd12f08172d278469d6cad14786f48e080bc0c308cb457d56ce0ecdae4b95629`. The same key signed `9d7fd97` (below), so this build installs over it with `adb install -r` |
+| Permissions | `INTERNET`, `RECEIVE_BOOT_COMPLETED`, `WAKE_LOCK`, `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`, and the app's own `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. **No `USE_BIOMETRIC` and no `USE_FINGERPRINT`** (finding S7; the RC had both) |
 | INTERNET permission | present, and it stays (offline first: the core never uses it; see `CONTRIBUTING.md`) |
+| Emulator | installed over the build already there with `adb install -r` (`firstInstallTime` kept) and opened, 2026-11-22 |
 
-The APK is larger than `9d7fd97`'s (5,974,512 bytes) because of the storage plugin's native SQLite
-library. The previous build for this round, `9d7fd97` (5,974,512 bytes, SHA-256
-`7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef`), is still at
-`android/app/build/outputs/apk/debug/Plannr-debug.apk` and in `D:\Backups\plannr\`; the
-emulator's update tests start from it, since it is the build your phone has.
+The APK is about 15 MB (the `9d7fd97` build is 5,974,512 bytes) because of the storage plugin's
+native SQLite library.
 
-**This round uses test data only.** Do not restore your real backup on the phone yet; that comes
-after these checks pass and you approve it.
+Check the file on the PC before you install it (PowerShell):
 
-Install it:
+```powershell
+Get-FileHash D:\Projects\plannr-wt\apk\plannr-phase3-24d1d92-debug.apk -Algorithm SHA256
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\36.0.0\apksigner.bat" verify --print-certs D:\Projects\plannr-wt\apk\plannr-phase3-24d1d92-debug.apk
+```
+
+- The hash must be `2B4F34F6…A14888` (`Get-FileHash` prints capitals).
+- "Signer #1 certificate SHA-256 digest" must be `fd12f081…b95629`.
+
+### What the phone has now
+
+The phone was not connected when this build was made: `adb devices` listed only the emulator at
+11:47, 11:50 and 11:52 on 2026-11-22. So nothing on the phone was read. The last build
+made for it is `9d7fd97`: `android/app/build/outputs/apk/debug/Plannr-debug.apk` in the main
+folder, and in `D:\Backups\plannr\`. SHA-256
+`7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef`, versionCode 1, versionName 1.0,
+signed with the same debug key (`fd12f081…b95629`).
+
+**Assume the Plannr on the phone holds your real data.** Nothing on the PC can see inside it, and
+it was not installed just now. So do step A before anything is installed.
+
+To see what is installed without changing anything (read-only commands, PowerShell):
+
+```powershell
+adb shell dumpsys package com.plannr.app | findstr /R "versionName versionCode firstInstallTime lastUpdateTime"
+adb shell pm path com.plannr.app                       # prints package:/data/app/…/base.apk
+adb pull <that base.apk path> $env:TEMP\phone-base.apk
+```
+
+Then run the `apksigner verify --print-certs` line above on `$env:TEMP\phone-base.apk`. If its
+certificate SHA-256 is not `fd12f081…b95629`, this build will not install over it: stop and ask.
+
+### A. Before any install: back up the real data
+
+Do this in the Plannr that is on the phone now. Its Data Backup page uses the same names as below.
+
+1. Open Plannr. On Home, tap **Data backup** in the bar at the bottom. The page is called
+   **Data Backup**.
+2. **Encrypted backup (everything).** In the section **Encrypted full backup**, type a passphrase of
+   at least 10 characters in **Passphrase**, and the same again in **Type the passphrase again**.
+   Tap **Download encrypted backup**. The share sheet opens: save the `.db.enc` file **off the
+   phone** (for example to Google Drive, or send it to the PC). Write the passphrase down somewhere
+   other than the file. Without it, the file cannot be opened.
+3. **JSON backup.** In the section **JSON backup**, tap **Download JSON backup**. Save the `.json`
+   file off the phone in the same way. It leaves out the Daily Report contacts unless you tick
+   **Include Daily Report contacts**; the encrypted backup has them anyway.
+4. If you closed a share sheet without saving, the page says the file was not saved. Do that step
+   again.
+5. Write down the totals on the **Overview** (or take a screenshot), and how many entries one or two
+   ledgers have. You compare them after the update.
+
+Check the saved files on the PC:
+
+- The JSON file opens in a text editor, starts with `{`, has `"version": 2`, and has your entries
+  in it (search for a ledger or a note you know).
+- The encrypted file opens with your passphrase. In PowerShell, in the Plannr folder:
+
+  ```powershell
+  $env:PLANNR_BACKUP_PASSPHRASE = Read-Host 'Passphrase'
+  node decrypt-db.js <the .db.enc file> $env:TEMP\plannr-check.db
+  Remove-Item Env:PLANNR_BACKUP_PASSPHRASE
+  ```
+
+  It prints the sizes and writes a readable copy; it refuses to write over `data/plannr.db`.
+  Delete `plannr-check.db` afterwards (it is your data, unencrypted).
+
+Rules for this round:
+
+- **Never uninstall Plannr.** Uninstalling deletes its data.
+- If Android refuses the update with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (the signing key is
+  different), **stop**. Do not uninstall, do not restore anything, and ask.
+- With the real data on the phone, do not restore any backup and do not tap **Move to the new
+  storage**. Restores and the move are tried with test data first (C7, C8 and check 9).
+
+### B. Install over it
 
 1. On the phone: Settings → About phone → tap **Build number** 7 times; then Settings → System →
    Developer options → turn on **USB debugging**. Connect the phone by USB and allow the PC when
    asked.
 2. On the PC, `adb devices` lists the phone as `device` (not `unauthorized`). `adb` is in the
    Android SDK's `platform-tools` folder.
-3. `adb install -r D:\Backups\plannr\Plannr-debug-rc-53db636.apk`
-
-If Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a Plannr signed with another key (a
-release build) is already on the phone. Uninstalling it deletes its data: if it holds anything you
-need, export both backups off the phone first, or stop and ask.
+3. `adb install -r D:\Projects\plannr-wt\apk\plannr-phase3-24d1d92-debug.apk` answers `Success`.
 
 Check 7 is skipped: Plannr keeps the INTERNET permission (owner's decision, 2026-11-15). Check 4
 (airplane mode) is the offline check on the phone.
+
+### C. The checks for this build
+
+Write each result in the table "The owner's phone: plannr-phase3" at the end.
+
+1. **The update keeps every entry.** Open Plannr. Every ledger, entry, category and loan is there,
+   and the Overview totals are the same as in step A.5. `adb shell dumpsys package com.plannr.app`
+   shows the old `firstInstallTime` and a new `lastUpdateTime` (an update, not a fresh install).
+   The data is still in the old storage: Data Backup → **Where your data is kept** offers **Move to
+   the new storage**. Leave it for now.
+2. **CSV export: one share sheet (F2).** Data Backup → **CSV for Excel** → **Download CSV (for
+   Excel)**. ONE share sheet opens with all the CSV files (one per table). Before this build the
+   page said "Downloading … CSV files" on the phone and nothing was saved. Close the sheet with
+   BACK: the page says nothing was saved. Then do it again, save the files where you choose, and
+   open one in Excel or Sheets. The CSV files are your data, unencrypted: keep them private.
+3. **PDF time against the 25 s limit (E1).** Overview → **Download PDF** → **Light**. With a
+   stopwatch, time from the tap on **Light** to the moment the share sheet opens. The app gives up
+   after 25 s (the message says the native print adapter did not respond). Do it twice and write
+   down both times; close each share sheet with BACK. The emulator took 4.1 to 4.5 s.
+   `scripts/phone-test.ps1` measures the same and prints it as "8 PDF time (tap to share sheet)".
+   With Plannr installed it needs `-AllowExisting`: then it installs and uninstalls nothing, presses
+   only BACK on a share sheet, and puts airplane mode back as it was (add `-SkipAirplane` to leave
+   airplane mode alone). Its screenshots can show your data; they stay in the gitignored
+   `docs/phone-test-evidence/`.
+4. **Overview while loading (F3).** Open the Overview. While it loads, the figures show "…", never
+   ₹0.00; then your real figures appear. If a load fails, the figures show "—" and the page says
+   "The Overview could not be loaded, so no figures are shown. Reload the page to try again." with
+   the reason. You are not expected to see the failure; write it down if you do.
+5. **Home (F5).** Home no longer says "First login — welcome.".
+6. **No biometric permission (S7).**
+   `adb shell dumpsys package com.plannr.app | findstr /I "BIOMETRIC FINGERPRINT"` prints nothing,
+   and Settings → Apps → Plannr → Permissions lists nothing about fingerprints or biometrics.
+7. **Restore rollback (S3/Q6). Test backups only**, on the emulator or on a phone without your real
+   data (a restore replaces the live data, even one that then fails). A good test encrypted backup
+   still restores and writes a safety snapshot (check 3). A backup that fails a check after it is
+   copied in must answer "This backup could not be restored. Nothing was changed: your data is as
+   it was before. Reason: …", and the data must be as before. Such a file is hard to make by hand;
+   the automated tests cover it (`test/backup-encrypted-restore.test.js`,
+   `test-ui/backup-roundtrip.js`).
+8. **Strict import (F1). Test backups only**, as in C7. Copy a test JSON backup. In a text editor,
+   in the `ledger_mains` list, change one `"code"` from, for example, `"22.0"` to `"22"`. Restore
+   the copy with **Import / Restore**: it is refused with "ledger_mains: code "22" is not a category
+   code (a category's code is "N.0", like "22.0").", and nothing changes. The unchanged test backup
+   still restores.
 
 ## Running these on an emulator (no phone needed)
 
@@ -438,23 +553,32 @@ Same emulator and method as above, with the RC (`1c54c4c8…e1f0`).
 
 **Not automatable on the emulator, so still for the real phone:** 0 (the phone's own details), the real `localStorage` limit in 2, 4 on a real phone's print service, 5 over the build that is on the phone now, 6 with a real Google account, and 9 with your hands on the device.
 
-### The owner's phone: the step 1.4 RC, debug build from `53db636` (SHA-256 `1c54c4c8…e1f0`)
+### The owner's phone: plannr-phase3, debug build from `24d1d92` (SHA-256 `2b4f34f6…a14888`)
 
-Not yet run. At least checks 0, 2, 3, 5 and 6 must pass here before the real data moves. Test
-data only.
+Not yet run. Step A (both backups saved off the phone and checked) comes first. The step 1.4 RC
+(`53db636`) was never run on the phone; this build replaces it. Checks 0, 2, 3, 5 and 6 must pass
+here before the real data moves (check 9).
 
 Date tested:
 
-| # | Check | Result | Numbers / notes |
+| Check | Expected | Result | Notes |
 |---|---|---|---|
-| 0 | Phone, Android, WebView version | | |
-| 1 | Data location and sizes | | |
-| 2 | Meter; real `localStorage` limit | | |
-| 3 | JSON + encrypted export/restore with categories | | |
-| 4 | Airplane mode | | |
-| 5 | Update over old version | | |
-| 6 | Auto Backup (`bmgr backupnow`, uninstall, reinstall) | | |
-| 7 | Without INTERNET | skipped | the permission stays (decision, 2026-11-15) |
-| 8 | This build's changes (PDF total row, restores still fit) | | |
-| S | Storage check (`phone-test.ps1`): which storage, file sizes | | |
-| 9 | The storage move, test data (then real data, its own steps) | | |
+| A. Backups before the install | Encrypted and JSON backups saved off the phone; the JSON has `"version": 2` and your entries; the encrypted one opens with the passphrase | | |
+| What was installed before | versionName, versionCode, `firstInstallTime`; certificate SHA-256 `fd12f081…b95629` | | |
+| B. Install over it | `adb install -r` answers `Success`; no uninstall | | |
+| C1. Update keeps every entry (5) | Same ledgers, entries and Overview totals as in A.5; `firstInstallTime` unchanged | | |
+| C2. CSV export (F2) | One share sheet with all the CSV files; BACK says nothing was saved; saved files open | | |
+| C3. PDF time (E1) | Share sheet opens well under 25 s; write down both times | | |
+| C4. Overview loading (F3) | "…" while loading, never ₹0.00; a failed load shows "—" and says so | | |
+| C5. Home (F5) | No "First login — welcome." line | | |
+| C6. No biometric permission (S7) | No `USE_BIOMETRIC` or `USE_FINGERPRINT` | | |
+| C7. Restore rollback (S3/Q6), test backups only | A good test restore works and writes a safety snapshot; a failed one says "Nothing was changed" and the data is as before | | |
+| C8. Strict import (F1), test backups only | A backup with a code like `"22"` is refused and nothing changes; the unchanged backup restores | | |
+| 0. Phone, Android, WebView version | Written down | | |
+| 2. Meter; real `localStorage` limit (fresh test install only) | Meter shown; limit about 5,242,880 characters | | |
+| 3. JSON + encrypted export/restore (test data) | Both files saved and restored; a wrong passphrase changes nothing | | |
+| 4. Airplane mode | Every page opens offline; PDF and backups work; a reminder fires | | |
+| 6. Auto Backup (test install only) | `bmgr backupnow` says `Success`; data comes back after a reinstall | | |
+| 7. Without INTERNET | skipped (decision, 2026-11-15) | skipped | |
+| S. Storage check (`phone-test.ps1 -AllowExisting`) | Which storage is in use; file sizes | | |
+| 9. The storage move, test data (then real data, its own steps) | All tables match; totals the same; old copy kept | | |
