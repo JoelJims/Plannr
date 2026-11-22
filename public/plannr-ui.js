@@ -594,23 +594,23 @@
       byOpts += `<option value="custom"${v.by === 'custom' ? ' selected' : ''}>Custom…</option>`;
       return `<tr data-id="${e.id}" class="tx-editing">
         <td data-label="Serial" class="tx-slno">${i + 1}</td>
-        <td data-label="Date"><input type="text" class="tx-in" data-f="date" placeholder="dd/mm/yy" maxlength="10" value="${escapeHtml(v.date)}"></td>
+        <td data-label="Date"><input type="text" class="tx-in" data-f="date" aria-label="Date, row ${i + 1}" placeholder="dd/mm/yy" maxlength="10" value="${escapeHtml(v.date)}"></td>
         <td data-label="Ledger">
-          <select class="tx-sel" data-f="ledger">${ledgerOptions(v.ledger)}</select>
-          <input type="text" class="tx-in tx-sub" data-f="ledgerCustom" placeholder="Custom ledger" maxlength="80" value="${escapeHtml(v.ledgerCustom)}"${v.ledger === CUSTOM_CODE ? '' : ' hidden'}>
+          <select class="tx-sel" data-f="ledger" aria-label="Ledger, row ${i + 1}">${ledgerOptions(v.ledger)}</select>
+          <input type="text" class="tx-in tx-sub" data-f="ledgerCustom" aria-label="Custom ledger, row ${i + 1}" placeholder="Custom ledger" maxlength="80" value="${escapeHtml(v.ledgerCustom)}"${v.ledger === CUSTOM_CODE ? '' : ' hidden'}>
         </td>
         <td data-label="Sub-ledger">
-          <select class="tx-sel" data-f="sub">${subOptions(v.ledger, v.sub)}</select>
-          <input type="text" class="tx-in tx-sub" data-f="subCustom" placeholder="Custom sub-ledger" maxlength="80" value="${escapeHtml(v.subCustom)}"${v.sub === CUSTOM_CODE ? '' : ' hidden'}>
+          <select class="tx-sel" data-f="sub" aria-label="Sub-ledger, row ${i + 1}">${subOptions(v.ledger, v.sub)}</select>
+          <input type="text" class="tx-in tx-sub" data-f="subCustom" aria-label="Custom sub-ledger, row ${i + 1}" placeholder="Custom sub-ledger" maxlength="80" value="${escapeHtml(v.subCustom)}"${v.sub === CUSTOM_CODE ? '' : ' hidden'}>
         </td>
-        <td data-label="Amount"><input type="text" inputmode="decimal" class="tx-in tx-num" data-f="amount" value="${escapeHtml(v.amount)}"></td>
+        <td data-label="Amount"><input type="text" inputmode="decimal" class="tx-in tx-num" data-f="amount" aria-label="Amount, row ${i + 1}" value="${escapeHtml(v.amount)}"></td>
         <td data-label="By">
-          <select class="tx-sel" data-f="by">${byOpts}</select>
-          <input type="text" class="tx-in tx-sub" data-f="byLabel" placeholder="Name" maxlength="60" value="${escapeHtml(v.byLabel)}"${v.by === 'custom' ? '' : ' hidden'}>
+          <select class="tx-sel" data-f="by" aria-label="By, row ${i + 1}">${byOpts}</select>
+          <input type="text" class="tx-in tx-sub" data-f="byLabel" aria-label="Name, row ${i + 1}" placeholder="Name" maxlength="60" value="${escapeHtml(v.byLabel)}"${v.by === 'custom' ? '' : ' hidden'}>
         </td>
-        <td data-label="Remark"><input type="text" class="tx-in" data-f="reason" maxlength="300" value="${escapeHtml(v.reason)}"></td>
+        <td data-label="Remark"><input type="text" class="tx-in" data-f="reason" aria-label="Remark, row ${i + 1}" maxlength="300" value="${escapeHtml(v.reason)}"></td>
         <td data-label="In Contract?">
-          <select class="tx-sel" data-f="scope">
+          <select class="tx-sel" data-f="scope" aria-label="In contract?, row ${i + 1}">
             <option value="included"${v.scope === 'included' ? ' selected' : ''}>Yes</option>
             <option value="extra"${v.scope === 'extra' ? ' selected' : ''}>No</option>
           </select>
