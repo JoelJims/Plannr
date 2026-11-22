@@ -235,6 +235,9 @@ export async function decideAtStartup({ marker, candidate, main, mainOk, moveInP
 // More of host, used only here:
 //   file                     the adapter on the database file in use (after the move)
 //   local.limitChars         the localStorage limit in characters (local-api.js LOCALSTORAGE_LIMIT_CHARS)
+//   local.usedChars()        optional: { copy, other } characters localStorage holds now: the old copy's
+//                            kvvfs-local-* keys, and every other key (Q4). Without it the old copy is
+//                            measured from its bytes and other keys count as 0.
 //   local.exists()           the old localStorage copy is there
 //   local.exportBytes()      its bytes (for the snapshot before it is replaced)
 //   local.replaceWith(bytes) replace it, all or nothing (kvvfs: one transaction)
@@ -249,6 +252,17 @@ export const KVVFS_CHARS_PER_BYTE = 2;
 export const MOVE_BACK_FRACTION = 0.9;
 export const moveBackLimitBytes = (limitChars) => Math.floor((MOVE_BACK_FRACTION * Number(limitChars)) / KVVFS_CHARS_PER_BYTE);
 export const moveBackFits = (bytes, limitChars) => Number(bytes) <= moveBackLimitBytes(limitChars);
+/**
+ * Q4: what localStorage must hold while the old copy is replaced. The old copy stays until the
+ * commit, kvvfs's rollback journal (kvvfs-local-jrnl) can hold every one of its pages, and other
+ * keys take quota too. So the peak is: other + max(new, old copy) + old copy, in characters.
+ * Returns the largest incoming size in bytes that still fits under 90% of the limit (0 if none).
+ */
+export function moveBackRoomBytes({ limitChars, copyChars = 0, otherChars = 0 }) {
+  const room = MOVE_BACK_FRACTION * Number(limitChars) - Number(otherChars) - Number(copyChars);
+  if (!(room >= Number(copyChars))) return 0; // not even the journal of the old copy fits
+  return Math.floor(room / KVVFS_CHARS_PER_BYTE);
+}
 
 const mbText = (bytes) => `${(Math.ceil((Number(bytes) / MB) * 10) / 10).toFixed(1)} MB`;
 const dayText = (iso) => {
@@ -290,8 +304,12 @@ export async function moveBack(host, { confirmed = false, onStep } = {}) {
 
   await say('size');
   const bytes = await host.file.exportBytes();
-  const limit = moveBackLimitBytes(host.local.limitChars);
-  if (!moveBackFits(bytes.length, host.local.limitChars)) {
+  // Q4: count the old copy (kept until the commit, and journaled) and the other keys, not only the data.
+  let used = host.local.usedChars ? await host.local.usedChars() : null;
+  if (!used) used = { copy: (await host.local.exists()) ? (await host.local.exportBytes()).length * KVVFS_CHARS_PER_BYTE : 0, other: 0 };
+  const limit = Math.min(moveBackLimitBytes(host.local.limitChars),
+    moveBackRoomBytes({ limitChars: host.local.limitChars, copyChars: used.copy, otherChars: used.other }));
+  if (!(bytes.length <= limit)) {
     throw new MoveError('size', `Your data (${mbText(bytes.length)}) is too big to move back: the old storage holds at most about ${mbText(limit)}. It stays in the new storage.`, { bytes: bytes.length, limitBytes: limit });
   }
   const free = Number(await host.freeBytes());
