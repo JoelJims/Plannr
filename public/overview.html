@@ -334,7 +334,8 @@
       <div class="ov-recon" id="ovRecon" role="status" hidden></div>
 
       <!-- 0. Date range — scopes the spending figures (B, C, D), the budget bar, and the
-           Spending by Ledger pie. Default = all transactions. A / E / F stay cumulative. -->
+           Spending by Ledger pie. Default = all transactions. A / E / F stay cumulative, and so does
+           the budget's "left of total budget" figure (F4 option (b)). -->
       <div class="ov-section">
         <p class="ov-section-title">Date range</p>
         <!-- Collapsed (default): Edit + the current span text, mirroring the Outflow
@@ -726,10 +727,13 @@
       if (budget != null) { marker.hidden = false; marker.style.left = (budget / scale * 100).toFixed(2) + '%'; }
       else { marker.hidden = true; }
       $('ovBarSpent').textContent = 'Spent ' + fmtPaise(spent);
+      // F4 option (b): the label compares the WHOLE project's spend with the budget, even when a range
+      // is set (the bar and "Spent" above stay the range's D). Same rule as the PDF (core/overview-pdf.js).
+      const whole = data.money.wholeProjectSpentPaise;
       const bl = $('ovBarBudget');
       if (budget == null) { bl.textContent = 'No budget set'; bl.className = ''; }
-      else if (over) { bl.textContent = 'Over budget by ' + fmtPaise(spent - budget); bl.className = 'over'; }
-      else { bl.textContent = fmtPaise(budget - spent) + ' left · Budget ' + fmtPaise(budget); bl.className = ''; }
+      else if (whole > budget) { bl.textContent = fmtPaise(whole - budget) + ' over total budget · Budget ' + fmtPaise(budget); bl.className = 'over'; }
+      else { bl.textContent = fmtPaise(budget - whole) + ' left of total budget · Budget ' + fmtPaise(budget); bl.className = ''; }
     }
 
     // ---- 4. Pie: one slice per MAIN ledger of ALL spending — cash outflow AND

@@ -122,6 +122,15 @@ export function register(app, ctx) {
 
     const loanReceived = (await repo.overview.loansSum()).s; // E (cumulative)
     const totalSpent = paidToContractors + spentBySelf; // D = B + C (range)
+    // F4 option (b): the budget's "left" / "over" figure compares the WHOLE project's spend with the
+    // budget, even when a range is set (the budget is for the whole project). With no range this is
+    // D itself; with a range, the same two tables are summed with no date bound (dateless rows count).
+    let wholeProjectSpent = totalSpent;
+    if (bounded) {
+      wholeProjectSpent = 0;
+      for (const r of await repo.overview.outsAll()) wholeProjectSpent += r.amount_paise;
+      for (const p of await repo.overview.paymentsAll()) wholeProjectSpent += p.amount_paise;
+    }
 
     const ledgers = [...ledMap.values()]
       .sort((a, b) => (a.isCustom ? 1 : b.isCustom ? -1 : parseFloat(a.code) - parseFloat(b.code)))
@@ -187,6 +196,7 @@ export function register(app, ctx) {
         paidToContractorsPaise: paidToContractors, // B (range)
         spentBySelfPaise: spentBySelf,            // C (range)
         totalSpentPaise: totalSpent,              // D = B + C (range)
+        wholeProjectSpentPaise: wholeProjectSpent, // D over the whole project, ignoring the range (budget "left")
         loanReceivedPaise: loanReceived,          // E (cumulative)
         owedToContractorsPaise: owedToContractors, // F = stated − Σ paid (cumulative)
       },

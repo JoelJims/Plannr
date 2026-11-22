@@ -151,6 +151,42 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     await ctxH.close();
   }
 
+  // ---- F4 option (b) (review 2026-11-21; AWAITING THE USER'S DECISION): with a date range set,
+  // "left" compared the spend in the range with the whole-project budget. It now always uses the
+  // whole project's spend and says so; the range's own "Spent" figure is unchanged.
+  {
+    H.clearLedger();
+    const cid = H.seedContract({ pricePaise: 10000000 });
+    H.seedPayment({ contractId: cid, payDate: '2026-07-10', amountPaise: 200000 }); // July: ₹2,000 paid
+    H.seedCashOut({ txDate: '2026-07-12', amountPaise: 500000, byUserId: user.id });  // July: ₹5,000 spent
+    H.seedCashOut({ txDate: '2026-08-20', amountPaise: 800000, byUserId: user.id });  // August: ₹8,000
+    const setBudget = (p) => H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(p));
+    setBudget(2000000); // ₹20,000: whole project ₹15,000 -> ₹5,000 left (the old figure: ₹13,000)
+    const ctxR = await browser.newContext({ viewport: { width: 1500, height: 1700 } });
+    const pR = await ctxR.newPage();
+    await pR.goto(base + '/overview', { waitUntil: 'networkidle' }); await pR.waitForTimeout(700);
+    const applyJuly = async () => {
+      await pR.click('#ovRangeEditBtn');
+      for (const side of ['Start', 'End']) {
+        await pR.selectOption(`#ov${side}Year`, '2026');
+        await pR.selectOption(`#ov${side}Month`, '7');
+        await pR.selectOption(`#ov${side}Day`, side === 'Start' ? '1' : '31');
+      }
+      await pR.click('#ovRangeApply'); await pR.waitForTimeout(900);
+    };
+    const bar = () => pR.evaluate(() => ({ spent: document.getElementById('ovBarSpent').textContent.trim(), budget: document.getElementById('ovBarBudget').textContent.trim() }));
+    await applyJuly();
+    const left = await bar();
+    check('F4 (b): with a range set, "left" uses the whole project\'s spend and says "left of total budget"; the range\'s Spent is unchanged',
+      /^₹5,000\.00 left of total budget/.test(left.budget) && left.spent === 'Spent ₹7,000.00', `"${left.spent}" | "${left.budget}"`);
+    setBudget(1000000); // ₹10,000: the range (₹7,000) is under it, the whole project (₹15,000) is ₹5,000 over
+    await applyJuly();
+    const over = await bar();
+    check('F4 (b): …and says "₹X over total budget" when the whole project is over, even if the range is not',
+      /^₹5,000\.00 over total budget/.test(over.budget) && over.spent === 'Spent ₹7,000.00', `"${over.spent}" | "${over.budget}"`);
+    await ctxR.close();
+  }
+
   await browser.close();
   await H.stopApp();
   console.log(`\n${failures === 0 ? '✓ VISUAL SUITE PASSED' : '✗ VISUAL SUITE FAILED (' + failures + ')'}`);

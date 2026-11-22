@@ -117,8 +117,10 @@ export function createOverviewPdf(ctx) {
     };
     const budgetBlock = () => {
       if (o.budgetPaise == null) return '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>' + fmtRs(m.totalSpentPaise) + '</b>.</p>';
-      const diff = o.budgetPaise - m.totalSpentPaise;
-      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(m.totalSpentPaise)}</b> · ${diff < 0 ? 'Over by <b class="neg">' + fmtRs(-diff) + '</b>' : '<b>' + fmtRs(diff) + '</b> left'}.</p>`;
+      // F4 option (b): "left" / "over" compares the WHOLE project's spend with the budget, even when a
+      // range is set; "Spent" stays the range's D. Same rule as the screen (public/overview.html).
+      const diff = o.budgetPaise - m.wholeProjectSpentPaise;
+      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(m.totalSpentPaise)}</b> · ${diff < 0 ? '<b class="neg">' + fmtRs(-diff) + '</b> over total budget' : '<b>' + fmtRs(diff) + '</b> left of total budget'}.</p>`;
     };
     const pieBlock = () => {
       if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';
