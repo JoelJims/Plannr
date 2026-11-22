@@ -12,10 +12,9 @@ const express = require('express');
 const { init, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter, restoreFromBytes, writeRestoreSnapshot } = require('./db');
 const { encrypt, decrypt } = require('./backup-crypto'); // host.crypto: the encrypted backup (core/routes/backup.js)
 
-// Shared IST (Asia/Kolkata) date/time stamps — used by the Overview PDF filename and
-// upcoming-payment day counts. IST has no DST, so no seasonal complexity.
-const IST_TZ = 'Asia/Kolkata';
-function istDateStamp(d = new Date()) { return new Intl.DateTimeFormat('en-CA', { timeZone: IST_TZ }).format(d); }
+// The IST date stamp (core/ist-date.js), shared with the phone: the Overview PDF filename and the
+// upcoming-payment day counts.
+const { IST_TZ, istDateStamp } = require('./core/ist-date.js');
 function istStampFull(d = new Date()) {
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: IST_TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(d).replace(/^24:/, '00:');
   return `${istDateStamp(d)} ${hm} IST`;
@@ -109,10 +108,9 @@ initDone.catch(() => {});
 // Single-user offline app: no login, no sessions. The one existing users row is the fixed
 // local owner; every request resolves to it, regardless of any cookie. There is no
 // registration route, so a user row must already exist (seed-demo.js or a direct INSERT).
-// Queried fresh per call (not resolved once at require-time): the test harness requires this
-// module before seeding any user, so a value captured at load time would be permanently stale.
-// Through the async interface (step 1.4 B15): getOwner() answers with a Promise.
-const getOwner = () => dbAdapter().get('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
+// getOwner, userExists (a by_user_id check) and requireApiAuth (sets req.user to the owner) are
+// core/owner.js, shared with the phone. They look the adapter up on every call.
+const { getOwner, userExists, requireApiAuth } = require('./core/owner.js').createOwnerQueries(dbAdapter);
 
 // The data-access layer. Required AFTER init() so it can prepare its statements against the
 // migrated schema. Every read/write touching one of the ledger tables goes through repo.*.
@@ -129,9 +127,8 @@ const { createRequestQueue, queuedRoutes } = require('./core/request-queue.js');
 // binds to the final schema (preparing before init() would bind to a pre-migration or dropped
 // table). The Overview's queries live in repo.overview.* (see core/routes/overview.js) and the
 // budget's in core/routes/budget.js; both are prepared after this point too.
-// Phase 2: an existence check for validating a chosen by_user_id. (The roster itself is read in
-// core/routes/people.js.)
-const userExists = async (id) => Number.isInteger(id) && !!(await dbAdapter().get('SELECT 1 FROM users WHERE id = ?', [id]));
+// Phase 2: userExists (above, core/owner.js) checks a chosen by_user_id. (The roster itself is read
+// in core/routes/people.js.)
 
 // JSON body parsing, one size limit per kind of route. The limits, which route gets which, and the
 // "too large" / "Invalid request." answers live in request-rules.js, shared with the phone
@@ -199,14 +196,6 @@ require('./core/routes/ledger-list.js').register(api, coreContext);
 // Money is stored as INTEGER paise (₹1 = 100); the API accepts rupees in and
 // returns paise out. Parameterized queries only; soft-delete (never hard).
 // ---------------------------------------------------------------------------
-
-// Single-user offline app: no auth check. Sets req.user to the fixed local owner (kept for any
-// future per-request use; repo.js calls no longer take a tenant argument, so nothing currently
-// reads req.user outside this assignment).
-async function requireApiAuth(req, res, next) {
-  try { req.user = await getOwner(); } catch (e) { return next(e); }
-  next();
-}
 
 // The shared list/add/edit/delete/batch routes for the ledger tables live in core/ledger-crud.js
 // (step 1.3). Each table below registers through makeLedgerCrud.
