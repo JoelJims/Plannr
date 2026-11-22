@@ -16,6 +16,9 @@ therefore the app's identity. Lose it and no update can ever be installed over t
 
 ### 1.1 Make one (free, on your own computer)
 
+**First check whether a key already exists** (see "A key may already exist" below). Making a
+second key changes the app's identity. Only if there is none:
+
 A release key costs nothing. `keytool` comes with the Java that Android Studio ships (on Windows
 usually `C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe`). One command makes it:
 
@@ -51,8 +54,12 @@ installs.
   the same drive, outside the project, for example `D:/plannr-keys/`, with `storeFile` written as a
   path relative to the project root (for example `../../plannr-keys/plannr-release.keystore` for a
   checkout at `D:/Projects/Plannr`). Moving the key is the owner's choice and is not done by this
-  plan. After any change, build once and run the `keytool -printcert` check from `docs/RELEASE.md`
-  §2: it must print the same certificate SHA-256 as before.
+  plan. After any change, build once and print the certificate with `apksigner verify --print-certs <the APK>` (in the Android SDK's `build-tools\<version>\`
+  folder): it must print the same
+  certificate SHA-256 as before. (`keytool -printcert -jarfile`, used in `docs/RELEASE.md` §2, reads
+  only the old v1 signature. With `minSdkVersion` 24 the build may sign with v2/v3 only, and then it
+  prints "Not a signed jar file". That does not mean the key is broken: never make a new key
+  because of it.)
 
 ### 1.3 Back it up
 
@@ -61,8 +68,8 @@ installs.
   password and lists the key's entry (its alias).
 - **Both passwords and the alias in a password manager.** A key without its passwords is as lost as
   no key.
-- Write down the certificate's SHA-256 fingerprint (printed by `keytool -printcert` on a signed
-  APK). It is public, and it lets anyone check that a later APK came from the same key.
+- Write down the certificate's SHA-256 fingerprint (printed by `apksigner verify --print-certs` on
+  a signed APK). It is public, and it lets anyone check that a later APK came from the same key.
 - Never e-mail the key, never put it in a chat, never in git, never in a cloud folder.
 
 ### 1.4 If the key is lost
@@ -107,11 +114,19 @@ Tell every user to do these steps, in this order. The button names are the ones 
 1. **Make an encrypted backup.** Open Plannr → **Data Backup** → **Download encrypted backup**.
    Type a passphrase of at least 10 characters, twice, and remember it. The file is the whole
    database, encrypted.
-2. **Also make a JSON backup**: **Download JSON backup** on the same page. It is a second copy
-   that needs no passphrase.
+2. **Also make a JSON backup**: tick **Include Daily Report contacts**, then **Download JSON
+   backup** on the same page. It is a second copy that needs no passphrase. Without the tick it
+   leaves out the report contacts. It is not encrypted: delete it from any drive or e-mail once
+   the move is done.
 3. **Save both files off the phone**: share them to a computer, a drive or an e-mail to yourself.
-4. **Check the files**: both are there off the phone and neither is 0 bytes. Note a few numbers to
-   compare later: the number of ledgers, one ledger's total, the storage figure on Data Backup.
+4. **Check the files**: both are there off the phone and neither is 0 bytes. **Prove the encrypted
+   one opens with your passphrase before you uninstall anything**: on the PC, in the Plannr folder,
+   set `PLANNR_BACKUP_PASSPHRASE` and run `node decrypt-db.js <the .db.enc file> <a temp folder>\check.db`
+   (it refuses to write over `data/plannr.db`); it must print the sizes. Delete `check.db` afterwards
+   (it is your data, unencrypted). Open the JSON in a text editor: it starts with `{` and has
+   `"kind": "plannr-backup"`. Keep the old debug APK too, so it can be put back if the release
+   restore fails. Note a few numbers to compare later: the number of ledgers, one ledger's total,
+   the storage figure on Data Backup.
 5. **Uninstall the debug app** (Android Settings → Apps → Plannr → Uninstall). This deletes the
    data on the phone; the backup files from step 3 are now the only copy.
 6. **Install the release APK** (open `Plannr.apk` on the phone; Android warns about an app from
@@ -119,8 +134,8 @@ Tell every user to do these steps, in this order. The button names are the ones 
 7. **Restore**: open Plannr → **Data Backup** → **Restore from encrypted backup**, choose the file
    from step 1 (a `.enc` file) and type its passphrase. If that fails, use **Import / Restore** with the JSON backup
    from step 2.
-8. **Check the data**: the same ledgers, the same total for the ledger you noted, people and
-   categories are there, the storage figure is about the same. Add a test entry, close the app
+8. **Check the data**: the same ledgers, the same total for the ledger you noted, people,
+   categories and the Daily Report contacts are there, the storage figure is about the same. Add a test entry, close the app
    fully, open it again, check the entry is there, then delete it.
 
 Do not rely on Android's own Auto Backup to carry the data across this move; use the files from
@@ -148,7 +163,7 @@ section 5 is done.
 ### Check the download
 - `Plannr.apk` SHA-256: `<64 hex characters>`
   (Windows: `certutil -hashfile Plannr.apk SHA256`; macOS/Linux: `shasum -a 256 Plannr.apk`)
-- Signing certificate SHA-256: `<from keytool -printcert>` (the same for every release)
+- Signing certificate SHA-256: `<from apksigner verify --print-certs>` (the same for every release)
 
 ### Known issues
 - <anything not fixed yet, with a workaround if there is one>
@@ -158,15 +173,15 @@ section 5 is done.
 ## 5. Pre-release checklist
 
 - [ ] All work for this release is merged into `main`, and CI is green on `main`.
-- [ ] `CHANGELOG.md` has an entry for this version (moved out of "Unreleased").
+- [ ] `CHANGELOG.md` has an entry for this version (moved out of "In review" / "Merged into main").
 - [ ] The release key and `keystore.properties` are present, git-ignored and not staged
       (`git status` shows neither).
 - [ ] `npm run release:android -- --dry-run` shows the expected `versionCode` (+1) and
       `versionName`, and "Signing: release key".
 - [ ] `npm run release:android` (with `--version-name` if needed) finished: every test passed and
       the APK was built.
-- [ ] `keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk` prints the
-      same certificate SHA-256 as the last release.
+- [ ] `apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk` prints the
+      same certificate SHA-256 as the last release, and its Owner line has nothing personal in it.
 - [ ] The APK's own SHA-256 is computed and pasted into the release notes.
 - [ ] Installed **over** the previous release on a test phone or emulator: the data is still there
       (`docs/RELEASE.md` §3 and §4). For the first release: the debug-to-release steps of section 3
