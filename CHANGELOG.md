@@ -44,7 +44,8 @@ Fixes from the security and quality review of 2026-11-21
   that starts with a drive letter, is refused. A `keystore.properties` saved with a UTF-8
   byte-order mark is refused too, with its own message (Gradle cannot read the first entry of such
   a file), and so is one saved as UTF-16, which Windows PowerShell 5.1's plain `Out-File` and `>`
-  write (Gradle cannot read any of it).
+  write (Gradle cannot read any of it). A `--dry-run` that would stop now says so and lists no
+  steps after the stop.
 - **Release docs.** `SETUP.md` and `docs/RELEASE.md` now check the release APK's signature with
   `apksigner verify --print-certs` instead of `keytool -printcert -jarfile`, which can say "Not a
   signed jar file" for a correctly signed APK of this build. `SETUP.md` §8 names the real output,
