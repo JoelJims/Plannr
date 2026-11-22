@@ -139,18 +139,41 @@ test('signingFacts resolves storeFile against the project root, checks the key f
   assert.notStrictEqual(path.resolve('../keys/demo.keystore'), keyPath, 'the current folder must not be <tmp>/proj');
 
   const facts = signingFacts(proj);
-  assert.deepStrictEqual(facts, { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: true });
+  assert.deepStrictEqual(facts, { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: true, bom: false });
   for (const other of ['dummyS1', 'dummyK2', 'aliasA3', 'keyAlias', 'stand-in']) {
     assert.ok(!JSON.stringify(facts).includes(other), `signingFacts must not return "${other}"`);
   }
   assert.strictEqual(signingProblem({ ...facts, allowUnsigned: false }), null);
 
   fs.rmSync(keyPath);
-  assert.deepStrictEqual(signingFacts(proj), { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: false });
+  assert.deepStrictEqual(signingFacts(proj), { signed: true, storeFile: '../keys/demo.keystore', keyPath, keyFound: false, bom: false });
   fs.mkdirSync(keyPath); // a folder with the key's name is not a key file
   assert.strictEqual(signingFacts(proj).keyFound, false);
   fs.rmSync(props);
-  assert.deepStrictEqual(signingFacts(proj), { signed: false, storeFile: null, keyPath: null, keyFound: false });
+  assert.deepStrictEqual(signingFacts(proj), { signed: false, storeFile: null, keyPath: null, keyFound: false, bom: false });
+});
+
+// Windows PowerShell 5.1 saves "UTF-8" files with a byte-order mark (BOM). Gradle reads
+// keystore.properties as Latin-1, so the BOM becomes part of the first entry's name and Gradle cannot
+// read that entry. The script must say so, not "no storeFile line" when the owner can see one.
+test('a keystore.properties saved with a UTF-8 byte-order mark gets its own message', (t) => {
+  const p = tempProject(t);
+  fs.writeFileSync(p.keyPath, 'stand-in, not a real key');
+  const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+  const problemFor = (text, withBom) => {
+    fs.writeFileSync(p.props, withBom ? Buffer.concat([BOM, Buffer.from(text)]) : text);
+    return signingProblem({ ...signingFacts(p.proj), allowUnsigned: false });
+  };
+  const first = problemFor('storeFile=../keys/demo.keystore\nkeyAlias=aliasA3\n', true);
+  assert.match(first, /starts with a UTF-8 byte-order mark/);
+  assert.match(first, /Gradle cannot read its first entry/);
+  assert.match(first, /Save it without one/);
+  assert.match(first, /SETUP\.md section 2/);
+  assert.doesNotMatch(first, /no storeFile line/);
+  // With storeFile further down, Gradle still loses the first entry (here the alias): stop too.
+  assert.match(problemFor('keyAlias=aliasA3\nstoreFile=../keys/demo.keystore\n', true), /byte-order mark/);
+  // The same lines without a BOM are fine.
+  assert.strictEqual(problemFor('storeFile=../keys/demo.keystore\nkeyAlias=aliasA3\n', false), null);
 });
 
 // Runs a copy of release-android.js with --dry-run in <tmp>/proj, next to a small package.json, the

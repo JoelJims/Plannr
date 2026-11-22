@@ -21,7 +21,8 @@
 // The key itself lives outside the project (SETUP.md section 2); keystore.properties' storeFile line
 // points to it with a path relative to the project root, so the key folder must be on the same drive
 // as the project. If no key file is there, it also stops before doing anything. From
-// keystore.properties it reads only that storeFile line.
+// keystore.properties it reads only that storeFile line (and checks the file does not start with a
+// byte-order mark, which Gradle cannot read past).
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -92,15 +93,20 @@ function readStoreFile(propertiesText) {
 //   storeFile     its storeFile value (readStoreFile), or null;
 //   keyPath       storeFile resolved against the project root;
 //   keyFound      a file exists at keyPath;
+//   bom           keystore.properties starts with a UTF-8 byte-order mark;
 //   allowUnsigned --allow-unsigned was given.
 // An unsigned release APK cannot update the installed app, and a keystore.properties that points to
 // a missing key makes the Gradle build fail after the version bump.
-function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound }) {
+function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, bom }) {
   if (!signed) {
     if (allowUnsigned) return null;
     return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
   }
   // From here on keystore.properties exists, so Gradle WILL try to sign: --allow-unsigned cannot help.
+  // Gradle reads the file as Latin-1, so a byte-order mark becomes part of the first entry's name and
+  // that entry is lost (a storeFile line at the top then looks missing). The BOM is not stripped
+  // here: Gradle would still fail, so the owner has to save the file without it.
+  if (bom) return 'keystore.properties starts with a UTF-8 byte-order mark (BOM), so Gradle cannot read its first entry: it reads this file as Latin-1 and takes the BOM as part of that entry\'s name. Save it without one (in Notepad: Save as, Encoding "UTF-8", not "UTF-8 with BOM"). See SETUP.md section 2.';
   if (!storeFile) return 'keystore.properties has no storeFile line, so Gradle cannot find the release key. See SETUP.md section 2.';
   // A drive letter with no slash after it ("C:Keys\...") is not absolute, but it is not relative to
   // the project root either, so it is refused too.
@@ -111,17 +117,20 @@ function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound })
   return null;
 }
 
-// Where keystore.properties says the key is, and whether it is there. Reads only the storeFile line.
+// Where keystore.properties says the key is, and whether it is there. Reads only the storeFile line
+// (and whether the file starts with a byte-order mark).
 // root is the project root: storeFile is resolved against it, never against the current folder,
 // because android/app/build.gradle does the same (new File(projectRootDir, storeFile)).
 function signingFacts(root) {
   const propsFile = path.join(root, 'keystore.properties');
   const signed = fs.existsSync(propsFile);
   // latin1: the encoding Java's Properties.load uses for this file.
-  const storeFile = signed ? readStoreFile(fs.readFileSync(propsFile, 'latin1')) : null;
+  const text = signed ? fs.readFileSync(propsFile, 'latin1') : '';
+  const bom = text.startsWith('ï»¿'); // the UTF-8 BOM bytes EF BB BF, read as Latin-1
+  const storeFile = signed ? readStoreFile(text) : null;
   const keyPath = storeFile ? path.resolve(root, storeFile) : null;
   const keyFound = keyPath ? Boolean(fs.statSync(keyPath, { throwIfNoEntry: false })?.isFile()) : false;
-  return { signed, storeFile, keyPath, keyFound };
+  return { signed, storeFile, keyPath, keyFound, bom };
 }
 
 // The "Signing:" line printed before anything runs. problem is signingProblem's answer. The line

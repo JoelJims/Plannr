@@ -85,10 +85,15 @@ example `C:\Projects\Plannr`. Then the line stays exactly the same,
 from the project root. If the project is somewhere else on that drive, change the number of
 `../` so the path still reaches `Keys\plannr\plannr-release.keystore` on that drive.
 
+**Save `keystore.properties` without a byte-order mark (BOM).** Gradle reads this file as
+Latin-1, so a BOM at the start becomes part of the first entry's name and Gradle cannot read that
+entry. Windows PowerShell 5.1 adds a BOM when it writes "UTF-8" (`Set-Content -Encoding utf8`,
+`Out-File`). In Notepad, choose Save as, Encoding "UTF-8" (not "UTF-8 with BOM").
+
 `npm run release:android` checks both files before it changes anything. It reads only the
 `storeFile` line and resolves it against the project root. It stops (naming the path it expected)
 if no key file is there, and it also stops if the line is an absolute path or starts with a drive
-letter. Its "Signing:" line shows the key's path only when the release can go ahead; otherwise it
+letter, or if the file starts with a BOM. Its "Signing:" line shows the key's path only when the release can go ahead; otherwise it
 says "NOT ready" and the reason follows.
 
 `.gitignore` still blocks key files even though the key no longer lives in the project:
