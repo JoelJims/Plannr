@@ -23,6 +23,7 @@ function seedSpend() {
   H.seedPayment({ contractId: cid, payDate: '2026-07-10', amountPaise: 200000 });
   H.seedCashOut({ txDate: '2026-07-12', amountPaise: 500000 });
   H.seedCashOut({ txDate: '2026-08-20', amountPaise: 800000 });
+  return cid;
 }
 
 // The PDF's "Budget vs actual" line as plain text, and its three amounts in paise.
@@ -52,6 +53,21 @@ test('F4 (b): the API gives the whole-project spend next to the range figures', 
   const all = await H.get('/api/overview', { cookie });
   assert.strictEqual(all.json.money.wholeProjectSpentPaise, 1500000, 'with no range it equals D');
   assert.strictEqual(all.json.money.totalSpentPaise, 1500000);
+});
+
+test('F4 (b): the whole-project spend skips soft-deleted rows and counts an undated row', async () => {
+  const cid = seedSpend();
+  H.seedCashOut({ txDate: '2026-07-15', amountPaise: 300000, deletedAt: '2026-07-16T10:00:00Z' });                   // deleted: never counts
+  H.seedPayment({ contractId: cid, payDate: '2026-08-05', amountPaise: 400000, deletedAt: '2026-08-06T10:00:00Z' }); // deleted: never counts
+  const undated = H.seedCashOut({ txDate: '2026-07-20', amountPaise: 100000 }); // ₹1,000 ...
+  H.db.prepare('UPDATE cash_out SET tx_date = NULL WHERE id = ?').run(undated); // ... with no date
+  const ranged = await H.get(`/api/overview?start=${JULY.start}&end=${JULY.end}`, { cookie });
+  assert.strictEqual(ranged.status, 200);
+  assert.strictEqual(ranged.json.money.totalSpentPaise, 700000, 'D in the range: no deleted row, and the undated row is outside every range');
+  assert.strictEqual(ranged.json.money.wholeProjectSpentPaise, 1600000, 'whole project: ₹15,000 + the undated ₹1,000; the deleted ₹3,000 and ₹4,000 are not counted');
+  const all = await H.get('/api/overview', { cookie });
+  assert.strictEqual(all.json.money.totalSpentPaise, 1600000, 'with no range D counts the undated row too');
+  assert.strictEqual(all.json.money.wholeProjectSpentPaise, 1600000, 'with no range it equals D');
 });
 
 test('F4 (b): the PDF with a range set says "left of total budget", and its budget line adds up', async () => {
