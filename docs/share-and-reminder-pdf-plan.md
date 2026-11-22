@@ -1,7 +1,8 @@
 # Plan: send the PDF to WhatsApp or email, from Overview and from a reminder
 
-Status: **design only, nothing built.** Written 2026-11-15. Every step below needs the owner's go-ahead
-before it starts.
+Status: **design only, nothing built.** Written 2026-11-15; plugin versions and the notification
+action support re-checked on 2026-11-22 against the installed packages (section 7). Every step below
+needs the owner's go-ahead before it starts.
 
 ## 1. What exists today
 
@@ -31,6 +32,14 @@ on-time reminders" button). Nothing uses the network.
   do is two taps: the reminder's **Send PDF**, then **Send** in WhatsApp or the mail app.
 - **Not allowed: building the PDF while the app is closed.** The PDF is drawn by the WebView, which
   only exists while the app is open. The reminder therefore opens the app first.
+
+**Which reminder gets the Send PDF button.** Plannr has no payment-due reminder today. The only
+reminders are the daily report reminders (ids 101–105, `SLOT_IDS` in `public/notifications.js`) and
+the backup-overdue reminder (id 201, `BACKUP_REMINDER_ID`). Contracts do store scheduled payment
+dates (the `contract_payment_dates` table, `core/routes/contracts.js`), but nothing schedules a
+notification from them. So this plan puts **Send PDF** on the daily report reminders only. A
+payment-due reminder (for example "Payment to <contractor> due today") with the same button would be
+a separate feature; see the open questions at the end.
 
 ## 3. Settings (new, on Home under the reminders)
 
@@ -93,7 +102,33 @@ Reminder fires ── [Send PDF] ──► Plannr opens (Overview)
   so a click on the notification opens Plannr and shows the same buttons there.
 - **Limit, stated plainly:** on desktop it is three steps (save, open, attach), not two.
 
-## 7. Plugin
+## 7. Plugins
+
+**Already installed, no change needed.** Versions read from `node_modules/*/package.json` on
+2026-11-22. `package.json` gives a caret range for each; `package-lock.json` pins the exact version
+that is installed. Keep these versions for this feature (no upgrade as part of it).
+
+| Plugin | Installed | `package.json` | Used here for |
+|---|---|---|---|
+| `@capacitor/share` | 8.0.3 | `^8.0.1` | the share sheet (today's path and every fallback) |
+| `@capacitor/local-notifications` | 8.3.1 | `^8.3.1` | the reminders and the **Send PDF** action |
+| `@capacitor/filesystem` | 8.1.5 | `^8.1.3` | writing the PDF to the cache folder (`Directory.Cache`) |
+| `@capgo/capacitor-pdf-generator` | 8.0.53 | `^8.0.36` | drawing the PDF |
+
+Notification actions, checked in the plugin's own type definitions
+(`node_modules/@capacitor/local-notifications/dist/esm/definitions.d.ts`, version 8.3.1):
+- `registerActionTypes(options)` exists and is marked "Only available for iOS and Android" (line 98).
+- An `ActionType` has an `id` and a list of `actions`; each `Action` has an `id` and a `title`
+  (lines 372 and 438). A notification points to its action type with `actionTypeId` (line 716).
+- Tapping a button fires `localNotificationActionPerformed` with `actionId` and the original
+  notification (lines 236 and 1018). `public/notifications.js` already listens to this event for
+  taps on the notification body.
+- The `foreground`, `destructive` and `input` (reply text) options are iOS only. On Android every
+  button opens the app (`PendingIntent.getActivity` in the plugin's
+  `android/src/main/kotlin/.../LocalNotificationManager.kt`, line 255), which is what section 2
+  expects.
+
+**New, to be added in build step 5 (not now).**
 
 **`@capawesome/capacitor-mail-composer`, pinned to exactly `0.2.2`** (published 2026-09-04, MIT,
 peer `@capacitor/core >=8.0.0`, repository `capawesome-team/capacitor-plugins`).
@@ -122,7 +157,7 @@ and `setPackage("com.whatsapp")` (then `com.whatsapp.w4b`, WhatsApp Business). T
 | `public/notifications.js` | `registerActionTypes` ("Send PDF"), `actionTypeId` on the daily reminders, the listener opens Overview with `?send=<part>&theme=<theme>` |
 | `public/home.html` | the settings above, per-reminder PDF choice |
 | `core/routes/share-settings.js` (new) | `GET/PUT /api/share-settings` with validation (addresses, subject length, target); one copy for both backends |
-| `core/routes/` reminders | `/api/notification-times` accepts the `{ time, part, theme }` objects and still reads old strings |
+| `core/routes/notification-times.js` | `/api/notification-times` accepts the `{ time, part, theme }` objects and still reads old strings |
 | `backup-format.js` | `share_email_to` joins `CONTACT_SETTINGS_KEYS` |
 | `android/app/src/main/AndroidManifest.xml` | `<queries>` for `com.whatsapp`, `com.whatsapp.w4b` |
 | `android/app/src/main/java/com/plannr/app/ShareToPlugin.java` (new) + `MainActivity` | the WhatsApp intent |
@@ -169,3 +204,5 @@ Open questions for the owner:
   the share sheet?
 - Do the retired `daily_report_*` contact keys get deleted by a migration? That needs a decision and a
   pre-migration snapshot, and is not part of this plan.
+- Is a payment-due reminder wanted (from the contracts' scheduled payment dates), with the same
+  **Send PDF** button? It does not exist today and would be its own feature, planned separately.
