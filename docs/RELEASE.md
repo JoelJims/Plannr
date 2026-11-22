@@ -55,14 +55,19 @@ It then runs `npm run android:sync`, and builds
 `android/app/build/outputs/apk/release/Plannr.apk`. If the sync or the build fails,
 `build.gradle` is put back.
 
-Check the APK is signed with the release key:
+Check the APK is signed with the release key. `apksigner` is in the Android SDK's
+`build-tools\<version>\` folder (on Windows usually
+`%LOCALAPPDATA%\Android\Sdk\build-tools\<version>\apksigner.bat`):
 
 ```sh
-keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk
+apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk
 ```
 
-It must print a certificate. Its SHA-256 must be the same every release (compare with the last
-one you noted). Then commit the version bump.
+It must print the signer's certificate, with a "certificate SHA-256 digest" line. That SHA-256
+must be the same every release (compare with the last one you noted). "DOES NOT VERIFY", or
+another error, means the APK is not signed. Do not check with `keytool -printcert -jarfile`: it
+reads only the old v1 signature, which this APK may not have (`minSdkVersion` 24), so it can say
+"Not a signed jar file" even for a correctly signed APK. Then commit the version bump.
 
 ## 3. Install over the old app
 

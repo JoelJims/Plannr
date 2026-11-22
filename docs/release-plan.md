@@ -22,17 +22,29 @@ therefore the app's identity. Lose it and no update can ever be installed over t
 second key changes the app's identity. Only if there is none:
 
 A release key costs nothing. `keytool` comes with the Java that Android Studio ships (on Windows
-usually `C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe`). One command makes it:
+usually `C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe`; use that full path if
+`keytool` alone is not found). The key goes straight into its own folder outside the project,
+`D:\Keys\plannr\` (section 1.2). On a PC with only `C:`, use `C:\Keys\plannr\` in both lines
+instead, because the key folder must be on the same drive as the project. In Command Prompt or
+PowerShell, first make the folder, then the key:
 
-```sh
-keytool -genkeypair -v -storetype PKCS12 -keystore plannr-release.keystore \
-  -alias plannr -keyalg RSA -keysize 4096 -validity 10000
+```bat
+mkdir D:\Keys\plannr
+keytool -genkeypair -v -storetype PKCS12 -keystore D:\Keys\plannr\plannr-release.keystore -alias plannr -keyalg RSA -keysize 4096 -validity 10000
 ```
 
-- It asks for a keystore password, then your name and place (these go into the certificate and are
-  public once the APK is shared; a project name is enough), then confirms.
+- If `mkdir` says the folder already exists, stop and look in it: a key may already be there
+  ("A key already exists" below).
+- `keytool` asks for a keystore password, then your name and place (these go into the certificate
+  and are public once the APK is shared; a project name is enough), then confirms.
 - `-validity 10000` is about 27 years. The key must outlive every update you will ever ship.
 - Choose long, random passwords and put them straight into a password manager (1.3).
+- Then create `keystore.properties` in the project root with the four entries from `SETUP.md` §2.
+  Its `storeFile` line is the key's path relative to the project root
+  (`storeFile=../../Keys/plannr/plannr-release.keystore` for a checkout at `D:\Projects\Plannr`;
+  `SETUP.md` §2 explains it and says how to save the file without a byte-order mark).
+  `npm run release:android -- --dry-run` then prints "Signing: release key at ..." if the key is
+  where the line says.
 
 **A key already exists.** This laptop has `plannr-release.keystore`, now in `D:\Keys\plannr\`
 (section 1.2), and `keystore.properties` in the project root. Both file types stay git-ignored
@@ -64,11 +76,12 @@ update those installs.
 - `.gitignore` still blocks key files (`*.keystore`, `*.jks`, `*.p12`, `*.pem`,
   `keystore.properties`), so a copy put back into the project by mistake still cannot be
   committed. `test/release-guards.test.js` checks this.
-- After any change to where the key is, build once and print the certificate with `apksigner verify --print-certs <the APK>` (in the Android SDK's `build-tools\<version>\`
-  folder): it must print the same
-  certificate SHA-256 as before. (`keytool -printcert -jarfile`, used in `docs/RELEASE.md` §2, reads
-  only the old v1 signature. With `minSdkVersion` 24 the build may sign with v2/v3 only, and then it
-  prints "Not a signed jar file". That does not mean the key is broken: never make a new key
+- After any change to where the key is, build once and print the certificate with
+  `apksigner verify --print-certs <the APK>` (in the Android SDK's `build-tools\<version>\`
+  folder): it must print the same certificate SHA-256 as before. (Do not use
+  `keytool -printcert -jarfile` for this: it reads only the old v1 signature. With
+  `minSdkVersion` 24 the build may sign with v2/v3 only, and then it prints "Not a signed jar
+  file" for a correctly signed APK. That does not mean the key is broken: never make a new key
   because of it.)
 
 ### 1.3 Back it up

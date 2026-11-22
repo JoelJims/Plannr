@@ -43,6 +43,11 @@ Fixes from the security and quality review of 2026-11-21
   that starts with a drive letter, is refused. A `keystore.properties` saved with a UTF-8
   byte-order mark is refused too, with its own message (Gradle cannot read the first entry of such
   a file).
+- **Release docs.** `SETUP.md` and `docs/RELEASE.md` now check the release APK's signature with
+  `apksigner verify --print-certs` instead of `keytool -printcert -jarfile`, which can say "Not a
+  signed jar file" for a correctly signed APK of this build. `SETUP.md` §8 names the real output,
+  `Plannr.apk`. The key-generation command in `docs/release-plan.md` §1.1 writes the key straight
+  into `D:\Keys\plannr\`.
 - **Version names (decided).** The first public `versionName` is `1.0.0`; `versionCode` keeps
   going up by 1 per published build. `npm run release:android` now turns `1.0` into `1.0.0`
   (before: `1.1`), then bumps the last number (`1.0.0` → `1.0.1`).

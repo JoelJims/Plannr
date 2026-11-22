@@ -110,14 +110,20 @@ lines go or if such a file is ever tracked.
 > but the key is not where `storeFile` says, Gradle does fail. `npm run release:android`
 > catches both cases before it builds anything.)
 >
-> So check, rather than assume, after your first release build:
+> So check, rather than assume, after your first release build. `apksigner` is in the
+> Android SDK's `build-tools\<version>\` folder (on Windows usually
+> `%LOCALAPPDATA%\Android\Sdk\build-tools\<version>\apksigner.bat`):
 >
 > ```sh
-> keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk
+> apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk
 > ```
 >
-> That must print a certificate. An error, or empty output, means `keystore.properties`
-> is missing or wrong.
+> That must print the signer's certificate, with a "certificate SHA-256 digest" line. Note
+> that SHA-256 the first time (`docs/release-plan.md` §1.3); every later release must show
+> the same one. "DOES NOT VERIFY", or another error, means the APK is not signed:
+> `keystore.properties` is missing or wrong. Do not check with `keytool -printcert -jarfile`:
+> it reads only the old v1 signature, which this APK may not have (`minSdkVersion` 24), so
+> it can say "Not a signed jar file" even for a correctly signed APK.
 
 > ### Never lose or replace this key
 >
@@ -311,9 +317,11 @@ npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs
 npm run android:sync                      # regenerate public/ copies + the native project
 # open the android/ directory in Android Studio, let it sync
-cd android && ./gradlew assembleRelease
-keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk   # must print a cert
-adb install -r app/build/outputs/apk/release/app-release.apk
+cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/Plannr.apk
+# apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
+# SHA-256 you noted for this key (section 2)
+apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk
+adb install -r app/build/outputs/apk/release/Plannr.apk
 # expect a Play Protect warning on the device — More details -> Install anyway
 ```
 
