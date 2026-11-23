@@ -24,8 +24,9 @@ npm install
 npm run android:sync
 ```
 
-Then open the `android/` folder in Android Studio and run it on a device or emulator. Releasing an
-update to a phone without losing data: [RELEASE.md](RELEASE.md).
+Then open the `android/` folder in Android Studio and run it on the emulator or a test device. A
+phone that already holds real data gets updates only as [RELEASE.md](RELEASE.md) and
+[PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) say (never uninstall).
 
 Desktop dev server (development and tests only):
 
