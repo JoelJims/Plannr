@@ -251,8 +251,9 @@ Report contacts unencrypted, so it is better not to upload it.
   Use the names `ls` shows: if a file of that name was there already, the phone may have saved the
   new one as `… (1).json`.
 - **Only if the cable does not work:** save them to Google Drive from the share sheet, then
-  download them on the laptop. A file you delete from Drive stays in Drive's **Trash** (called
-  **Bin** in some languages) for 30 days, so D deletes them from both.
+  download them on the laptop and move them from the browser's **Downloads** folder into
+  `D:\Backups\plannr\`, so no copy stays in Downloads. A file you delete from Drive stays in
+  Drive's **Trash** (called **Bin** in some languages) for 30 days, so D deletes them from both.
 
 Keep the copies in `D:\Backups\plannr\` for good. Once C1 passes, delete the copies from the phone's
 Download folder, and from Google Drive and then Drive's Trash if you used it (D).
@@ -350,8 +351,11 @@ a gap in one file cannot be hidden by the other.
 
 **Rehearse B** (steps 11 to 17). In steps 3 to 10 the APK under test wrote your data itself. On the
 phone, B installs it over the phone's own build, which wrote your data into the old storage. These
-steps do the same on the emulator. They change nothing on the phone. The emulator runs under
-Results (2026-11-20 and 2026-11-21) did the same with test data.
+steps rehearse that on the emulator: the phone's own build restores your data, then the APK under
+test is installed over it. They change nothing on the phone. They prove the update with your data's
+content, not with the phone's own database file (its history and layout), which only B itself
+touches; that is why C1 checks the phone again afterwards. The emulator tests recorded under Results
+(2026-11-20 and 2026-11-21) did the same with test data.
 
 11. **The phone's own APK.** "What the phone has now" copied it to
     `D:\Backups\plannr\phone-current.apk`. Check that it is still the same file:
@@ -665,9 +669,12 @@ the problem is settled.
    the second is only the app.
 
    If you made the readable copy in A2 (the optional first look) and it is still there, delete it
-   too: `Remove-Item $env:TEMP\plannr-check.db`.
-3. On the phone, delete the two backups from A1 and the JSON export from C1 from the **Download**
-   folder (with the phone's Files app). If you used Google Drive for any of them (A2 or C1), delete
+   too: `Remove-Item $env:TEMP\plannr-check.db`. If you used Google Drive (A2 or C1), also delete
+   any Plannr backup left in the browser's **Downloads** folder (the copies in
+   `D:\Backups\plannr\` stay).
+3. On the phone, delete every Plannr backup and export you saved in the **Download** folder during
+   this round (with the phone's Files app): the two backups from A1, any you made again (A1 or A2),
+   and the JSON export from C1. If you used Google Drive for any of them (A2 or C1), delete
    them there, then also from Drive's **Trash** (called **Bin** in some languages; there, **Delete
    forever**): Drive keeps a deleted file there for 30 days. Keep the copies in
    `D:\Backups\plannr\` for good.
@@ -973,8 +980,8 @@ order, and do not skip a step:
    `plannr-check.db` afterwards (it is your data, unencrypted). Note the totals on the Overview (or
    take a screenshot).
 2. **Install over it, never uninstall.** If the APK under test is not on the phone yet, install it
-   with steps A and B above (the backups, the restore proof on the emulator, then
-   `adb -d install -r <APK under test>`). Uninstalling deletes the data. If Android answers
+   with steps A and B above (the backups, the restore proof and the rehearsal of B on the emulator,
+   A4, then `adb -d install -r <APK under test>`). Uninstalling deletes the data. If Android answers
    anything other than `Success`, stop and ask (B). `INSTALL_FAILED_UPDATE_INCOMPATIBLE` means the
    phone has a build signed with another key.
 3. **Check before moving.** Plannr opens with all your data, still in the old storage (the section
@@ -1083,7 +1090,8 @@ unreadable S fails (proof), and the marker was put back byte for byte.
 **Still needs a real phone (step 1.4):** check 9 with test data on a phone that does not hold your
 real data, then the real data with the steps in "Moving your real data", after checks 0, 2, 3, 5
 and 6 pass on this build (2, 3 and 6 also only with test data, never on the phone that holds your
-real data).
+real data). This note is a record of that day; for installing over your real data, "Rules for this
+round" and steps A and B decide.
 
 ### Emulator, 2026-11-21: the step 1.4 RC, debug build from `53db636`
 
@@ -1129,7 +1137,7 @@ Date tested:
 | C6. No biometric permission (S7) | No `USE_BIOMETRIC` or `USE_FINGERPRINT` | | |
 | C7. Restore rollback (S3/Q6), test backups only | A good test restore works and writes a safety snapshot; a failed one says "Nothing was changed" and the data is as before | | |
 | C8. Strict import (F1), test backups only | A backup with a code like `"22"` is refused and nothing changes; the unchanged backup restores | | |
-| D. Your data cleared from the emulator | After C1: `pm clear` done; every Plannr file deleted from the emulator's Download folder; no local-transport backup left (`bmgr`); `emulator-after-json.json`, `emulator-after-enc.json`, `emulator-after-update.json` and any `plannr-check.db` deleted from the laptop; the A1 backups and the C1 export deleted from the phone's Download folder, and from Google Drive and its Trash if used; the backups (`phone-after-update.json` included) kept in `D:\Backups\plannr\` | | |
+| D. Your data cleared from the emulator | After C1: `pm clear` done; every Plannr file deleted from the emulator's Download folder; no local-transport backup left (`bmgr`); `emulator-after-json.json`, `emulator-after-enc.json`, `emulator-after-update.json` and any `plannr-check.db` deleted from the laptop; every Plannr backup and export from this round deleted from the phone's Download folder (A1, any made again, C1), and from Google Drive and its Trash and the laptop's browser Downloads folder if Drive was used; the backups (`phone-after-update.json` included) kept in `D:\Backups\plannr\` | | |
 | 0. Phone, Android, WebView version | Written down | | |
 | 2. Meter; real `localStorage` limit (fresh test install only; not on this phone while it holds real data) | Meter shown; limit about 5,242,880 characters | | |
 | 3. JSON + encrypted export/restore (test data; not on this phone while it holds real data) | Both files saved and restored; a wrong passphrase changes nothing | | |
