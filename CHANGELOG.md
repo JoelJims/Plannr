@@ -3,10 +3,20 @@
 Notable changes to Plannr. The phone app is the product; the desktop server (`server.js`) is a
 development and test tool.
 
-## In review — Phase 3 (branch `plannr-phase3`, pull request #3, not merged into `main`)
+## In review — Phase 3 (branch `plannr-phase3`, pull request #3 into `main`, open)
 
 Fixes from the security and quality review of 2026-11-21
-(`docs/security-quality-review-2026-11-21.md`; finding ids in brackets). Not released.
+(`docs/security-quality-review-2026-11-21.md`; finding ids in brackets). Pull requests #4 to #8
+were merged into `plannr-phase3` on 2026-11-23. Pull request #3 (`plannr-phase3` into `main`) is
+still open. Not released.
+
+### Changed
+- **Overview budget (F4, option (b), decided by the owner).** The budget bar, its "Spent" caption
+  and its label now always use the whole project's spend, also when a date range is set. The label
+  reads "₹X left of total budget · Budget ₹Y" or "₹X over total budget · Budget ₹Y" (before: "₹X
+  left · Budget ₹Y" and "Over budget by ₹X"). With a range set, the caption says "Spent ₹X in
+  total"; the range's own figures stay in the cards above. The PDF's budget line uses the same
+  figure and words. Before, "left" compared the range's spend with the whole budget.
 
 ### Fixed
 - **Restore is all or nothing (S3/Q6).** An encrypted restore that failed a check after the backup
@@ -22,13 +32,37 @@ Fixes from the security and quality review of 2026-11-21
   (which read as "nothing spent"). They show "…" while loading and "—" with a message and the
   reason if the load fails.
 - **Home (F5).** The "First login — welcome." line, left over from the removed login, is gone.
+- **Phone start-up (Q13).** If the phone cannot open the database or plan its upgrade, the page
+  says "Plannr could not open your data." and the reason. Before, it stayed blank.
+- **Ledger entries (Q14).** An entry and its custom category name are saved in one transaction.
+  Before, if the second write failed, the entry stayed saved while the answer was an error, so a
+  retry saved it twice.
+- **Backup check (Q9).** A JSON backup whose `sequences` names a table without an id column is
+  refused with a clear message ("… has no id column, so it cannot have a sequence.") and nothing
+  changes. Before, the restore failed with a 500.
+- **Move data back (Q4).** The room check also counts the old copy, its rollback journal and the
+  other `localStorage` keys. Before, a move back that "fit" could still run out of room (it was
+  then rolled back, so nothing was lost).
+- **Safety snapshots (Q12, partly).** A snapshot taken by the storage move no longer cuts the
+  regular rotation from three snapshots to two. Move snapshots themselves are still never pruned,
+  so they add up; whether to prune them is open.
 
 ### Safety
+- **A warning about the old storage (Q2).** While the data is still in the WebView's
+  `localStorage`, the Storage section of the Data Backup page says that the last few seconds of
+  saves can be lost if Plannr is force-stopped or crashes, and to wait a few seconds before
+  swiping Plannr away. The move panel says the new storage writes each save straight away.
 - **Import refuses badly shaped ledger codes (F1).** A JSON backup whose category or sub-category
   codes are not in the `N.0` / `N.M` form, or whose sub-category sits under the wrong category, is
   refused before anything changes.
 - **Android permissions (S7).** The APK no longer asks for the fingerprint and biometric
   permissions, which came from a plugin's dependency and were never used.
+
+### Accessibility
+- **Dialogs (F18).** While a confirm or choice dialog is open, Tab and Shift+Tab stay inside it.
+  When it closes, keyboard focus goes back to the control that opened it.
+- **The bulk-edit table** (Overview and Money Debited) gives every control a name for screen
+  readers, for example "Amount, row 3". Nothing visible changes.
 
 ### Tools
 - `scripts/phone-test.ps1` waits until Home has settled before its offline check, waits up to
@@ -54,6 +88,38 @@ Fixes from the security and quality review of 2026-11-21
 - **Version names (decided).** The first public `versionName` is `1.0.0`; `versionCode` keeps
   going up by 1 per published build. `npm run release:android` now turns `1.0` into `1.0.0`
   (before: `1.1`), then bumps the last number (`1.0.0` → `1.0.1`).
+- `test/release-guards.test.js` also fails if a `.p12` or `.pem` key file is tracked by git.
+
+### Tests and CI
+- CI also runs on pull requests into `plannr-phase3` (`.github/workflows/tests.yml`).
+- `npm run test:modal-focus` (`test-ui/c-modal-focus.js`, the F18 check) is part of the full suite
+  and of CI.
+- **F7.** The `static-hosting` and `offline` UI suites ignore sqlite-wasm's own two-line fallback
+  message, and only that, through one shared collector (`test-ui/_console-errors.js`).
+  `static-hosting` also checks that every `.wasm` file is served as `application/wasm`.
+- **F8 / F9 (partly).** `contract-phase-a` waits for what it reads next (at most 15 s) instead of
+  sleeping a fixed time, and its waits let only a timeout pass. The other suites still use fixed
+  ports and sleeps.
+
+### Clean-up (nothing visible changes)
+- One shared copy, used by both `server.js` and `public/local-api.js`, of the owner queries
+  (`core/owner.js`), the IST date stamp (`core/ist-date.js`) and the start-up jobs helper
+  (`createStartJobs` in `core/request-queue.js`). One copy of `parsePaise` for the contract pages
+  (`PlannrUI.parsePaise` in `public/plannr-ui.js`).
+- Two helpers nothing called are gone from `server.js`. `test/c-dead-code.test.js` checks that
+  every top-level function in `server.js`, `local-server.js` and `public/local-api.js` is used.
+
+### Docs
+- `docs/release-plan.md` (new): what the first public release APK needs: the signing key, version
+  numbers, moving from the debug build, the release notes and a checklist. Still a plan, apart
+  from the key's new place, the release script's key checks and the version rule (all above).
+- `docs/PHONE-TEST-CHECKLIST.md`: the owner's phone round as decided on 2026-11-22. A1: an
+  encrypted and a JSON backup on the phone. A2: both copied to the laptop by cable. A3: both
+  restored on the emulator and compared, and the install rehearsed there. A4: go only if all of it
+  matches. B: `adb -d install -r`, never uninstall. C: the checks for this build. D: clear the data
+  from the emulator.
+- `docs/share-and-reminder-pdf-plan.md`: Send PDF goes on the existing daily report reminders (ids
+  101–105); a payment reminder is a separate, later feature. Still a plan, not built.
 
 ## Merged into `main` — Phase 2 (branch `plannr-phase2`, pull requests #1 and #2)
 
