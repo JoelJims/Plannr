@@ -46,9 +46,9 @@ always the in-app database, with no probe request at all; in a desktop browser i
 `server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Server: 1` header
 (`npm run test:runtime-mode` drives all four combinations in a browser).
 
-Because `local-api.js` and `server.js` answer the same set of requests, every page behaves
-the same whichever is underneath. They are deliberately separate files rather than one
-shared one — see “Decisions made on purpose” below.
+Because `local-api.js` and `server.js` run the same route code (`core/`, see “Where things
+live” below), every page behaves the same whichever is underneath. Only what has to differ
+between the phone and the desktop is kept apart — see “Decisions made on purpose” below.
 
 **Desktop.** `npm start` runs `node server.js` on `http://localhost:3000`; `PORT` changes
 the port. `PLANNR_DB=/path/to.db` changes which database file is used — **always set this
@@ -67,8 +67,12 @@ sync time is exactly what ships.
 ### Where things live
 
 ```
-server.js         The desktop web server: all the ledger screens, Overview and PDF,
-                  backups, and the recycle bin. Desktop only — not what ships on Android.
+server.js         The desktop dev server: Express around the shared route code in core/,
+                  plus the desktop's own services (the PDF through a headless browser).
+                  Desktop only — not what ships on Android.
+core/             The one copy of every /api route (core/routes/) and its helpers. Both
+                  server.js and local-api.js run it; each passes in its platform's
+                  services (core/host.js). Copied into public/core/ by the sync.
 db.js             Creates the tables and applies any changes to them on startup. The
                   update runs safely even if it happens twice.
 db-engine.js      Lets db.js talk to the database that runs inside the app.
@@ -280,6 +284,8 @@ going over an allowance is a normal thing to happen, not an error.
 - **`npm run test:runtime-mode`** — which backend answers `/api` in each of the four cases
   (in the app or a browser, `server.js` or plain files): inside the app always the in-app
   database, with no probe request.
+- **`npm run test:modal-focus`** — the confirm and choice dialogs keep keyboard focus inside
+  while open and give it back to the control that opened them (finding F18).
 - **Database upgrades from every past version** (part of `npm test`, step 1.4 B4).
   `test/fixtures/schema-history/` holds one small database for every schema `db.js` has ever
   built (8 of them, user_version 1 and 2, made-up rows only), plus the old migration runner
@@ -328,12 +334,17 @@ going over an allowance is a normal thing to happen, not an error.
   safely written. The one taken before an upgrade that has not finished (it failed, and the app
   is being started again) is never deleted until an upgrade finishes; it is named in
   `safety-snapshots/plannr-upgrade-pending.json`. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
-  no screen to restore one: they are for recovery with `adb` on a debug build, or from Android's
-  Auto Backup.
-- **Android Auto Backup** is on, limited to the ledger (the WebView's localStorage) and the
-  safety snapshots (`android/app/src/main/res/xml/backup_rules.xml` for Android 6-11,
-  `data_extraction_rules.xml` for 12+; keep them identical). Worst case with storage full is
-  about 12 MB, under Android's 25 MB limit (`npm run test:storage-limit` measures it).
+  no screen to restore one: they are for recovery with `adb` on a debug build. They are not in
+  Android's Auto Backup; they stay on the phone. The storage move's own snapshots
+  (`plannr-pre-move-*`, `plannr-old-copy-*`, `plannr-pre-move-back-*`) are outside the rotation
+  of 3 and are never deleted (finding Q12 in `docs/security-quality-review-2026-11-21.md`).
+- **Android Auto Backup** is on, limited to the database file (`plannrSQLite.db` and its
+  journal), the marker that says which storage is in use (`plannr-storage.json`), and the
+  WebView's localStorage (the data before the move, or the old copy while it is kept)
+  (`android/app/src/main/res/xml/backup_rules.xml` for Android 6-11,
+  `data_extraction_rules.xml` for 12+; keep them identical). All of it must stay under Android's
+  25 MB limit; `npm run test:storage-limit` checks this, and the Data Backup page shows the
+  estimate.
 - **A category edit gone wrong.** Every category CSV import forces an encrypted backup
   first, and you have to confirm you have it — a dialog names the exact file — before the
   import will run. An import that would remove a category still used by recorded spending is
@@ -452,26 +463,33 @@ There is deliberately **no reset button inside the app**.
   rolled back with it, or a save wiped by a restore running at the same time. There is one user, so
   waiting costs nothing that matters. The one exception is the Overview PDF: its page is built inside
   the queue and rendered outside it, so a PDF does not hold up the next request.
-- **`server.js` and `public/local-api.js` are deliberately separate.** They answer the same
-  requests as two independent files rather than sharing one, so the Android app depends on no
-  Node code at all. `repo.js` is the single exception, shared and copied into `public/`,
-  because its category-CSV validation is important enough that two copies drifting apart
-  would be worse than the duplication it avoids elsewhere.
+- **One copy of the route code, two thin hosts.** Every `/api` route lives once in `core/`
+  (cross-platform plan step 1.3), and both `server.js` and `public/local-api.js` run it. What
+  has to differ by platform (the PDF renderer, the safety snapshots, the backup encryption's
+  scrypt, restoring the database) reaches the core as services (`core/host.js`), so the core
+  never imports Express, Playwright or Capacitor. The Android app still runs no Node code:
+  `sync-public-modules.js` copies `core/` and the shared root files (`db.js`, `repo.js`,
+  `backup-format.js`, `request-rules.js` and others) into `public/`. Edit them at the root or
+  in `core/`, never in `public/`.
 
 ---
 
 ## 8. What isn't done
 
-- **`server.js` is one very large file.** It has grown well past a comfortable size and has
-  not been split up. It works and it is tested, but it is the main thing that needs tidying.
 - **Phase 2's phone-only checks passed on an Android 16 emulator, not yet on the user's
   phone**: the save-and-share path for backups and the PDF, the WebView storage folder and
   real limit, safety snapshots in the app's folder, updating over the old version, Auto Backup
   and restore, airplane mode, and a build without the INTERNET permission. Results and what to
   repeat on the phone: `docs/PHONE-TEST-CHECKLIST.md`.
-- **The phone database is limited to about 10 MB of `localStorage`,** and a save made less than
-  about a second before Android kills the app can be lost (measured on the emulator; the
-  database stays consistent). Moving it is proposed, not done: `docs/storage-proposal.md`.
+- **A phone that has not moved its data keeps it in `localStorage`**, which has a fixed size
+  limit, and where the last few seconds of saves can be lost if Android kills the app (measured
+  on the emulator; the database stays consistent; the Data Backup page says so, finding Q2).
+  The move to a database file of its own is built (step 1.4, `docs/step-1.4-storage-plan.md`):
+  Data Backup → **Move to the new storage**. It has not been run on the owner's real data yet.
+- **How the owner's phone moves from the debug build to the release build is not decided.**
+  A release APK cannot be installed over a debug build, and that phone holds the real data on a
+  debug build. Until the owner decides, it gets debug builds only, as in
+  `docs/PHONE-TEST-CHECKLIST.md`. The question is in `docs/release-plan.md` §6.
 - **A database made before 2026-08-23 (user_version 1) whose upgrade fails in its last steps
   needs two starts.** The next start shows an error once ("no such column:
   contract_allowance_id"); the start after that finishes the upgrade. Nothing is lost, and the
