@@ -27,23 +27,28 @@ the table at the end.
 
 ## The APK under test
 
-The phone round uses an APK built from `main` after PR #3 is merged. It will have everything in
-`plannr-phase3`: the step 1.4 storage move (check 9), the fixes from the review of 2026-11-21
-(`docs/security-quality-review-2026-11-21.md`), and the pull requests merged into `plannr-phase3`
-on 2026-11-22. Until that APK exists, the current candidate is the `24d1d92` build (the right-hand
-column below). Either replaces the step 1.4 RC (`53db636`), which was never run on the phone.
+The phone round uses a **fresh debug APK built from `main` after PR #3 is merged** ("Build a fresh
+APK from main" below). It will have everything in `plannr-phase3`: the step 1.4 storage move
+(check 9), the fixes from the review of 2026-11-21 (`docs/security-quality-review-2026-11-21.md`),
+and pull requests #4 to #8, merged into `plannr-phase3` on 2026-11-23 (among them the new budget
+wording, F4, checked in C9; `CHANGELOG.md` lists them all). It replaces the step 1.4 RC
+(`53db636`), which was never run on the phone.
 
 Fill in the box for the APK you will use, and use that one file in every step: on the emulator (A3)
 and on the phone (B). Below, `<APK under test>` means that file.
 
-| | APK under test (fill in) | Current candidate (example) |
+The right-hand column is an **old example** of a filled-in box: the `24d1d92` build of 2026-11-22.
+It shows what goes where. Do not use it for the round: it was built before pull requests #4 to #8
+and has none of their changes.
+
+| | APK under test (fill in) | Old example (`24d1d92`, 2026-11-22; not for the round) |
 |---|---|---|
 | File | | `D:\Projects\plannr-wt\apk\plannr-phase3-24d1d92-debug.apk` (a work folder: copy the file to `D:\Backups\plannr\` to keep it) |
 | SHA-256 | | `2b4f34f6944f48719def17b98e5a689610fa7e44a996f47b14c615d499a14888` |
-| Built from commit | | `24d1d92` on `plannr-phase3` (PR #3, not merged yet). The build's branch has one more commit, which only changes CI, so the app is `24d1d92`'s |
+| Built from commit | | `24d1d92` on `plannr-phase3`, before pull requests #4 to #8. The build's branch has one more commit, which only changes CI, so the app is `24d1d92`'s |
 | Signing certificate SHA-256 | | `fd12f08172d278469d6cad14786f48e080bc0c308cb457d56ce0ecdae4b95629` (the laptop's Android debug key) |
 
-More about the current candidate:
+More about the old example:
 
 | | |
 |---|---|
@@ -84,7 +89,7 @@ Get-FileHash <APK under test> -Algorithm SHA256
 & "$env:LOCALAPPDATA\Android\Sdk\build-tools\36.0.0\aapt.exe" dump badging <APK under test> | Select-String "package:"
 ```
 
-- Write the hash in the box. `Get-FileHash` prints capitals: for the current candidate it is
+- Write the hash in the box. `Get-FileHash` prints capitals: for the old example it was
   `2B4F34F6…A14888`.
 - Write "Signer #1 certificate SHA-256 digest" in the box. It must be the same as the phone's
   ("What the phone has now" below; for `9d7fd97` it is `fd12f081…b95629`). With a different
@@ -114,8 +119,8 @@ and compared with the phone, and the install itself is rehearsed there.
    not install, keep the backups, and ask.
 
 Then **C** (the checks for this build) and **D** (clear your data from the emulator). The test-data
-checks (2, 3, 6, 9, C7, C8) are not needed before B. They never run on the phone while it holds your
-real data: run them on the emulator with test data, after D.
+checks (2, 3, 6, 9, C7, C8, C11) are not needed before B. They never run on the phone while it holds
+your real data: run them on the emulator with test data, after D.
 
 ### Connect the phone
 
@@ -128,7 +133,7 @@ real data: run them on the emulator with test data, after D.
 
 ### What the phone has now
 
-The phone was not connected when the current candidate was made: `adb devices` listed only the
+The phone was not connected when the old example was made: `adb devices` listed only the
 emulator at 11:47, 11:50 and 11:52 on 2026-11-22. So nothing on the phone was read. The last build
 made for it is `9d7fd97`, kept as `D:\Backups\plannr\Plannr-debug-realphone-9d7fd97.apk`. SHA-256
 `7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef`, 5,974,512 bytes, versionCode 1,
@@ -183,8 +188,9 @@ Get-FileHash D:\Backups\plannr\phone-current.apk -Algorithm SHA256
   a timeout, and a cable that came out during the install.
 - On the phone, while it holds your real data, do not restore any backup and do not tap **Move to
   the new storage**. Your backups are restored on the emulator only (A3). Test backups and the move
-  are tried with test data (C7, C8 and check 9).
-- The test-data checks (2, 3, 6, 9, C7, C8) never run on the phone while it holds your real data.
+  are tried with test data (C7, C8, C11 and check 9).
+- The test-data checks (2, 3, 6, 9, C7, C8, C11) never run on the phone while it holds your real
+  data.
   This rule wins over the older "still needs the real phone" lists under Results.
 - Every phone command has `-d`, and every emulator command has `-s emulator-5554` ("Which device"
   at the top).
@@ -376,8 +382,9 @@ touches; that is why C1 checks the phone again afterwards. The emulator tests re
     adb -s emulator-5554 install -r D:\Backups\plannr\phone-current.apk
     ```
 
-    It must answer `Success`. The current candidate and `9d7fd97` both have versionCode 1 and the
-    same debug key, so `-r` works. If it answers anything else (for example
+    It must answer `Success`. A debug build of `main` made on this laptop and `9d7fd97` both have
+    versionCode 1 (the `package:` line in "Check the APK on the laptop") and the same debug key,
+    so `-r` works. If it answers anything else (for example
     `INSTALL_FAILED_VERSION_DOWNGRADE`, when the APK under test has a higher versionCode than the
     phone's build): stop and ask. Do not try other flags, and do not uninstall.
 14. **Restore the JSON backup with the phone's build.** Open Plannr and wait for Home: it is the
@@ -589,7 +596,7 @@ Write each result in the table "The owner's phone: the APK under test" at the en
 
    **If C1 fails** (a figure differs, something is missing, the comparison of a new export does not
    end with `ALL THE SAME`, or Plannr does not open): stop. On the phone, do not restore any backup,
-   do not tap **Move to the new storage**, and do not uninstall. Do not run C2 to C6 or
+   do not tap **Move to the new storage**, and do not uninstall. Do not run C2 to C6, C9, C10 or
    `phone-test.ps1`, and do not do D. Keep the backups and the emulator as they are (the emulator
    holds your data from the rehearsal of B, A3 steps 11 to 17), and ask.
 2. **CSV export: one share sheet (F2).** Data Backup → **CSV for Excel** → **Download CSV (for
@@ -630,6 +637,36 @@ Write each result in the table "The owner's phone: the APK under test" at the en
    the copy with **Import / Restore**: it is refused with "ledger_mains: code "22" is not a category
    code (a category's code is "N.0", like "22.0").", and nothing changes. The unchanged test backup
    still restores.
+9. **Overview budget (F4). Look only; safe on your real data.** Open the Overview and find the
+   bar under **Overall budget (optional)**. Do not type in the budget box and do not tap **Set
+   budget** or **Clear**. Write down the caption on the left of the bar ("Spent ₹Z") and the label
+   on the right. With a budget set, the label now reads "₹X left of total budget · Budget ₹Y" or
+   "₹X over total budget · Budget ₹Y" (before this build: "₹X left · Budget ₹Y" or "Over budget
+   by ₹X"); with none, "No budget set". Then, under **Date range**, tap **Edit**, choose a shorter
+   range (a later "From" date) and tap **Apply**. The figures in the cards change to the range,
+   but the budget bar does not: the caption reads "Spent ₹Z in total" with the same Z, the label
+   is the same as before, and the bar is just as full. Tap **All dates** to go back. A date range
+   only changes what the page shows; it saves nothing. The PDF's budget line follows the same
+   rule; the automated tests check it (`test/f4-budget-left.test.js`), so there is no need to open
+   a PDF for this.
+10. **A note about the old storage (Q2). Look only; safe on your real data.** Data Backup → the
+    storage section. While your data is still in the old storage (on your phone, until you move
+    it), it shows: "In this storage, Android writes your saves to the phone a few seconds late. If
+    Plannr is force-stopped or crashes right after you save, the last few seconds of saves can be
+    lost. …". Before this build there was no such note. After the move it is gone.
+11. **Backup check (Q9). Test backups only**, as in C7. Copy a test JSON backup. In a text editor,
+    in the `"sequences"` section near the end, add `"settings": 5` (with a comma if another entry
+    comes before it). Restore the copy with **Import / Restore**: it is refused with "sequences:
+    settings has no id column, so it cannot have a sequence.", and nothing changes. The unchanged
+    test backup still restores.
+
+Not checked by hand in this round (they need a keyboard, a screen reader, test data, a forced
+failure or a damaged database); the automated tests cover them: the dialog focus (F18,
+`npm run test:modal-focus`), the screen-reader names in the bulk-edit table
+(`test/c-a11y-labels.test.js`), "Move data back" (Q4, `test/q4-move-back-room.test.js`), the
+move snapshots (Q12, `test/q12-move-snapshots.test.js`), an entry and its custom name in one
+transaction (Q14, `test/q14-ledger-custom-atomic.test.js`) and the start-up message for a database
+that cannot be read (Q13, `test-ui/backup-roundtrip.js`).
 
 ### D. Afterwards: clear your data from the emulator
 
@@ -864,7 +901,10 @@ Turn on airplane mode (Wi-Fi and mobile data off), force-stop Plannr, open it.
 - [ ] All ledgers, entries, categories and totals are the same as before.
 - [ ] If the new version upgrades the database (a new migration), a pre-migration safety snapshot
       appears in `files/safety-snapshots/`.
-- [ ] For a real release, repeat with the signed release APK, following `docs/RELEASE.md`.
+- [ ] For a real release, repeat with the signed release APK, following `docs/RELEASE.md`. A
+      release APK cannot be installed over a debug build (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+      For the owner's real-data phone, which has a debug build, how it moves to the release key
+      is an open decision (`docs/release-plan.md` §6): do not uninstall it to get past this.
 
 ## 6. Android Auto Backup ⚠ (uninstalls the app)
 
@@ -1111,10 +1151,11 @@ Not yet run. Step A comes first: both backups made on the phone, copied to the l
 restored on the emulator and compared, and B rehearsed there. Step B (the install) only if all of
 that matches. The step 1.4 RC (`53db636`) was never run on the phone; the APK under test replaces
 it.
-Checks 2, 3, 6, 9, C7 and C8 need test data: on a phone that holds your real data they cannot run
-without uninstalling or restoring, so run them on another device or the emulator (after D), never
-here. Check 0, C1 to C6, check 4 (its part for the phone that holds your real data, after C1) and S
-run on this phone.
+Checks 2, 3, 6, 9, C7, C8 and C11 need test data: on a phone that holds your real data they cannot
+run without uninstalling or restoring, so run them on another device or the emulator (after D),
+never here. Check 0, C1 to C6, C9, C10, check 4 (its part for the phone that holds your real data,
+after C1) and S run on this phone. The APK under test must be a fresh build from `main` after PR #3,
+not the old example (`24d1d92`) at the top.
 
 APK under test (copy it from the box at the top). File: . SHA-256: . Built from commit: .
 Signing certificate SHA-256: .
@@ -1137,6 +1178,9 @@ Date tested:
 | C6. No biometric permission (S7) | No `USE_BIOMETRIC` or `USE_FINGERPRINT` | | |
 | C7. Restore rollback (S3/Q6), test backups only | A good test restore works and writes a safety snapshot; a failed one says "Nothing was changed" and the data is as before | | |
 | C8. Strict import (F1), test backups only | A backup with a code like `"22"` is refused and nothing changes; the unchanged backup restores | | |
+| C9. Overview budget (F4), look only | Label "₹X left of total budget · Budget ₹Y" (or "over total budget"), or "No budget set"; with a shorter range applied, the caption says "Spent ₹Z in total" with the same Z, and the label and the bar do not change | | |
+| C10. Old-storage note (Q2), look only | Data Backup's storage section shows the note that the last few seconds of saves can be lost | | |
+| C11. Backup check (Q9), test backups only | A backup with `"settings"` in `sequences` is refused ("… has no id column …") and nothing changes; the unchanged backup restores | | |
 | D. Your data cleared from the emulator | After C1: `pm clear` done; every Plannr file deleted from the emulator's Download folder; no local-transport backup left (`bmgr`); `emulator-after-json.json`, `emulator-after-enc.json`, `emulator-after-update.json` and any `plannr-check.db` deleted from the laptop; every Plannr backup and export from this round deleted from the phone's Download folder (A1, any made again, C1), and from Google Drive and its Trash and the laptop's browser Downloads folder if Drive was used; the backups (`phone-after-update.json` included) kept in `D:\Backups\plannr\` | | |
 | 0. Phone, Android, WebView version | Written down | | |
 | 2. Meter; real `localStorage` limit (fresh test install only; not on this phone while it holds real data) | Meter shown; limit about 5,242,880 characters | | |
