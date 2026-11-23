@@ -44,6 +44,10 @@ function startServer() {
   const ctx = await browser.newContext({ viewport: { width: 1200, height: 1400 } });
   const page = await ctx.newPage();
   const errors = attachErrorCollector(page);
+  // Every .wasm file the pages ask for, by URL. The check near the end of this suite asks
+  // local-server.js for each one again and reads its Content-Type.
+  const wasmUrls = new Set();
+  page.on('request', (r) => { if (new URL(r.url()).pathname.endsWith('.wasm')) wasmUrls.add(r.url()); });
 
   const afterNav = async (label) => {
     await page.waitForTimeout(500);
@@ -341,6 +345,24 @@ function startServer() {
     check('Backup reminder interval: "3" reloads correctly', selVal === '3', selVal);
     check('home.html: banner still hidden (last export was moments ago, well inside 3 days)', !(await bannerVisible()), await bannerText());
     check('Backup reminder section: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    // ---------------------------------------------------------------------------------------------
+    // The .wasm Content-Type (review finding F7). The browser's fast way to load sqlite3.wasm,
+    // WebAssembly.instantiateStreaming(), only accepts a file served as application/wasm. With any
+    // other type sqlite-wasm logs its two-line fallback note and loads the file a slower way. The
+    // error collector ignores that note (test-ui/_console-errors.js), so the console checks above
+    // can no longer catch a wrong type. This checks the header itself, for every .wasm file the
+    // pages asked for during this suite.
+    // ---------------------------------------------------------------------------------------------
+    const wasmList = [...wasmUrls].sort();
+    check('the pages asked for sqlite3.wasm', wasmList.some((u) => new URL(u).pathname.endsWith('/sqlite3.wasm')), wasmList.join(', '));
+    for (const url of wasmList) {
+      const res = await page.request.get(url);
+      const type = res.headers()['content-type'] || '';
+      check(`${new URL(url).pathname}: served with Content-Type application/wasm`,
+        res.status() === 200 && type.split(';')[0].trim().toLowerCase() === 'application/wasm',
+        `status ${res.status()}, Content-Type ${JSON.stringify(type)}`);
+    }
   } finally {
     await browser.close();
     server.kill();
