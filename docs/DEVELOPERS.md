@@ -63,11 +63,12 @@ data is in SQLite, and `db.js` owns the schema: on startup the database upgrades
 numbered migrations, with a safety snapshot first. `repo.js` is the one layer every read and write
 goes through, and `ledgers.js` holds the starting list of spending categories.
 
-Every API route lives once in `core/routes/` and runs in both backends: `server.js` (Express, on
-the desktop) and `public/local-api.js` (inside the app, answering the screens' requests without a
-network). On the phone the database is a file of its own (`@capacitor-community/sqlite` behind
-Plannr's adapter); older installs on the WebView's `localStorage` can move to it from the Data
-Backup page. `android/` holds the native project Capacitor generates.
+Every API route except the dev server's `/api/health` lives once in `core/routes/` and runs in both
+backends: `server.js` (Express, on the desktop) and `public/local-api.js` (inside the app, answering
+the screens' requests without a network). On the phone the data starts in the WebView's
+`localStorage` (sqlite-wasm). Data Backup → **Move to the new storage** moves it into a database
+file of its own (`@capacitor-community/sqlite` behind Plannr's adapter). `android/` holds the
+native project Capacitor generates.
 
 ## Backups and Auto Backup
 
