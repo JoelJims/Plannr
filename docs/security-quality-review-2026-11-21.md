@@ -57,7 +57,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
 | F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | Open |
 | F14 | Low | Encrypted restore body limit 20 MB (base64), so a database over about 15 MB cannot be restored on the phone; export does not warn | `request-rules.js:11,26` | Open |
-| F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open |
+| F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open (F18 **Fixed** 2026-11-22: `f2f1701`, `ws-c-cleanup`; checked by `npm run test:modal-focus`) |
 | F20 | Low | `engines` says Node ≥22.12.0; `node:sqlite` is unflagged from 22.13 (unchecked) | `package.json:41` | Open |
 | E1 | Low | The PDF export gives up after 25 s; a slow emulator reached it | `public/overview.html` (withTimeout), emulator 2026-11-21 | Open; `phone-test.ps1` now waits up to 90 s and reports the PDF time (`46d21ec`): 4.1 to 4.5 s on the emulator 2026-11-22 |
 | S6, S8, S11–S19, Q15, Q17–Q19, F6, F11, F21–F25 | Info | Auto Backup holds plain data (by design); broad FileProvider path; `run-tests.js` says "never opened" but checks mtime; error details and paths in answers; logging; PDF Chromium `--no-sandbox`; CSV formula prefix; `.env` read from the working folder; LAN token over HTTP; dead code and imports; README screenshots missing; docs say the storage move is not done and that snapshots are in Auto Backup | see the audit notes | Open (docs and clean-up) |
@@ -177,7 +177,7 @@ measurements and what is still open are in `docs/session-report-2026-11-22.md`.
 | S5 | Not built. Planned as backup format v2 (scrypt N = 2^17, the parameters in the header); v1 files always stay readable | none |
 | Incident 3 | Left as it is, as decided | none |
 | Playwright browser | `npx playwright install chromium` run: the UI suites use Chromium revision 1228 again | none |
-| F4 | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) | `50997b1`, `eb73860`, `ade8d3d`, `7e3a915` |
+| F4 | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) | `50997b1`, `eb73860`, `ade8d3d`, `7e3a915`, `1986cac`, `c4c7198`, `3674ba0` |
 
 ## 9. Follow-up, 2026-11-22 (`ws-a-fixes`)
 
@@ -199,7 +199,8 @@ new suite, and are described in each commit message.
 | F7 | The "no console errors" checks in `static-hosting` and `offline` ignore sqlite-wasm's own two-line fallback message ("wasm streaming compile failed: ..." then "falling back to ArrayBuffer instantiation"), and only that pair; any other console error still fails them. Both suites use one shared collector, `test-ui/_console-errors.js`. The pair appears when a suite leaves a page while its `.wasm` is still downloading. A wrong Content-Type for `sqlite3.wasm` also causes the pair, so `static-hosting` now checks that header itself: every `.wasm` the pages load must come back as `application/wasm`. Proof: a scratch harness (not committed) served every `.wasm` as `text/plain`; the old suites failed (14 and 12 checks), the new ones pass and still fail three planted errors. With the `.wasm` type removed from `local-server.js`, the header check is the one check that fails | `c927071`, `d11f8ac`, `c3b63d6` |
 | F8 / F9 (partly) | `contract-phase-a` waits for what it reads next (15 s at most) instead of sleeping a fixed time, and its waits let only a timeout pass: any other error stops the suite at the wait that broke. Proof: scratch copies of the suite (not committed) made the page's contract load answer late (the old suite crashed, the new one passes) and broke single waits (the old suite passed or failed at an unrelated check, the new one stops at that wait). The fixed ports, the other suites and the node tests named in the finding are unchanged | `8b5546a`, `420416a` |
 
-Elsewhere the same day (other branches, statuses to be set here when they merge): F4 option (b)
-is on `ws-b-f4` as a draft, awaiting the decision; F18 (modal focus) is fixed on `ws-c-cleanup`.
+Elsewhere (other branches, merged into `plannr-phase3` on 2026-11-23, statuses set above): F4
+option (b), decided by the owner, is fixed on `ws-b-f4`; F18 (modal focus) is fixed on
+`ws-c-cleanup` (`f2f1701`, checked by `npm run test:modal-focus`).
 Q7 and Q16 (`public/local-api.js`) were left for later because that file was being cleaned up on
 `ws-c-cleanup` at the same time.
