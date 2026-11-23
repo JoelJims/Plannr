@@ -248,9 +248,15 @@ real-data phone: see the note at the top of section 3.
 1. **How does the owner's phone move from the debug build to the release build?** (open, for the
    owner to decide) The phone runs the debug build (debug key) and holds the only live copy of the
    real data. A release APK cannot be installed over a debug-key app: Android answers
-   `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The ways named so far are to uninstall first (never on
-   that phone), to keep using debug builds on that phone, or to move the data by backup and
-   restore into a separately installed app. None is chosen. Until the owner decides, that phone
+   `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The ways named so far:
+   - keep using debug builds on that phone;
+   - uninstall the debug app, install the release build and restore a backup into it. Uninstalling
+     deletes the app's data on the phone, and the rule today is never to uninstall on that phone;
+   - give release builds a different app id, so the two apps can sit side by side, and move the
+     data by backup and restore. Android treats a different app id as a different app, and
+     changing the app id is the owner's call.
+
+   None is chosen. Until the owner decides, that phone
    follows `docs/PHONE-TEST-CHECKLIST.md`: debug builds, `adb -d install -r`, never uninstall, and
    stop on any answer other than `Success`.
 
