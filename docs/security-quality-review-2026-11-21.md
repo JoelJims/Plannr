@@ -1,5 +1,17 @@
 # Security and quality review of `plannr-phase2`, 2026-11-21
 
+> **Status on 2026-11-23.** This review was written on 2026-11-21. Since then:
+> - `plannr-phase2` was merged into `main` (PR #1, `4b3ab08`, 2026-11-21). That fixed S1: `server.js`
+>   now listens on `127.0.0.1` only, unless `PLANNR_HOST` is set, and then only with a
+>   `PLANNR_TOKEN` of at least 16 characters; otherwise it refuses to start (`accessConfig()` and
+>   `app.listen(PORT, access.host, …)` in `server.js`).
+> - All nine decisions of section 6 were taken. The fixes are on `plannr-phase3` (sections 8 and
+>   9); pull requests #4 to #8 were merged into it on 2026-11-23. `plannr-phase3` into `main` is
+>   pull request #3, still open.
+> - The Status column in section 2 is kept up to date. Sections 1, 5, 6 and 7 describe the end of
+>   the 2026-11-21 session and are kept as a record.
+> - What is still open now is in section 10.
+
 Scope: the final state of step 1.4 (`71b9fce`, code as `53db636`). Phase 1 (read-only audit) by
 three reviewers working in parallel (security; data safety and reliability; frontend, tests,
 tooling, efficiency), each finding checked against the code; every Critical and High finding confirmed
@@ -16,16 +28,18 @@ fresh salt and IV per file. No secret is in the history. What remains is mostly 
 edges (restore failure after the file is replaced, two-statement saves, move-back headroom), escaping
 in one place (fixed), and slow pages with many entries. **`main` is the exposed branch:** its
 `server.js` still listens on every interface with no login (S1); merging this branch closes it.
+(Since fixed: the merge into `main` on 2026-11-21, PR #1; see S1 in section 2.)
 
 ## 2. Findings
 
 Severity is judged for this app: one user, offline, phone app shipped, dev server for development.
-"Status" is at the end of this session.
+"Status" was first written at the end of the 2026-11-21 session and is kept up to date (last:
+2026-11-23).
 
 | ID | Sev. | Finding | Evidence | Status |
 |---|---|---|---|---|
 | Q1 | **High** | A database from the two oldest schemas (v1) keeps the removed login's `sessions` table, which the start-up ownership check refuses: the app cannot start (dev server; phone after restoring such an encrypted backup) | `backup-format.js:42-45` (list), `:82-97` (check), `core/routes/backup.js:36` (start job); fixtures 01, 02, L1–L5 | **Fixed** (`ed52850`) |
-| S1 | Medium | `main` (not this branch) listens on every interface with no login; export and import reachable from the Wi-Fi and by DNS rebinding | `main:server.js:2615` `app.listen(PORT, '0.0.0.0'…)`, `main:server.js:171` | Outside the code: merge (NEEDS MY DECISION) |
+| S1 | Medium | `main` (not this branch) listens on every interface with no login; export and import reachable from the Wi-Fi and by DNS rebinding | `main:server.js:2615` `app.listen(PORT, '0.0.0.0'…)`, `main:server.js:171` (both before the merge) | **Fixed** 2026-11-21 by the merge into `main` (PR #1, `4b3ab08`): `server.js` listens on `127.0.0.1` unless `PLANNR_HOST` and a `PLANNR_TOKEN` of 16+ characters are set, and refuses to start in LAN mode without one |
 | S3 / Q6 | Medium | A restore replaces the database, then runs migrations and the foreign-key check; if they fail, the backup's data stays live while the answer says it failed; on the phone the safety copy is out of reach | `db.js:372-376`; `core/routes/backup.js:133-134`; `public/local-snapshot.js:100,107` | **Fixed** 2026-11-22 (`5e98901`): automatic rollback, as decided |
 | Q3 | Medium | Saving a contract writes it and its payment dates as separate statements, outside a transaction; a failure between them leaves dates deleted or a contract without dates | `repo.js:217`; `core/routes/contracts.js:321-331` | **Fixed** 2026-11-22 (`00f6a59`) |
 | Q4 | Medium | "Move data back fits" counts only the incoming size, not the journal or what is already in `localStorage` | `core/storage-move.js:251`; `public/db-adapter-kvvfs.js:52-90` | **Fixed** 2026-11-22 (`883aabd`, `ws-a-fixes`) |
@@ -33,7 +47,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F1 | Medium | Ledger codes from a restored JSON backup go into HTML attributes unescaped (a crafted backup could run script in the app) | `public/plannr-ui.js:138,145,311,318,1007,1022,1060`; `backup-format.js:157-170` (codes only checked non-empty) | **Fixed** (`678092c`); the stricter import too, 2026-11-22 (`b623200`) |
 | F2 | Medium | "Download CSV (for Excel)" uses a plain download link, a dead end in the Android WebView, and reports success | `public/data-backup.html:875-878` (vs `saveFile()` elsewhere) | **Fixed** 2026-11-22 (`8b9101e`) |
 | F3 | Medium | The Overview shows ₹0.00 while loading and after a failed load, with no message | `public/overview.html:375-381, 620-621, 637-638` | **Fixed** 2026-11-22 (`e5b30ca`) |
-| F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:725-741` (renderTotalBar); `core/overview-pdf.js:118-135` (budgetBlock) | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) |
+| F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:725-741` (renderTotalBar); `core/overview-pdf.js:118-135` (budgetBlock) | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`, merged as PR #4 on 2026-11-23) |
 | Q5 | Low | An unreadable marker file plus a lost `localStorage` key after a kill could lead startup to delete the database file (two faults) | `public/storage-native.js:128-135,177`; `core/storage-move.js:227` | Open |
 | S2 | Low | Dev server: no Origin check; two body-less POST routes (mark exported, restore from bin) can be triggered by a web page while it runs | `core/routes/backup-reminder.js:78`; `core/routes/trash.js:45` | Open |
 | S4 | Low | A crafted backup can bring triggers or views; the `localStorage` restore runs schema SQL from the file | `public/local-snapshot.js:59-60,76-77`; `db-adapter-node.js:95` | Open |
@@ -46,7 +60,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q9 | Low | A backup's `sequences` naming a table without an id gives a 500 instead of a 400 | `backup-format.js:178-184,326` | **Fixed** 2026-11-22 (`d8ef781`, `ws-a-fixes`) |
 | Q10 | Low | No upper limit on amounts; a typo near ₹90 trillion can break the Overview's sums | `core/parsers.js:11-17` | Open |
 | Q11 | Low | Any I/O error is reported as "storage full" on every engine | `db.js:1717-1723` | Open |
-| Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | **Fixed** 2026-11-22 (`7b2d695`, `ws-a-fixes`) |
+| Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | **Partly fixed** 2026-11-22 (`7b2d695`, `ws-a-fixes`): a move snapshot no longer cuts the rotation. Move snapshots are still never pruned, so they add up: open (prune them, or keep them all; not decided) |
 | Q13 | Low | If planning the upgrade throws, the phone shows a blank page | `public/local-bootstrap.js:54` | **Fixed** 2026-11-22 (`76d4c3d`, `ws-a-fixes`) |
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
@@ -60,7 +74,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open (F18 **Fixed** 2026-11-22: `f2f1701`, `ws-c-cleanup`; checked by `npm run test:modal-focus`) |
 | F20 | Low | `engines` says Node ≥22.12.0; `node:sqlite` is unflagged from 22.13 (unchecked) | `package.json:41` | Open |
 | E1 | Low | The PDF export gives up after 25 s; a slow emulator reached it | `public/overview.html` (withTimeout), emulator 2026-11-21 | Open; `phone-test.ps1` now waits up to 90 s and reports the PDF time (`46d21ec`): 4.1 to 4.5 s on the emulator 2026-11-22 |
-| S6, S8, S11–S19, Q15, Q17–Q19, F6, F11, F21–F25 | Info | Auto Backup holds plain data (by design); broad FileProvider path; `run-tests.js` says "never opened" but checks mtime; error details and paths in answers; logging; PDF Chromium `--no-sandbox`; CSV formula prefix; `.env` read from the working folder; LAN token over HTTP; dead code and imports; README screenshots missing; docs say the storage move is not done and that snapshots are in Auto Backup | see the audit notes | Open (docs and clean-up) |
+| S6, S8, S11–S19, Q15, Q17–Q19, F6, F11, F21–F25 | Info | Auto Backup holds plain data (by design); broad FileProvider path; `run-tests.js` says "never opened" but checks mtime; error details and paths in answers; logging; PDF Chromium `--no-sandbox`; CSV formula prefix; `.env` read from the working folder; LAN token over HTTP; dead code and imports; README screenshots missing; docs say the storage move is not done and that snapshots are in Auto Backup | see the audit notes | Open (docs and clean-up), except: the README shows six screenshots from `docs/images/` (demo data; added in Phase 2, `b8ae126`; the old `screenshots/` folder holds only a `.gitkeep`); the docs' "storage move not done" and "snapshots in Auto Backup" were corrected on 2026-11-23 (`HANDOFF.md`, and status notes in `docs/cross-platform-plan.md` and `docs/storage-proposal.md`); two unused helpers were removed from `server.js` (`57b033e`). The other Info items are not checked again |
 
 ## 3. Secrets
 
@@ -112,6 +126,10 @@ The likely gains, from the audit (to be measured first):
 
 ## 6. Lists
 
+*A record of 2026-11-21. All nine decisions below have since been taken: S1 by the merge into
+`main` (PR #1), the others in section 8. Most of the SKIPPED items have been fixed since; section
+2 has each one's status. What is open now is in section 10.*
+
 ### NEEDS MY DECISION
 1. **S1, `main`'s open dev server.** (a) Merge `plannr-phase2` into `main` (the PR text is in `docs/pr-plannr-phase2.md`; recommended); (b) a one-line fix on `main` first (`app.listen(PORT, '127.0.0.1')`), then the merge later; (c) stop running `main`'s `server.js` until the merge.
 2. **S3 / Q6, a restore that fails after the file is replaced.** (a) Upgrade and check the incoming database in a temporary file first and swap only if it passes (recommended; the phone needs the same in `local-snapshot.js`); (b) on failure, put the pre-restore safety copy back automatically; (c) keep it as it is and only make the message say where the safety copy is.
@@ -142,6 +160,10 @@ The likely gains, from the audit (to be measured first):
 
 ## 7. Final state
 
+*The state at the end of the 2026-11-21 session, kept as a record. CI was added since (F12), and
+the APK for the real-phone round is now a fresh debug build from `main` after PR #3
+(`docs/PHONE-TEST-CHECKLIST.md`).*
+
 - **Tests** at `d33953b` (the last code change): `npm test` desktop pass 665 tests: 662 pass, 3 skipped, 0 fail; phone-code pass
   213 of 230 (the same 17 known differences, nothing new); all 15 UI suites pass; `npm run test:slow` 2 of 2.
 - **APK:** no new APK was built in this session. The latest is the RC,
@@ -161,11 +183,13 @@ The likely gains, from the audit (to be measured first):
 ## 8. Follow-up, 2026-11-22 (`plannr-phase3`)
 
 The decisions from 2026-11-21 were carried out on `plannr-phase3`, one commit per change, each
-with a test that failed before the fix and the full suite after it. The details, the speed
-measurements and what is still open are in `docs/session-report-2026-11-22.md`.
+with a test that failed before the fix and the full suite after it. The details and the speed
+measurements are in `docs/session-report-2026-11-22.md`; its list of what was still open is from
+that day. What is open now is in section 10.
 
 | Item | Decision | Commit |
 |---|---|---|
+| S1 | (a) Merge `plannr-phase2` into `main` (done on 2026-11-21, before `plannr-phase3` was cut) | PR #1, `4b3ab08` |
 | S3 / Q6 | Automatic rollback: a restore that fails after the database is replaced puts the data from before it back, and says so | `5e98901` |
 | F1 | Also refuse badly shaped ledger codes at import | `b623200` |
 | Q3 | A contract and its payment dates in one transaction | `00f6a59` |
@@ -177,11 +201,11 @@ measurements and what is still open are in `docs/session-report-2026-11-22.md`.
 | S5 | Not built. Planned as backup format v2 (scrypt N = 2^17, the parameters in the header); v1 files always stay readable | none |
 | Incident 3 | Left as it is, as decided | none |
 | Playwright browser | `npx playwright install chromium` run: the UI suites use Chromium revision 1228 again | none |
-| F4 | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) | `50997b1`, `eb73860`, `ade8d3d`, `7e3a915`, `1986cac`, `c4c7198`, `3674ba0` |
+| F4 | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`, merged as PR #4 on 2026-11-23) | `50997b1`, `eb73860`, `ade8d3d`, `7e3a915`, `1986cac`, `c4c7198`, `3674ba0` |
 
 ## 9. Follow-up, 2026-11-22 (`ws-a-fixes`)
 
-Fixed on the branch `ws-a-fixes` (pull request into `plannr-phase3`, not merged yet). The F7 and
+Fixed on the branch `ws-a-fixes` (pull request #8 into `plannr-phase3`, merged on 2026-11-23). The F7 and
 F8 / F9 follow-ups `c3b63d6` and `420416a` are from 2026-11-23. Each fix has
 a test that failed on the code before it. For F7 and F8 / F9 the fix is to a UI suite itself, so
 the failing runs used scratch harnesses that are not in the repository: they forced the problem
@@ -195,7 +219,7 @@ new suite, and are described in each commit message.
 | Q14 | A ledger entry and its custom-name write are one transaction | `908b9d4` |
 | Q9 | A backup whose `sequences` names a table without an id is refused with a 400 | `d8ef781` |
 | Q13 | If planning the upgrade throws, the phone shows the reason instead of a blank page | `76d4c3d` |
-| Q12 | A storage-move snapshot no longer cuts the rotation of regular safety snapshots | `7b2d695` |
+| Q12 (partly) | A storage-move snapshot no longer cuts the rotation of regular safety snapshots. Move snapshots are still never pruned; whether to prune them is open (section 10) | `7b2d695` |
 | F7 | The "no console errors" checks in `static-hosting` and `offline` ignore sqlite-wasm's own two-line fallback message ("wasm streaming compile failed: ..." then "falling back to ArrayBuffer instantiation"), and only that pair; any other console error still fails them. Both suites use one shared collector, `test-ui/_console-errors.js`. The pair appears when a suite leaves a page while its `.wasm` is still downloading. A wrong Content-Type for `sqlite3.wasm` also causes the pair, so `static-hosting` now checks that header itself: every `.wasm` the pages load must come back as `application/wasm`. Proof: a scratch harness (not committed) served every `.wasm` as `text/plain`; the old suites failed (14 and 12 checks), the new ones pass and still fail three planted errors. With the `.wasm` type removed from `local-server.js`, the header check is the one check that fails | `c927071`, `d11f8ac`, `c3b63d6` |
 | F8 / F9 (partly) | `contract-phase-a` waits for what it reads next (15 s at most) instead of sleeping a fixed time, and its waits let only a timeout pass: any other error stops the suite at the wait that broke. Proof: scratch copies of the suite (not committed) made the page's contract load answer late (the old suite crashed, the new one passes) and broke single waits (the old suite passed or failed at an unrelated check, the new one stops at that wait). The fixed ports, the other suites and the node tests named in the finding are unchanged | `8b5546a`, `420416a` |
 
@@ -204,3 +228,38 @@ option (b), decided by the owner, is fixed on `ws-b-f4`; F18 (modal focus) is fi
 `ws-c-cleanup` (`f2f1701`, checked by `npm run test:modal-focus`).
 Q7 and Q16 (`public/local-api.js`) were left for later because that file was being cleaned up on
 `ws-c-cleanup` at the same time.
+
+## 10. Still open (2026-11-23)
+
+After pull requests #4 to #8 were merged into `plannr-phase3` (`9c6e394`). The full suite on
+`9c6e394`: `npm test` desktop pass 725 tests, 722 pass, 3 skipped, 0 fail; phone-code pass 233 of
+250 (the same 17 known differences); all 16 UI suites pass, `test:modal-focus` included;
+`npm run test:slow` 2 of 2.
+
+**Decisions for the owner**
+- **The owner's phone, from the debug build to the release build.** The phone runs a debug build
+  and holds the only live copy of the real data. A release APK cannot be installed over it
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), and Plannr is never uninstalled on that phone. Not
+  decided; the question is in `docs/release-plan.md` section 6. Until then the phone gets debug
+  builds only, through `docs/PHONE-TEST-CHECKLIST.md`.
+- **Q12, the rest.** Move snapshots (`plannr-pre-move-*`, `plannr-old-copy-*`,
+  `plannr-pre-move-back-*`) are never pruned: prune them, or keep them all.
+
+**For the owner to do**
+- Make the second offline backup copy of the release key (`docs/release-plan.md` section 1.3).
+- Pull request #3 (`plannr-phase3` into `main`) is open; the owner merges it.
+- The real-phone round (`docs/PHONE-TEST-CHECKLIST.md`), with a fresh debug build from `main` after
+  pull request #3. Not run yet.
+
+**Code and CI (named here, not changed by this update)**
+- `.github/workflows/tests.yml`: the push trigger still names `plannr-phase2`, not
+  `plannr-phase3`, so a merge into `plannr-phase3` gets no CI run of its own (only the pull
+  request's run before it).
+- `test-ui/c-modal-focus.js` waits a fixed 100 ms in three places (lines 43, 63 and 72) before it
+  reads focus or the dialog's result. It is part of the full suite and of CI now: the same
+  fixed-sleep pattern as F8 / F9.
+- Findings still **Open** in section 2: Q5, S2, S4, Q7, Q8, Q10, Q11, Q16, F8 / F9 (all but
+  `contract-phase-a`), F10, F13, F14, F15 to F17, F20, E1 (to measure on the real phone) and the
+  rest of the Info row. S5 is planned (backup format v2) but not built.
+- Speed (section 5): none of the likely gains has been worked on. The 2026-11-22 measurements are
+  in `docs/session-report-2026-11-22.md` section 5.
