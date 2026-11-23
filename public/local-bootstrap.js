@@ -45,14 +45,16 @@ if (mode === 'server') {
     await showRecoveryScreen(storage);
     throw new Error('Plannr: the database file is ' + storage.reason + '; the recovery screen is shown.');
   }
-  if (storage.use === 'native') useAdapter(storage.adapter);
-  await ready();
   // Phase 2 (Step 2): before a schema upgrade touches existing data, copy the whole database into the
   // app's private folder (safety-snapshots.js). If that copy cannot be written and verified, stop
   // here: the data stays exactly as it is, at its old version. init() itself refuses a database from
   // a newer app version (an older APK installed over newer data) without changing anything.
-  const plan = await planMigrations(); // through the async interface, like init() (step 1.4 B9)
+  // Q13: opening the database and planning the upgrade are inside the try too, so a database that
+  // cannot be read shows the reason instead of a blank page.
   try {
+    if (storage.use === 'native') useAdapter(storage.adapter);
+    await ready();
+    const plan = await planMigrations(); // through the async interface, like init() (step 1.4 B9)
     let snapshots = null;
     if (plan.needsSnapshot && !plan.tooNew) {
       snapshots = await import('./safety-snapshots.js');

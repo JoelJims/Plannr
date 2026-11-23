@@ -265,6 +265,23 @@ function sameDb(name, actual, expected) {
     // local-bootstrap.js rejects); it is not a failure of this suite.
     for (let i = errors.length - 1; i >= 0; i--) if (/newer version of the app/.test(errors[i])) errors.splice(i, 1);
 
+    // Q13: if reading the database to plan the upgrade throws (here: a damaged database), the page
+    // says why instead of staying blank. Before the fix planMigrations() ran outside the try.
+    const saved = await page.evaluate(() => {
+      const keep = {};
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('kvvfs-local')) keep[k] = localStorage.getItem(k); }
+      for (const k of Object.keys(keep)) if (/^kvvfs-local-\d+$/.test(k)) localStorage.setItem(k, 'not a database page '.repeat(40));
+      return keep;
+    });
+    await page.goto(`${BASE}/data-backup.html`, { waitUntil: 'networkidle' });
+    const damagedError = await page.evaluate(() => import('/local-bootstrap.js').then(() => null, (e) => e.message));
+    const damagedShown = await page.getByRole('alert').filter({ hasText: 'could not open your data' }).count();
+    check('Q13: a database that cannot be read at start-up is said on screen, not a blank page', damagedError !== null && damagedShown === 1, `${damagedShown} alert(s); error: ${damagedError}`);
+    await page.evaluate((keep) => { for (const [k, v] of Object.entries(keep)) localStorage.setItem(k, v); }, saved);
+    if (damagedError) for (let i = errors.length - 1; i >= 0; i--) if (errors[i] === damagedError) errors.splice(i, 1);
+    await openFresh();
+    check('…and the data opens again once it is readable', (await api('GET', '/api/ledgers')).status === 200);
+
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (e) {
     check('suite ran to completion', false, e.stack);

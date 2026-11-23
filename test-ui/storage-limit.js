@@ -78,6 +78,7 @@ const MB = (chars) => (chars * 2 / 1048576).toFixed(2) + ' MB';
       msg: document.getElementById('storageMsg').textContent,
       shown: document.getElementById('storageMsg').classList.contains('show'),
       now: document.getElementById('storageBar').getAttribute('aria-valuenow'),
+      killNote: (() => { const e = document.getElementById('storageKillNote'); return e && !e.hidden && e.offsetParent !== null ? e.textContent : ''; })(),
     }));
   };
 
@@ -122,6 +123,8 @@ const MB = (chars) => (chars * 2 / 1048576).toFixed(2) + ' MB';
     check('/api/storage reports phone storage against the limit', st.status === 200 && st.json.mode === 'phone' && st.json.limitBytes === LIMIT * 2 && st.json.level === 'ok', JSON.stringify(st.json));
     let m = await meter();
     check('the meter shows "Used X MB of about 10 MB" with no warning', /^Used [\d.]+ MB of about 10 MB \(\d+%\)\.$/.test(m.text) && !m.shown, `${m.text} | ${m.msg}`);
+    // Q2: on localStorage a kill can lose the last seconds of saves (the WebView writes late): say so.
+    check('Q2: the meter tells the user a sudden close can lose the last few seconds of saves', /last few seconds/.test(m.killNote) && /encrypted backup/.test(m.killNote), m.killNote || '(no note shown)');
     await fillTo(0.75);
     m = await meter();
     check('at 75% it warns that storage is getting full', m.shown && /getting full \(75%\)/.test(m.msg) && m.now === '75', `${m.text} | ${m.msg}`);

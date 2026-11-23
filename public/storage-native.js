@@ -157,6 +157,15 @@ export async function makePhoneHost({ plugins, localStorage: ls, backup, source 
     local: {
       limitChars: 5 * 1024 * 1024, // local-api.js LOCALSTORAGE_LIMIT_CHARS; checked equal by test/storage-native.test.js
       async exists() { for (let i = 0; i < ls.length; i++) if (String(ls.key(i)).startsWith(KVVFS_PREFIX)) return true; return false; },
+      // Q4: what localStorage holds now (keys and values count against its limit), for "Move data back".
+      async usedChars() {
+        const used = { copy: 0, other: 0 };
+        for (let i = 0; i < ls.length; i++) {
+          const k = String(ls.key(i));
+          used[k.startsWith(KVVFS_PREFIX) ? 'copy' : 'other'] += k.length + String(ls.getItem(k) ?? '').length;
+        }
+        return used;
+      },
       async exportBytes() { const a = await kvvfs(); try { return await a.exportBytes(); } finally { await a.close(); } },
       async replaceWith(bytes) { const a = await kvvfs(); try { await a.replaceWith(bytes); } finally { await a.close(); } },
       async open() { return kvvfs(); },
