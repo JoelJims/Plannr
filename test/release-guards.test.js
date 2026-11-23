@@ -52,8 +52,13 @@ test('the release key and its passwords are git-ignored and not tracked', () => 
   assert.ok(ignore.includes('keystore.properties'), '.gitignore lists keystore.properties');
   const git = spawnSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' });
   if (git.status !== 0) return; // not a git checkout (e.g. a downloaded zip): nothing can be committed
-  const tracked = git.stdout.split('\n').filter((f) => /(\.keystore|\.jks|keystore\.properties)$/i.test(f));
+  // Every key and certificate file type .gitignore blocks (SETUP.md section 2), not only the keystore.
+  const tracked = git.stdout.split('\n').filter((f) => /(\.keystore|\.jks|\.p12|\.pem|keystore\.properties)$/i.test(f));
   assert.deepStrictEqual(tracked, []);
+  // And git really ignores the key and its properties file (a later "!" line could undo the rule).
+  const samples = ['plannr-release.keystore', 'keystore.properties'];
+  const ignored = spawnSync('git', ['check-ignore', '--no-index', ...samples], { cwd: ROOT, encoding: 'utf8' });
+  assert.deepStrictEqual(ignored.stdout.split(/\r?\n/).filter(Boolean).sort(), [...samples].sort());
 });
 
 // Review S9: other key and certificate files, per-environment .env files, and what the app exports or

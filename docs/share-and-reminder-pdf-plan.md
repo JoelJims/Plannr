@@ -1,7 +1,12 @@
 # Plan: send the PDF to WhatsApp or email, from Overview and from a reminder
 
-Status: **design only, nothing built.** Written 2026-11-15. Every step below needs the owner's go-ahead
-before it starts.
+Status: **design only, nothing built.** Written 2026-11-15; plugin versions and the notification
+action support re-checked on 2026-11-22 against the installed packages (section 7). Every step below
+needs the owner's go-ahead before it starts.
+
+**Decided by the owner on 2026-11-22:** the **Send PDF** action goes on the existing daily report
+reminders (ids 101–105). A payment-due reminder is a separate, later feature and is not part of
+this plan (section 2).
 
 ## 1. What exists today
 
@@ -31,6 +36,16 @@ on-time reminders" button). Nothing uses the network.
   do is two taps: the reminder's **Send PDF**, then **Send** in WhatsApp or the mail app.
 - **Not allowed: building the PDF while the app is closed.** The PDF is drawn by the WebView, which
   only exists while the app is open. The reminder therefore opens the app first.
+
+**Which reminder gets the Send PDF button — decided (owner, 2026-11-22): the daily report
+reminders.** Plannr has no payment-due reminder today. The only reminders are the daily report
+reminders (ids 101–105, `SLOT_IDS` in `public/notifications.js`) and the backup-overdue reminder
+(id 201, `BACKUP_REMINDER_ID`). **Send PDF** goes on the daily report reminders, ids 101–105, and
+only on them; the backup-overdue reminder keeps no buttons. Contracts do store scheduled payment
+dates (the `contract_payment_dates` table, `core/routes/contracts.js`), but nothing schedules a
+notification from them. A payment-due reminder (for example "Payment to <contractor> due today")
+is a **separate, later feature**. It is not part of this plan and gets its own plan when the owner
+asks for it.
 
 ## 3. Settings (new, on Home under the reminders)
 
@@ -93,7 +108,33 @@ Reminder fires ── [Send PDF] ──► Plannr opens (Overview)
   so a click on the notification opens Plannr and shows the same buttons there.
 - **Limit, stated plainly:** on desktop it is three steps (save, open, attach), not two.
 
-## 7. Plugin
+## 7. Plugins
+
+**Already installed, no change needed.** Versions read from `node_modules/*/package.json` on
+2026-11-22. `package.json` gives a caret range for each; `package-lock.json` pins the exact version
+that is installed. Keep these versions for this feature (no upgrade as part of it).
+
+| Plugin | Installed | `package.json` | Used here for |
+|---|---|---|---|
+| `@capacitor/share` | 8.0.3 | `^8.0.1` | the share sheet (today's path and every fallback) |
+| `@capacitor/local-notifications` | 8.3.1 | `^8.3.1` | the reminders and the **Send PDF** action |
+| `@capacitor/filesystem` | 8.1.5 | `^8.1.3` | writing the PDF to the cache folder (`Directory.Cache`) |
+| `@capgo/capacitor-pdf-generator` | 8.0.53 | `^8.0.36` | drawing the PDF |
+
+Notification actions, checked in the plugin's own type definitions
+(`node_modules/@capacitor/local-notifications/dist/esm/definitions.d.ts`, version 8.3.1):
+- `registerActionTypes(options)` exists and is marked "Only available for iOS and Android" (line 98).
+- An `ActionType` has an `id` and a list of `actions`; each `Action` has an `id` and a `title`
+  (lines 372 and 438). A notification points to its action type with `actionTypeId` (line 716).
+- Tapping a button fires `localNotificationActionPerformed` with `actionId` and the original
+  notification (lines 236 and 1018). `public/notifications.js` already listens to this event for
+  taps on the notification body.
+- The `foreground`, `destructive` and `input` (reply text) options are iOS only. On Android every
+  button opens the app (`PendingIntent.getActivity` in the plugin's
+  `android/src/main/kotlin/.../LocalNotificationManager.kt`, line 255), which is what section 2
+  expects.
+
+**New, to be added in build step 5 (not now).**
 
 **`@capawesome/capacitor-mail-composer`, pinned to exactly `0.2.2`** (published 2026-09-04, MIT,
 peer `@capacitor/core >=8.0.0`, repository `capawesome-team/capacitor-plugins`).
@@ -119,10 +160,10 @@ and `setPackage("com.whatsapp")` (then `com.whatsapp.w4b`, WhatsApp Business). T
 |---|---|
 | `public/share-pdf.js` (new) | build PDF → write to cache → send to target, with the fallbacks; moved out of `overview.html` `downloadPdf()` |
 | `public/overview.html` | the two new buttons; `downloadPdf()` calls `share-pdf.js` |
-| `public/notifications.js` | `registerActionTypes` ("Send PDF"), `actionTypeId` on the daily reminders, the listener opens Overview with `?send=<part>&theme=<theme>` |
+| `public/notifications.js` | `registerActionTypes` ("Send PDF"), `actionTypeId` on the daily report reminders (ids 101–105) only, the listener opens Overview with `?send=<part>&theme=<theme>` |
 | `public/home.html` | the settings above, per-reminder PDF choice |
 | `core/routes/share-settings.js` (new) | `GET/PUT /api/share-settings` with validation (addresses, subject length, target); one copy for both backends |
-| `core/routes/` reminders | `/api/notification-times` accepts the `{ time, part, theme }` objects and still reads old strings |
+| `core/routes/notification-times.js` | `/api/notification-times` accepts the `{ time, part, theme }` objects and still reads old strings |
 | `backup-format.js` | `share_email_to` joins `CONTACT_SETTINGS_KEYS` |
 | `android/app/src/main/AndroidManifest.xml` | `<queries>` for `com.whatsapp`, `com.whatsapp.w4b` |
 | `android/app/src/main/java/com/plannr/app/ShareToPlugin.java` (new) + `MainActivity` | the WhatsApp intent |
@@ -141,7 +182,8 @@ and `setPackage("com.whatsapp")` (then `com.whatsapp.w4b`, WhatsApp Business). T
   - the offline note appears when `navigator.onLine` is false;
   - nothing is sent anywhere (the existing offline tripwire).
 - **Emulator (scripted like `docs/PHONE-TEST-CHECKLIST.md`):**
-  - the reminder shows the **Send PDF** button, and tapping it opens Plannr and builds the PDF;
+  - a daily report reminder shows the **Send PDF** button, and tapping it opens Plannr and builds
+    the PDF; the backup-overdue reminder (id 201) has no button;
   - with no mail app or WhatsApp on the emulator, the fallback sheet opens;
   - never send anything; close every sheet or composer with BACK.
 - **Real phone, by the owner:**
@@ -160,9 +202,14 @@ and `setPackage("com.whatsapp")` (then `com.whatsapp.w4b`, WhatsApp Business). T
 5. Install `@capawesome/capacitor-mail-composer@0.2.2` (pinned), add it to the sync and import maps,
    and add the email target with its fallback and a UI test with a stand-in.
 6. The WhatsApp plugin (Java) and manifest `<queries>`, plus the fallback; build the APK.
-7. Notification action "Send PDF" in `notifications.js`, and the `?send=` handling on Overview.
+7. Notification action "Send PDF" in `notifications.js` on the daily report reminders (ids
+   101–105), and the `?send=` handling on Overview.
 8. Emulator run of the new checks; add them to `docs/PHONE-TEST-CHECKLIST.md`.
 9. Desktop equivalent: only after Phase 4 step 4.2 exists.
+
+Decided:
+- **Which reminders get Send PDF** (owner, 2026-11-22): the daily report reminders, ids 101–105.
+  A payment-due reminder is a separate, later feature, not part of this plan (section 2).
 
 Open questions for the owner:
 - Should a reminder's **Send PDF** button exist only when a target is set, or always, falling back to

@@ -63,36 +63,81 @@ which means the very first build needs an internet connection.
 ## 2. Files that do not come from the repository
 
 These are deliberately kept out of version control. `git clone` will not give you them;
-they have to be copied across by hand into the **project root**, next to `package.json`:
+they have to be copied across by hand. The key lives **outside the project**, in a folder of
+its own; only its properties file goes into the **project root**, next to `package.json`:
 
 | File | What it is | Where it goes |
 |---|---|---|
-| `plannr-release.keystore` | The signing key for release builds. | project root |
-| `keystore.properties` | Its passwords and alias. Four entries: `storeFile` (= `plannr-release.keystore`, relative to the project root), `storePassword`, `keyAlias`, `keyPassword`. | project root |
+| `plannr-release.keystore` | The signing key for release builds. | `D:\Keys\plannr\` — outside the project folder and outside git, on the same drive as the project (on a PC with only `C:`, use `C:\Keys\plannr\`) |
+| `keystore.properties` | Where the key is, its alias and its two passwords. Four entries: `storeFile`, the store password line, `keyAlias`, and the key password line. | project root (git-ignored) |
+
+**The `storeFile` line must be a path relative to the project root.** For a checkout at
+`D:\Projects\Plannr` it reads `storeFile=../../Keys/plannr/plannr-release.keystore` (two folders
+up from the project root is `D:\`). `android/app/build.gradle` joins this value to the project
+root (`new File(projectRootDir, storeFile)`), so an absolute path such as `D:\Keys\...` does
+**not** work.
+
+**So the key folder must be on the same drive as the project.** A relative path cannot change
+drive: from a checkout on `C:` no relative path reaches `D:\Keys\plannr\`. On a PC with only
+`C:` (a typical laptop), put the key in `C:\Keys\plannr\` and the project under `C:\`, for
+example `C:\Projects\Plannr`. Then the line stays exactly the same,
+`storeFile=../../Keys/plannr/plannr-release.keystore`, because the key is again two folders up
+from the project root. If the project is somewhere else on that drive, change the number of
+`../` so the path still reaches `Keys\plannr\plannr-release.keystore` on that drive.
+
+**Save `keystore.properties` as UTF-8 without a byte-order mark (BOM), or as plain ASCII.**
+Gradle reads this file as Latin-1, so a BOM at the start becomes part of the first entry's name
+and Gradle cannot read that entry. Windows PowerShell 5.1 adds a BOM when it writes "UTF-8"
+(`Set-Content -Encoding utf8`, `Out-File -Encoding utf8`), and its plain `Out-File` and `>` write
+UTF-16, which Gradle cannot read at all. In Notepad, choose Save as, Encoding "UTF-8" (not
+"UTF-8 with BOM" and not a "UTF-16" one).
+
+`npm run release:android` checks both files before it changes anything. It reads only the
+`storeFile` line and resolves it against the project root. It stops (naming the path it expected)
+if no key file is there, and it also stops if the line is an absolute path or starts with a drive
+letter, or if the file starts with a BOM or is saved as UTF-16. Its "Signing:" line shows the
+key's path only when the release can go ahead; otherwise it says "NOT ready" (or "NOT found" when
+there is no `keystore.properties`) and the reason follows.
+
+`.gitignore` still blocks key files even though the key no longer lives in the project:
+`*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`. A copy dropped into the
+project by mistake still cannot be committed. `test/release-guards.test.js` fails if those
+lines go or if such a file is ever tracked.
 
 > ### A missing keystore fails *silently*
 >
 > The build reads `keystore.properties` only if it is there — deliberately, so a fresh
 > checkout with no key can still produce debug builds. If the file is absent,
 > `assembleRelease` **does not fail**. It produces an **unsigned** release APK and says
-> nothing about it. You find out when the phone refuses the install.
+> nothing about it. You find out when the phone refuses the install. (If the file is there
+> but the key is not where `storeFile` says, Gradle does fail. `npm run release:android`
+> catches both cases before it builds anything.)
 >
-> So check, rather than assume, after your first release build:
+> So check, rather than assume, after your first release build. `apksigner` is in the
+> Android SDK's `build-tools\<version>\` folder (on Windows usually
+> `%LOCALAPPDATA%\Android\Sdk\build-tools\<version>\apksigner.bat`):
 >
 > ```sh
-> keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk
+> apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk
 > ```
 >
-> That must print a certificate. An error, or empty output, means `keystore.properties`
-> is missing or wrong.
+> That must print the signer's certificate, with a "certificate SHA-256 digest" line. Note
+> that SHA-256 the first time (`docs/release-plan.md` §1.3); every later release must show
+> the same one. "DOES NOT VERIFY", or another error, means the APK is not signed:
+> `keystore.properties` is missing or wrong. Do not check with `keytool -printcert -jarfile`:
+> it reads only the old v1 signature, which this APK may not have (`minSdkVersion` 24), so
+> it can say "Not a signed jar file" even for a correctly signed APK.
 
 > ### Never lose or replace this key
 >
 > Android refuses to upgrade an installed app with an APK signed by a different key
 > (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). The only way past it is to uninstall first —
 > **which destroys the database on the phone**, because Plannr's storage belongs to the
-> app itself. There is no copy of it anywhere else. Back the keystore up somewhere you
-> will still have it in five years, and take an encrypted backup from inside the app
+> app itself. There is no copy of it anywhere else. The copy in `D:\Keys\plannr\` is the
+> working copy, not a backup. Keep **two offline backup copies** of the keystore (for
+> example two USB sticks kept in different places; make the second one if only one
+> exists), and keep **both passwords and the alias in a password manager**: a key without
+> its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
 
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
@@ -264,16 +309,22 @@ live-database rule in section 3.2 first).
 ## 8. Quick reference — a fresh machine, start to finish
 
 ```sh
-git clone <repo> && cd Plannr
-# copy plannr-release.keystore + keystore.properties into this directory by hand
+git clone <repo> && cd Plannr               # e.g. in D:\Projects\ (C:\Projects\ on a C:-only PC)
+# by hand, from your offline backup (section 2):
+#   plannr-release.keystore -> D:\Keys\plannr\   (outside the project; create the folder;
+#                              same drive as the project, so C:\Keys\plannr\ on a C:-only PC)
+#   keystore.properties     -> this directory    (storeFile = the key's path relative to here,
+#                              ../../Keys/plannr/plannr-release.keystore for <drive>:\Projects\Plannr)
 npm ci
 npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs
 npm run android:sync                      # regenerate public/ copies + the native project
 # open the android/ directory in Android Studio, let it sync
-cd android && ./gradlew assembleRelease
-keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk   # must print a cert
-adb install -r app/build/outputs/apk/release/app-release.apk
+cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/Plannr.apk
+# apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
+# SHA-256 you noted for this key (section 2)
+apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk
+adb install -r app/build/outputs/apk/release/Plannr.apk
 # expect a Play Protect warning on the device — More details -> Install anyway
 ```
 
