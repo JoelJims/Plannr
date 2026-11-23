@@ -25,6 +25,8 @@ test('B10: overview, ledger list, custom names and authoredCount answer with Pro
     'overview.paymentsAll': () => repo.overview.paymentsAll(),
     'overview.paymentsRange': () => repo.overview.paymentsRange('2026-01-01', '2026-12-31'),
     'overview.loansSum': () => repo.overview.loansSum(),
+    'overview.outsSumAll': () => repo.overview.outsSumAll(),
+    'overview.paymentsSumAll': () => repo.overview.paymentsSumAll(),
     'overview.outsSince': () => repo.overview.outsSince('2026-01-01 00:00:00'),
     'ledgerCustoms.list': () => repo.ledgerCustoms.list(),
     'ledgerCustoms.save': () => repo.ledgerCustoms.save('B10 test name'),

@@ -254,8 +254,9 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
 
     // No budget: no marker, "No budget set", never amber, and the caption still shows the whole
     // project's spend (with a range set, "in total"). The PDF says the same (test/f4-budget-left.test.js).
-    // The bar is full: with no budget its scale is the whole project's spend itself, so the fill is
-    // whole / whole = 100% (within 1%), with a range set too (not the range's D / whole).
+    // The bar is full: with no budget its scale is Math.max(whole, 1) (renderTotalBar), so with the
+    // seed's spend the fill is whole / whole = 100% (within 1%), with a range set too (not the
+    // range's D / whole). A project with no spend at all would draw an empty bar.
     const clearBudget = () => H.db.prepare("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL").run();
     const settledNoBudget = (figD, spent) => pR.waitForFunction(([d, s]) => document.getElementById('figD').textContent.trim() === d
       && document.getElementById('ovBarSpent').textContent.trim() === s
