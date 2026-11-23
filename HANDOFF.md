@@ -70,7 +70,8 @@ sync time is exactly what ships.
 server.js         The desktop dev server: Express around the shared route code in core/,
                   plus the desktop's own services (the PDF through a headless browser).
                   Desktop only — not what ships on Android.
-core/             The one copy of every /api route (core/routes/) and its helpers. Both
+core/             The one copy of every /api route (core/routes/) and its helpers, except
+                  the dev server's /api/health, which stays in server.js. Both
                   server.js and local-api.js run it; each passes in its platform's
                   services (core/host.js). Copied into public/core/ by the sync.
 db.js             Creates the tables and applies any changes to them on startup. The
@@ -187,7 +188,10 @@ and says so rather than inventing an area.
 
 **Balances vs date ranges — worth knowing.** What is owed, and total paid, are balances:
 always the full history. The chart and the spent/paid figures follow the date range you
-pick. So narrowing the range never changes what is owed.
+pick. So narrowing the range never changes what is owed. The budget bar does not follow the
+range either: its fill, its "Spent" caption and its "left of / over total budget" label always
+use the whole project's spend, even with a range set (F4 option (b)), and so does the PDF's
+budget line.
 
 ---
 
@@ -463,8 +467,9 @@ There is deliberately **no reset button inside the app**.
   rolled back with it, or a save wiped by a restore running at the same time. There is one user, so
   waiting costs nothing that matters. The one exception is the Overview PDF: its page is built inside
   the queue and rendered outside it, so a PDF does not hold up the next request.
-- **One copy of the route code, two thin hosts.** Every `/api` route lives once in `core/`
-  (cross-platform plan step 1.3), and both `server.js` and `public/local-api.js` run it. What
+- **One copy of the route code, two thin hosts.** Every `/api` route except the dev server's
+  `/api/health` lives once in `core/` (cross-platform plan steps 1.3 and 1.4), and both
+  `server.js` and `public/local-api.js` run it. What
   has to differ by platform (the PDF renderer, the safety snapshots, the backup encryption's
   scrypt, restoring the database) reaches the core as services (`core/host.js`), so the core
   never imports Express, Playwright or Capacitor. The Android app still runs no Node code:
@@ -486,6 +491,8 @@ There is deliberately **no reset button inside the app**.
   on the emulator; the database stays consistent; the Data Backup page says so, finding Q2).
   The move to a database file of its own is built (step 1.4, `docs/step-1.4-storage-plan.md`):
   Data Backup → **Move to the new storage**. It has not been run on the owner's real data yet.
+- **The owner still has to make the second offline backup copy of the release key**
+  (`docs/release-plan.md` §1.3).
 - **How the owner's phone moves from the debug build to the release build is not decided.**
   A release APK cannot be installed over a debug build, and that phone holds the real data on a
   debug build. Until the owner decides, it gets debug builds only, as in
