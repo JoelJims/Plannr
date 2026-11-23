@@ -5,9 +5,9 @@
 >   now listens on `127.0.0.1` only, unless `PLANNR_HOST` is set, and then only with a
 >   `PLANNR_TOKEN` of at least 16 characters; otherwise it refuses to start (`accessConfig()` and
 >   `app.listen(PORT, access.host, …)` in `server.js`).
-> - All nine decisions of section 6 were taken. The fixes are on `plannr-phase3` (sections 8 and
->   9); pull requests #4 to #8 were merged into it on 2026-11-23. `plannr-phase3` into `main` is
->   pull request #3, still open.
+> - All nine decisions of section 6 were taken. S1 and CI (decision 8, F12) reached `main` with
+>   PR #1. The other fixes are on `plannr-phase3` (sections 8 and 9); pull requests #4 to #8 were
+>   merged into it on 2026-11-23. `plannr-phase3` into `main` is pull request #3, still open.
 > - The Status column in section 2 is kept up to date. Sections 1, 5, 6 and 7 describe the end of
 >   the 2026-11-21 session and are kept as a record.
 > - What is still open now is in section 10.
@@ -74,7 +74,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open (F18 **Fixed** 2026-11-22: `f2f1701`, `ws-c-cleanup`; checked by `npm run test:modal-focus`) |
 | F20 | Low | `engines` says Node ≥22.12.0; `node:sqlite` is unflagged from 22.13 (unchecked) | `package.json:41` | Open |
 | E1 | Low | The PDF export gives up after 25 s; a slow emulator reached it | `public/overview.html` (withTimeout), emulator 2026-11-21 | Open; `phone-test.ps1` now waits up to 90 s and reports the PDF time (`46d21ec`): 4.1 to 4.5 s on the emulator 2026-11-22 |
-| S6, S8, S11–S19, Q15, Q17–Q19, F6, F11, F21–F25 | Info | Auto Backup holds plain data (by design); broad FileProvider path; `run-tests.js` says "never opened" but checks mtime; error details and paths in answers; logging; PDF Chromium `--no-sandbox`; CSV formula prefix; `.env` read from the working folder; LAN token over HTTP; dead code and imports; README screenshots missing; docs say the storage move is not done and that snapshots are in Auto Backup | see the audit notes | Open (docs and clean-up), except: the README shows six screenshots from `docs/images/` (demo data; added in Phase 2, `b8ae126`; the old `screenshots/` folder holds only a `.gitkeep`); the docs' "storage move not done" and "snapshots in Auto Backup" were corrected on 2026-11-23 (`HANDOFF.md`, and status notes in `docs/cross-platform-plan.md` and `docs/storage-proposal.md`); two unused helpers were removed from `server.js` (`57b033e`). The other Info items are not checked again |
+| S6, S8, S11–S19, Q15, Q17–Q19, F6, F11, F21–F25 | Info | Auto Backup holds plain data (by design); broad FileProvider path; `run-tests.js` says "never opened" but checks mtime; error details and paths in answers; logging; PDF Chromium `--no-sandbox`; CSV formula prefix; `.env` read from the working folder; LAN token over HTTP; dead code and imports; README screenshots missing; docs say the storage move is not done and that snapshots are in Auto Backup | see the audit notes | Open (docs and clean-up), except: the README shows six screenshots from `docs/images/` (demo data; added in Phase 2, `b8ae126`; the old `screenshots/` folder holds only a `.gitkeep`), but they predate F4: `budget.png` shows "₹X left · Budget ₹Y" and `pdf-export.png` "₹X left." where the app now says "left of total budget" (retaking them is open, section 10); the docs' "storage move not done" and "snapshots in Auto Backup" were corrected on 2026-11-23 (`HANDOFF.md`, and status notes in `docs/cross-platform-plan.md` and `docs/storage-proposal.md`); two unused helpers were removed from `server.js` (`57b033e`). The other Info items are not checked again |
 
 ## 3. Secrets
 
@@ -126,8 +126,8 @@ The likely gains, from the audit (to be measured first):
 
 ## 6. Lists
 
-*A record of 2026-11-21. All nine decisions below have since been taken: S1 by the merge into
-`main` (PR #1), the others in section 8. Most of the SKIPPED items have been fixed since; section
+*A record of 2026-11-21. All nine decisions below have since been taken: S1 and CI (F12) by the
+merge into `main` (PR #1), the others in section 8. Most of the SKIPPED items have been fixed since; section
 2 has each one's status. What is open now is in section 10.*
 
 ### NEEDS MY DECISION
@@ -190,6 +190,7 @@ that day. What is open now is in section 10.
 | Item | Decision | Commit |
 |---|---|---|
 | S1 | (a) Merge `plannr-phase2` into `main` (done on 2026-11-21, before `plannr-phase3` was cut) | PR #1, `4b3ab08` |
+| CI (F12) | (a) A GitHub Actions workflow runs `npm test` and the UI suites (added on `plannr-phase2` on 2026-11-21, so in `main` with PR #1, before `plannr-phase3` was cut) | `0466181` |
 | S3 / Q6 | Automatic rollback: a restore that fails after the database is replaced puts the data from before it back, and says so | `5e98901` |
 | F1 | Also refuse badly shaped ledger codes at import | `b623200` |
 | Q3 | A contract and its payment dates in one transaction | `00f6a59` |
@@ -263,3 +264,8 @@ After pull requests #4 to #8 were merged into `plannr-phase3` (`9c6e394`). The f
   rest of the Info row. S5 is planned (backup format v2) but not built.
 - Speed (section 5): none of the likely gains has been worked on. The 2026-11-22 measurements are
   in `docs/session-report-2026-11-22.md` section 5.
+
+**README images (not changed by this update)**
+- `docs/images/budget.png` and `docs/images/pdf-export.png`, both shown in `README.md`, were made
+  before F4 and still show the old "left" wording. Retake them with the demo data, as
+  `docs/DEVELOPERS.md` ("README images") describes.
