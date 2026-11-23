@@ -143,6 +143,13 @@ lines go or if such a file is ever tracked.
 > its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
 
+**The debug key matters too, for the owner's phone.** Until the owner decides how that phone moves
+to the release build (`docs/release-plan.md` §6), the owner's phone can only be updated with builds signed by this laptop's
+Android debug key (certificate `fd12f081…b95629`; Android's default debug keystore in the user
+profile, which the Android build tools made for the first debug build). A debug build made on another PC, or on this one after that
+keystore is lost, will not install over the phone's Plannr (the checklist says stop). Whether and
+how to keep a copy of that debug key is the owner's call; note it with the release-key to-do.
+
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
 financial records.
 

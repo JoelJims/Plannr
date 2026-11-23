@@ -260,4 +260,10 @@ real-data phone: see the note at the top of section 3.
    follows `docs/PHONE-TEST-CHECKLIST.md`: debug builds, `adb -d install -r`, never uninstall, and
    stop on any answer other than `Success`.
 
+   While it is open, the owner's phone can only be updated with builds signed by this laptop's
+   Android debug key (certificate `fd12f081…b95629`; Android's default debug keystore in the user
+   profile, which the Android build tools made for the first debug build). A debug build made on another PC, or on this one after that
+   keystore is lost, will not install over the phone's Plannr (the checklist says stop). Whether and
+   how to keep a copy of that debug key is the owner's call; note it with the release-key to-do.
+
 Owner to-do (2026-11-23): make the second offline backup copy of the release key (section 1.3).
