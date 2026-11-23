@@ -30,8 +30,10 @@ import { encrypt, decrypt } from './backup-crypto.js';
 import * as requestRules from './request-rules.js';
 import { str, parsePaise, parseAmountFilter, parseLedgerFilters, fmtRs, base64ToBytes } from './core/parsers.js';
 import { createLedgerIndex } from './core/ledger-index.js';
+import { createOwnerQueries } from './core/owner.js';
+import { istDateStamp } from './core/ist-date.js';
 import { checkHost, hostError } from './core/host.js';
-import { createRequestQueue, queuedRoutes } from './core/request-queue.js';
+import { createRequestQueue, queuedRoutes, createStartJobs } from './core/request-queue.js';
 import * as peopleRoutes from './core/routes/people.js';
 import * as ledgerListRoutes from './core/routes/ledger-list.js';
 import * as cashAndLoansRoutes from './core/routes/cash-and-loans.js';
@@ -127,10 +129,8 @@ export function installFetchShim(repo) {
   // ---------------------------------------------------------------------------
   // Single-user offline app: no login, no sessions — mirrors server.js exactly.
   // ---------------------------------------------------------------------------
-  // Through the async interface (step 1.4 B15): both answer with a Promise.
-  const getOwner = () => dbAdapter().get('SELECT id, username, display_name AS displayName FROM users ORDER BY id ASC LIMIT 1');
-  const userExists = async (id) => Number.isInteger(id) && !!(await dbAdapter().get('SELECT 1 FROM users WHERE id = ?', [id]));
-  async function requireApiAuth(req, res, next) { try { req.user = await getOwner(); } catch (e) { return next(e); } next(); }
+  // getOwner, userExists and requireApiAuth: core/owner.js, the same code as the dev server's.
+  const { getOwner, userExists, requireApiAuth } = createOwnerQueries(dbAdapter);
 
   // Cross-platform plan, step 1.3: the route groups already moved to core/routes/ (the one copy the
   // dev server runs too). coreContext is what they need from the phone's side.
@@ -139,8 +139,8 @@ export function installFetchShim(repo) {
   // Start-up work that reads the database (step 1.4 B10, B13): each is a job in the request queue,
   // ahead of any request. The first: the ledger list, so no request can read it empty.
   // local-bootstrap.js awaits them all (`ready`, returned below) and shows a start-up error if one fails.
-  const startJobs = [];
-  const atStart = (fn) => { const job = requestQueue.run(fn); job.catch(() => {}); startJobs.push(job); };
+  const startJobs = createStartJobs(requestQueue); // core/request-queue.js, the same as the dev server's
+  const { atStart } = startJobs;
   atStart(() => ledgerIndex.refresh());
   // The platform services the core may call (core/host.js, step 1.4 A4): the phone's. The PDF goes
   // through the print-adapter plugin (renderPdfOnPhone, below); the safety copy before a JSON
@@ -193,10 +193,7 @@ export function installFetchShim(repo) {
   // The reminder times: core/routes/notification-times.js (step 1.3).
   notificationTimesRoutes.register(localApp, coreContext);
 
-  // IST dates: coreContext passes istDateStamp to the core routes (a hoisted function, so it is
-  // ready before this line runs).
-  const IST_TZ = 'Asia/Kolkata';
-  function istDateStamp(d = new Date()) { return new Intl.DateTimeFormat('en-CA', { timeZone: IST_TZ }).format(d); }
+  // IST dates: coreContext passes istDateStamp (core/ist-date.js, imported above) to the core routes.
 
   // The Overview: core/routes/overview.js (step 1.3).
   const { computeOverview } = overviewRoutes.register(localApp, { ...coreContext, ledgerLabel, CUSTOM_CODE, unitPricePaise, getBudgetPaise });
@@ -322,7 +319,7 @@ export function installFetchShim(repo) {
   };
 
   // For the tests (test/shim-target.js, test/request-queue-wiring.test.js); local-bootstrap.js does not use it.
-  const ready = Promise.all(startJobs);
+  const ready = startJobs.whenDone();
   ready.catch(() => {}); // reported where it is awaited
   return { requestQueue, routes, ready };
 }

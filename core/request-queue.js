@@ -79,3 +79,14 @@ export function queuedRoutes(app, queue) {
   }
   return routes;
 }
+
+// Start-up work that reads the database (step 1.4 B10, B13), shared by server.js and
+// public/local-api.js. atStart(fn) runs fn as a job in the request queue, ahead of any request
+// queued after it. A failed job never throws here and is never an unhandled rejection: whenDone()
+// settles once every job so far has finished, and rejects with the first failure.
+export function createStartJobs(queue) {
+  const jobs = [];
+  const atStart = (fn) => { const job = queue.run(fn); job.catch(() => {}); jobs.push(job); };
+  const whenDone = () => Promise.all(jobs);
+  return { atStart, whenDone };
+}
