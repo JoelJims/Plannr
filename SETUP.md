@@ -338,9 +338,9 @@ cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/P
 # apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
 # SHA-256 you noted for this key (section 2)
 apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk
-# install on a test phone on USB (-d) or the emulator (-s emulator-5554), never on a phone
-# with real data: that one goes through docs/PHONE-TEST-CHECKLIST.md (see section 3.5)
-adb -d install -r app/build/outputs/apk/release/Plannr.apk
+# install on the emulator (-s emulator-5554); for a test phone on USB, use -d instead. Never on
+# a phone with real data: that one goes through docs/PHONE-TEST-CHECKLIST.md (see section 3.5)
+adb -s emulator-5554 install -r app/build/outputs/apk/release/Plannr.apk
 # expect a Play Protect warning on the device — More details -> Install anyway
 ```
 

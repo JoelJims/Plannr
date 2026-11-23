@@ -12,10 +12,10 @@ app. Uninstalling first deletes it. Follow these steps in order, every time.
 > `Success`.
 >
 > **The owner's phone runs a debug build.** A release APK cannot be installed over it: Android
-> answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and the only way past that on the phone itself is
-> to uninstall, which is never done on that phone. How that phone moves to the release key is an
-> open decision for the owner (`docs/release-plan.md` §6). Until then it gets debug builds only,
-> installed with the checklist.
+> answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Installing it over that app means uninstalling
+> first, which is never done on that phone. The other ways are listed in `docs/release-plan.md`
+> §6, and none is chosen: how that phone moves to the release key is an open decision for the
+> owner. Until then it gets debug builds only, installed with the checklist.
 
 ## What keeps the data through an update
 
@@ -125,7 +125,8 @@ app's storage. Each step of the update's database upgrade runs in its own transa
 failed step is rolled back and the data is left as the last finished step wrote it (for an upgrade
 from schema v2 onwards, at that step's version). A pre-upgrade safety snapshot of the data as it
 was before the update is in the app's private `safety-snapshots/` folder. Write down the message and fix the problem in a newer
-version (higher `versionCode`). As a last resort, restore the backup from step 1.
+version (higher `versionCode`). As a last resort, restore the backup from step 1. On the owner's
+phone, do not restore: stop and ask, as C1 of `docs/PHONE-TEST-CHECKLIST.md` says.
 
 ## If the data is gone
 
