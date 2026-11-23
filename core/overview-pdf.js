@@ -116,9 +116,22 @@ export function createOverviewPdf(ctx) {
         `</tbody><tfoot><tr><td colspan="4">Owed to contractors (F)</td><td class="num">${fmtOwed(m.owedToContractorsPaise)}</td></tr></tfoot></table>`;
     };
     const budgetBlock = () => {
-      if (o.budgetPaise == null) return '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>' + fmtRs(m.totalSpentPaise) + '</b>.</p>';
-      const diff = o.budgetPaise - m.totalSpentPaise;
-      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(m.totalSpentPaise)}</b> · ${diff < 0 ? 'Over by <b class="neg">' + fmtRs(-diff) + '</b>' : '<b>' + fmtRs(diff) + '</b> left'}.</p>`;
+      // F4 option (b), decided by the owner 2026-11-22: the budget is for the whole project, so this
+      // whole block uses the WHOLE project's spend, even when a range is set: "Spent" and "left" /
+      // "over" alike, so it adds up (budget − spent = left). With a range set, "Spent" says "in total",
+      // because the range's own D is in the headline figures. With no range the whole spend IS D, and
+      // the no-budget line keeps the wording it always had ("Total spent (D)").
+      // Same rule and wording as the screen's budget bar (public/overview.html, renderTotalBar).
+      const whole = m.wholeProjectSpentPaise;
+      const rangeSet = !!(range.start || range.end);
+      if (o.budgetPaise == null) {
+        return rangeSet
+          ? '<h2>Budget</h2><p class="muted">No budget set. Spent <b>' + fmtRs(whole) + '</b> in total.</p>'
+          : '<h2>Budget</h2><p class="muted">No budget set. Total spent (D): <b>' + fmtRs(m.totalSpentPaise) + '</b>.</p>';
+      }
+      const diff = o.budgetPaise - whole;
+      const inTotal = rangeSet ? ' in total' : '';
+      return `<h2>Budget vs actual</h2><p>Budget <b>${fmtRs(o.budgetPaise)}</b> · Spent <b>${fmtRs(whole)}</b>${inTotal} · ${diff < 0 ? '<b class="neg">' + fmtRs(-diff) + '</b> over total budget' : '<b>' + fmtRs(diff) + '</b> left of total budget'}.</p>`;
     };
     const pieBlock = () => {
       if (!slices.length) return '<h2>Spending by Ledger</h2><p class="muted">No spending in this range.</p>';
