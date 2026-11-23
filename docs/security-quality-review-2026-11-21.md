@@ -51,8 +51,8 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
 | F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | **Fixed** 2026-11-22 (`5e6afb7`) |
-| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `db-engine.js:39` | **Fixed** 2026-11-22 (`c927071`, `ws-a-fixes`) |
-| F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open (partly: `contract-phase-a` waits for the condition, `8b5546a`) |
+| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `test-ui/offline.js:57-59`; `db-engine.js:39` | **Fixed** 2026-11-22 (`c927071`, `d11f8ac`, `c3b63d6`, `ws-a-fixes`; proof in section 9) |
+| F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open (partly: `contract-phase-a` waits for the condition and lets only a timeout pass, `8b5546a`, `420416a`; proof in section 9) |
 | F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | Open |
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
 | F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | Open |
@@ -182,7 +182,10 @@ measurements and what is still open are in `docs/session-report-2026-11-22.md`.
 ## 9. Follow-up, 2026-11-22 (`ws-a-fixes`)
 
 Fixed on the branch `ws-a-fixes` (pull request into `plannr-phase3`, not merged yet). Each fix has
-a test that failed on the code before it.
+a test that failed on the code before it. For F7 and F8 / F9 the fix is to a UI suite itself, so
+the failing runs used scratch harnesses that are not in the repository: they forced the problem
+(a `.wasm` file served with the wrong type, a slow page load, a broken wait), ran the old and the
+new suite, and are described in each commit message.
 
 | Finding | What changed | Commit |
 |---|---|---|
@@ -192,8 +195,8 @@ a test that failed on the code before it.
 | Q9 | A backup whose `sequences` names a table without an id is refused with a 400 | `d8ef781` |
 | Q13 | If planning the upgrade throws, the phone shows the reason instead of a blank page | `76d4c3d` |
 | Q12 | A storage-move snapshot no longer cuts the rotation of regular safety snapshots | `7b2d695` |
-| F7 | The static-hosting "no console errors" check ignores sqlite-wasm's own two-line fallback message ("wasm streaming compile failed: ..." then "falling back to ArrayBuffer instantiation"), and only that pair; any other console error still fails it. The pair appears when the suite leaves a page while its `.wasm` is still downloading | `c927071` |
-| F8 / F9 (partly) | `contract-phase-a` waits for what it reads next (15 s at most) instead of sleeping a fixed time; the fixed ports, the other suites and the node tests named in the finding are unchanged | `8b5546a` |
+| F7 | The "no console errors" checks in `static-hosting` and `offline` ignore sqlite-wasm's own two-line fallback message ("wasm streaming compile failed: ..." then "falling back to ArrayBuffer instantiation"), and only that pair; any other console error still fails them. Both suites use one shared collector, `test-ui/_console-errors.js`. The pair appears when a suite leaves a page while its `.wasm` is still downloading. A wrong Content-Type for `sqlite3.wasm` also causes the pair, so `static-hosting` now checks that header itself: every `.wasm` the pages load must come back as `application/wasm`. Proof: a scratch harness (not committed) served every `.wasm` as `text/plain`; the old suites failed (14 and 12 checks), the new ones pass and still fail three planted errors. With the `.wasm` type removed from `local-server.js`, the header check is the one check that fails | `c927071`, `d11f8ac`, `c3b63d6` |
+| F8 / F9 (partly) | `contract-phase-a` waits for what it reads next (15 s at most) instead of sleeping a fixed time, and its waits let only a timeout pass: any other error stops the suite at the wait that broke. Proof: scratch copies of the suite (not committed) made the page's contract load answer late (the old suite crashed, the new one passes) and broke single waits (the old suite passed or failed at an unrelated check, the new one stops at that wait). The fixed ports, the other suites and the node tests named in the finding are unchanged | `8b5546a`, `420416a` |
 
 Elsewhere the same day (other branches, statuses to be set here when they merge): F4 option (b)
 is on `ws-b-f4` as a draft, awaiting the decision; F18 (modal focus) is fixed on `ws-c-cleanup`.
