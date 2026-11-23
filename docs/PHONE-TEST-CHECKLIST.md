@@ -57,7 +57,7 @@ More about the old example:
 | Signing key | The same debug key signed `9d7fd97` (below), so this build installs over it with `adb -d install -r` |
 | Permissions | `INTERNET`, `RECEIVE_BOOT_COMPLETED`, `WAKE_LOCK`, `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`, and the app's own `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. **No `USE_BIOMETRIC` and no `USE_FINGERPRINT`** (finding S7; the RC had both) |
 | INTERNET permission | present, and it stays (offline first: the core never uses it; see `CONTRIBUTING.md`) |
-| Emulator | installed over the build already there with `adb install -r` (`firstInstallTime` kept) and opened, 2026-11-22 |
+| Emulator | installed over the build already there with `adb install -r` (`firstInstallTime` kept) and opened, 2026-11-22 (a record; on this laptop today, name the emulator: `adb -s emulator-5554 install -r`) |
 
 **Versions.** Every Plannr build so far has versionCode 1 and versionName 1.0, so the version
 cannot tell the builds apart: check the SHA-256. The owner decided on 2026-11-22 that the first
@@ -645,8 +645,8 @@ Write each result in the table "The owner's phone: the APK under test" at the en
    by ₹X"); with none, "No budget set". Then, under **Date range**, tap **Edit**, choose a shorter
    range (a later "From" date) and tap **Apply**. The figures in the cards change to the range,
    but the budget bar does not: the caption reads "Spent ₹Z in total" with the same Z, the label
-   is the same as before, and the bar is just as full. Tap **All dates** to go back. A date range
-   only changes what the page shows; it saves nothing. The PDF's budget line follows the same
+   is the same as before, and the bar is just as full. Tap **Edit**, then **All dates**, to go
+   back. A date range only changes what the page shows; it saves nothing. The PDF's budget line follows the same
    rule; the automated tests check it (`test/f4-budget-left.test.js`), so there is no need to open
    a PDF for this.
 10. **A note about the old storage (Q2). Look only; safe on your real data.** Data Backup → the
