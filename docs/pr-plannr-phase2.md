@@ -1,7 +1,7 @@
 # Pull request: merge `plannr-phase2` into `main`
 
 > The description of the pull request from `plannr-phase2` into `main` (everything below the line
-> is its body).
+> is its body). A record: that pull request (#1) was merged into `main` on 2026-11-21.
 
 ---
 
