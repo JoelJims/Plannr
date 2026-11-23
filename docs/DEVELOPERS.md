@@ -50,8 +50,10 @@ npm run test:ui          # one Playwright UI suite; every test:* script is one s
 
 The UI suites need `npm run sync:public-modules` first and Playwright's Chromium
 (`npx playwright install chromium`). GitHub Actions (`.github/workflows/tests.yml`) runs `npm test`
-on Ubuntu and Windows and every UI suite on Ubuntu, on each push to `main` and `plannr-phase2` and on
-pull requests into `main`. Tests never open `data/plannr.db`: `run-tests.js` checks it, and `db.js`
+on Ubuntu and Windows and every UI suite on Ubuntu: on each push to `main` and `plannr-phase2`, on
+pull requests into `main` and `plannr-phase3`, and when started by hand (`workflow_dispatch`). The
+push trigger still names `plannr-phase2`, not `plannr-phase3`, so a merge into `plannr-phase3` gets
+no run of its own (open). Tests never open `data/plannr.db`: `run-tests.js` checks it, and `db.js`
 refuses it inside the test runner.
 
 ## How it's built
@@ -90,13 +92,16 @@ old `localStorage` copy); the encrypted backup you save yourself is the safest c
 | [HANDOFF.md](../HANDOFF.md) | How everything works, in detail |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Changing the database safely (migrations, backups, tests) |
 | [RELEASE.md](RELEASE.md) | Releasing an update to the phone without losing data |
-| [PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) | Checks on a real phone before a release |
+| [release-plan.md](release-plan.md) | Plan for the first public release APK: the signing key, version numbers, moving from the debug build, release notes, a checklist, open questions |
+| [PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) | Checks on a real phone before a release, and the owner's phone round (backups proven on the emulator first) |
 | [cross-platform-plan.md](cross-platform-plan.md) | The plan for one shared core, desktop and other users |
 | [step-1.4-storage-plan.md](step-1.4-storage-plan.md) | Moving the phone's data into a database file of its own (done) |
 | [storage-proposal.md](storage-proposal.md) | The first proposal for that move (replaced by the plan above) |
 | [share-and-reminder-pdf-plan.md](share-and-reminder-pdf-plan.md) | Plan: sending the PDF to WhatsApp or email, also from a reminder (not done) |
-| [security-quality-review-2026-11-21.md](security-quality-review-2026-11-21.md) | The latest security and quality review |
+| [security-quality-review-2026-11-21.md](security-quality-review-2026-11-21.md) | The latest security and quality review, with each finding's current status and what is still open |
 | [CHANGELOG.md](../CHANGELOG.md) | What changed |
+| `session-report-*.md` | Dated records of past work sessions ([2026-11-21](session-report-2026-11-21.md), [2026-11-22](session-report-2026-11-22.md), [2026-11-22, parallel](session-report-2026-11-22-parallel.md)). History, not the current state |
+| [pr-plannr-phase2.md](pr-plannr-phase2.md) | The description of the pull request that merged Phase 2 into `main` (a record) |
 
 ## README images
 
