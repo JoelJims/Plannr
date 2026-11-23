@@ -19,6 +19,18 @@
   // paise -> a plain rupees string for an edit input, exact (no float).
   const paiseToInput = (paise) => Math.floor(paise / 100) + '.' + String(paise % 100).padStart(2, '0');
 
+  // A typed rupee amount ('1,234.56') -> whole paise, with string math (no float drift). Returns a
+  // positive safe integer, or null when the text is not an amount greater than 0 with up to 2
+  // decimals. The same rule as the server's parsePaise (core/parsers.js), so a page can refuse a bad
+  // amount before it is sent; test/c-page-helpers.test.js checks the two agree.
+  function parsePaise(v) {
+    const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    const [ip, dp = ''] = s.split('.');
+    const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
+    return Number.isSafeInteger(p) && p > 0 ? p : null;
+  }
+
   const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // DISPLAY-ONLY date formatting. Storage/calculation stays ISO 'YYYY-MM-DD' everywhere;
@@ -366,6 +378,24 @@
   // Used for the "save an edit to an EXISTING record" confirmation.
   //   confirmModal({ title, message, confirmLabel }) -> Promise<boolean>
   // ---------------------------------------------------------------------------
+  // Modal focus (finding F18), shared by confirmModal and choiceModal below. Tab and Shift+Tab stay
+  // inside the dialog: from the last button Tab wraps to the first, and Shift+Tab the other way.
+  function keepTabInside(dialog, e) {
+    if (e.key !== 'Tab') return;
+    const buttons = Array.from(dialog.querySelectorAll('button:not([disabled])'));
+    if (!buttons.length) return;
+    const at = buttons.indexOf(document.activeElement);
+    const next = e.shiftKey
+      ? (at <= 0 ? buttons.length - 1 : at - 1)
+      : (at === -1 || at === buttons.length - 1 ? 0 : at + 1);
+    e.preventDefault();
+    buttons[next].focus();
+  }
+  // When a dialog closes, focus goes back to the control that opened it (if it is still on the page).
+  function focusOpener(opener) {
+    if (opener && opener !== document.body && typeof opener.focus === 'function' && document.contains(opener)) opener.focus();
+  }
+
   let _confirmWrap = null;
   function confirmModal(o) {
     o = o || {};
@@ -391,6 +421,7 @@
     const ok = wrap.querySelector('[data-plc="ok"]');
     const cancel = wrap.querySelector('[data-plc="cancel"]');
     ok.textContent = o.confirmLabel || 'Confirm';
+    const opener = document.activeElement;
     return new Promise((resolve) => {
       let done = false;
       const finish = (v) => {
@@ -400,12 +431,13 @@
         cancel.removeEventListener('click', onCancel);
         wrap.removeEventListener('mousedown', onBackdrop);
         document.removeEventListener('keydown', onKey);
+        focusOpener(opener);
         resolve(v);
       };
       const onOk = () => finish(true);
       const onCancel = () => finish(false);
       const onBackdrop = (e) => { if (e.target === wrap) finish(false); };
-      const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(false); else keepTabInside(wrap, e); };
       ok.addEventListener('click', onOk);
       cancel.addEventListener('click', onCancel);
       wrap.addEventListener('mousedown', onBackdrop);
@@ -441,6 +473,7 @@
     const actions = wrap.querySelector('#plChActions');
     actions.innerHTML = opts.map((op, i) => `<button type="button" class="btn ${i === 0 ? 'primary' : 'ghost'}" data-ch="${i}">${escapeHtml(op.label)}</button>`).join('') +
       '<button type="button" class="btn ghost" data-ch="cancel">Cancel</button>';
+    const opener = document.activeElement;
     return new Promise((resolve) => {
       let done = false;
       const finish = (v) => {
@@ -449,11 +482,12 @@
         actions.removeEventListener('click', onClick);
         wrap.removeEventListener('mousedown', onBackdrop);
         document.removeEventListener('keydown', onKey);
+        focusOpener(opener);
         resolve(v);
       };
       const onClick = (e) => { const b = e.target.closest && e.target.closest('[data-ch]'); if (!b) return; const c = b.getAttribute('data-ch'); finish(c === 'cancel' ? null : opts[Number(c)].value); };
       const onBackdrop = (e) => { if (e.target === wrap) finish(null); };
-      const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); else keepTabInside(wrap, e); };
       actions.addEventListener('click', onClick);
       wrap.addEventListener('mousedown', onBackdrop);
       document.addEventListener('keydown', onKey);
@@ -572,23 +606,23 @@
       byOpts += `<option value="custom"${v.by === 'custom' ? ' selected' : ''}>Custom…</option>`;
       return `<tr data-id="${e.id}" class="tx-editing">
         <td data-label="Serial" class="tx-slno">${i + 1}</td>
-        <td data-label="Date"><input type="text" class="tx-in" data-f="date" placeholder="dd/mm/yy" maxlength="10" value="${escapeHtml(v.date)}"></td>
+        <td data-label="Date"><input type="text" class="tx-in" data-f="date" aria-label="Date, row ${i + 1}" placeholder="dd/mm/yy" maxlength="10" value="${escapeHtml(v.date)}"></td>
         <td data-label="Ledger">
-          <select class="tx-sel" data-f="ledger">${ledgerOptions(v.ledger)}</select>
-          <input type="text" class="tx-in tx-sub" data-f="ledgerCustom" placeholder="Custom ledger" maxlength="80" value="${escapeHtml(v.ledgerCustom)}"${v.ledger === CUSTOM_CODE ? '' : ' hidden'}>
+          <select class="tx-sel" data-f="ledger" aria-label="Ledger, row ${i + 1}">${ledgerOptions(v.ledger)}</select>
+          <input type="text" class="tx-in tx-sub" data-f="ledgerCustom" aria-label="Custom ledger, row ${i + 1}" placeholder="Custom ledger" maxlength="80" value="${escapeHtml(v.ledgerCustom)}"${v.ledger === CUSTOM_CODE ? '' : ' hidden'}>
         </td>
         <td data-label="Sub-ledger">
-          <select class="tx-sel" data-f="sub">${subOptions(v.ledger, v.sub)}</select>
-          <input type="text" class="tx-in tx-sub" data-f="subCustom" placeholder="Custom sub-ledger" maxlength="80" value="${escapeHtml(v.subCustom)}"${v.sub === CUSTOM_CODE ? '' : ' hidden'}>
+          <select class="tx-sel" data-f="sub" aria-label="Sub-ledger, row ${i + 1}">${subOptions(v.ledger, v.sub)}</select>
+          <input type="text" class="tx-in tx-sub" data-f="subCustom" aria-label="Custom sub-ledger, row ${i + 1}" placeholder="Custom sub-ledger" maxlength="80" value="${escapeHtml(v.subCustom)}"${v.sub === CUSTOM_CODE ? '' : ' hidden'}>
         </td>
-        <td data-label="Amount"><input type="text" inputmode="decimal" class="tx-in tx-num" data-f="amount" value="${escapeHtml(v.amount)}"></td>
+        <td data-label="Amount"><input type="text" inputmode="decimal" class="tx-in tx-num" data-f="amount" aria-label="Amount, row ${i + 1}" value="${escapeHtml(v.amount)}"></td>
         <td data-label="By">
-          <select class="tx-sel" data-f="by">${byOpts}</select>
-          <input type="text" class="tx-in tx-sub" data-f="byLabel" placeholder="Name" maxlength="60" value="${escapeHtml(v.byLabel)}"${v.by === 'custom' ? '' : ' hidden'}>
+          <select class="tx-sel" data-f="by" aria-label="By, row ${i + 1}">${byOpts}</select>
+          <input type="text" class="tx-in tx-sub" data-f="byLabel" aria-label="Name, row ${i + 1}" placeholder="Name" maxlength="60" value="${escapeHtml(v.byLabel)}"${v.by === 'custom' ? '' : ' hidden'}>
         </td>
-        <td data-label="Remark"><input type="text" class="tx-in" data-f="reason" maxlength="300" value="${escapeHtml(v.reason)}"></td>
+        <td data-label="Remark"><input type="text" class="tx-in" data-f="reason" aria-label="Remark, row ${i + 1}" maxlength="300" value="${escapeHtml(v.reason)}"></td>
         <td data-label="In Contract?">
-          <select class="tx-sel" data-f="scope">
+          <select class="tx-sel" data-f="scope" aria-label="In contract?, row ${i + 1}">
             <option value="included"${v.scope === 'included' ? ' selected' : ''}>Yes</option>
             <option value="extra"${v.scope === 'extra' ? ' selected' : ''}>No</option>
           </select>
@@ -1135,5 +1169,5 @@
     return { open, syncLabel };
   }
 
-  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createLedgerBrowser, LEDGER_GROUPS, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
+  root.PlannrUI = { formatPaise, formatOwed, paiseToInput, parsePaise, escapeHtml, formatDate, makeMsg, createCashOutForm, createLedgerPicker, createLedgerBrowser, LEDGER_GROUPS, createDatePicker: attachDatePicker, confirmModal, choiceModal, createEditableCashOutTable, createLedgerFilterBar, saveAllMessage, saveAllBatch };
 })(window);
