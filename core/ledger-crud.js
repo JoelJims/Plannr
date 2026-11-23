@@ -45,8 +45,13 @@ export function createLedgerCrud(app, ctx) {
       const v = await validate(req);
       if (v.error) return res.status(400).json({ error: v.error });
       if (finalize) { const f = await finalize(v.values, { req, id: null, existing: null }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
-      const info = await rc.insert(orderedVals(v.values));
-      if (afterWrite) await afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
+      // Q14: the row and afterWrite's write (a custom name) are one transaction, so a failure in the
+      // second leaves nothing saved and a retry cannot save the row twice.
+      let info;
+      await transaction(async () => {
+        info = await rc.insert(orderedVals(v.values));
+        if (afterWrite) await afterWrite(v.values, { req, id: Number(info.lastInsertRowid) });
+      });
       res.status(201).json({ ok: true, [itemKey]: shape(await rc.getById(info.lastInsertRowid)) });
     });
 
@@ -60,8 +65,10 @@ export function createLedgerCrud(app, ctx) {
       if (v.error) return res.status(400).json({ error: v.error });
       if (finalize) { const f = await finalize(v.values, { req, id, existing }); if (f && f.error) return res.status(f.status || 400).json({ error: f.error }); }
       if (auditField && oldVal !== v.values[auditField]) console.warn(`[audit] ${table} id=${id}: ${auditField} ${oldVal} -> ${v.values[auditField]} (attribution changed on edit)`);
-      await rc.update(id, orderedVals(v.values));
-      if (afterWrite) await afterWrite(v.values, { req, id });
+      await transaction(async () => { // Q14: the edit and afterWrite's write together, or neither
+        await rc.update(id, orderedVals(v.values));
+        if (afterWrite) await afterWrite(v.values, { req, id });
+      });
       res.json({ ok: true, [itemKey]: shape(await rc.getById(id)) });
     });
 
@@ -103,7 +110,10 @@ export function createLedgerCrud(app, ctx) {
         //    every row and is passed on). repo's statements run on the same connection, inside it.
         try {
           await transaction(async () => {
-            for (const w of toWrite) await rc.update(w.id, orderedVals(w.values));
+            for (const w of toWrite) {
+              await rc.update(w.id, orderedVals(w.values));
+              if (afterWrite) await afterWrite(w.values, { req, id: w.id }); // Q14: inside the same transaction
+            }
           });
         } catch (e) {
           logError(`${table} batch write failed, rolled back:`, e);
@@ -114,7 +124,6 @@ export function createLedgerCrud(app, ctx) {
         // 3) Audit each attribution change and shape the saved rows.
         for (const w of toWrite) {
           if (auditField && w.oldVal !== w.values[auditField]) console.warn(`[audit] ${table} id=${w.id}: ${auditField} ${w.oldVal} -> ${w.values[auditField]} (attribution changed on edit)`);
-          if (afterWrite) await afterWrite(w.values, { req, id: w.id });
           results[w.i] = { id: w.id, ok: true, [itemKey]: shape(await rc.getById(w.id)) };
         }
         res.json({ results, saved: toWrite.length, failed: rows.length - toWrite.length });

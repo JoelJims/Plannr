@@ -7,12 +7,15 @@
 // - the page is told it is offline (navigator.onLine is false).
 // Then it opens every page; logs, edits and deletes an entry through the real Cash Inflow form;
 // downloads both backups from Data Backup; and presses the PDF button. It fails on any request to
-// anywhere outside the app, and on any console or page error.
+// anywhere outside the app, and on any console or page error (all but sqlite-wasm's own fallback
+// note: see test-ui/_console-errors.js).
 // (The PDF itself is drawn by the phone's print plugin, which a browser does not have; the PDF page's
 // HTML is checked for outside references in test/offline.test.js, on the phone code too.)
 const { spawn } = require('child_process');
 const path = require('path');
 const { chromium } = require('playwright');
+// Every console/page error except sqlite-wasm's own two-line fallback note (review finding F7).
+const { attachErrorCollector } = require('./_console-errors');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = 8197;
@@ -54,9 +57,7 @@ function startServer() {
   });
 
   const page = await ctx.newPage();
-  const errors = [];
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(`[console.error] ${m.text()}`); });
-  page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
+  const errors = attachErrorCollector(page);
   page.on('dialog', (d) => d.accept());
   const open = async (p) => { await page.goto(`${BASE}/${p}`, { waitUntil: 'networkidle' }); await page.waitForTimeout(300); };
   const noErrors = (label) => { check(`${label}: no console/page errors`, errors.length === 0, errors.join(' | ')); errors.length = 0; };

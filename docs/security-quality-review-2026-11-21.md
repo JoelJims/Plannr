@@ -28,8 +28,8 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | S1 | Medium | `main` (not this branch) listens on every interface with no login; export and import reachable from the Wi-Fi and by DNS rebinding | `main:server.js:2615` `app.listen(PORT, '0.0.0.0'…)`, `main:server.js:171` | Outside the code: merge (NEEDS MY DECISION) |
 | S3 / Q6 | Medium | A restore replaces the database, then runs migrations and the foreign-key check; if they fail, the backup's data stays live while the answer says it failed; on the phone the safety copy is out of reach | `db.js:372-376`; `core/routes/backup.js:133-134`; `public/local-snapshot.js:100,107` | **Fixed** 2026-11-22 (`5e98901`): automatic rollback, as decided |
 | Q3 | Medium | Saving a contract writes it and its payment dates as separate statements, outside a transaction; a failure between them leaves dates deleted or a contract without dates | `repo.js:217`; `core/routes/contracts.js:321-331` | **Fixed** 2026-11-22 (`00f6a59`) |
-| Q4 | Medium | "Move data back fits" counts only the incoming size, not the journal or what is already in `localStorage` | `core/storage-move.js:251`; `public/db-adapter-kvvfs.js:52-90` | Open (fails safely: rollback) |
-| Q2 | Medium | On `localStorage`, a kill loses the last seconds of saves (WebView writes late); nothing tells the user | measured on the emulator (E3, E6); `public/data-backup.html:233-238` | Open: known; the move is the fix (UI note proposed) |
+| Q4 | Medium | "Move data back fits" counts only the incoming size, not the journal or what is already in `localStorage` | `core/storage-move.js:251`; `public/db-adapter-kvvfs.js:52-90` | **Fixed** 2026-11-22 (`883aabd`, `ws-a-fixes`) |
+| Q2 | Medium | On `localStorage`, a kill loses the last seconds of saves (WebView writes late); nothing tells the user | measured on the emulator (E3, E6); `public/data-backup.html:233-238` | **Fixed** 2026-11-22 (`08939c1`, `ws-a-fixes`) |
 | F1 | Medium | Ledger codes from a restored JSON backup go into HTML attributes unescaped (a crafted backup could run script in the app) | `public/plannr-ui.js:138,145,311,318,1007,1022,1060`; `backup-format.js:157-170` (codes only checked non-empty) | **Fixed** (`678092c`); the stricter import too, 2026-11-22 (`b623200`) |
 | F2 | Medium | "Download CSV (for Excel)" uses a plain download link, a dead end in the Android WebView, and reports success | `public/data-backup.html:875-878` (vs `saveFile()` elsewhere) | **Fixed** 2026-11-22 (`8b9101e`) |
 | F3 | Medium | The Overview shows ₹0.00 while loading and after a failed load, with no message | `public/overview.html:375-381, 620-621, 637-638` | **Fixed** 2026-11-22 (`e5b30ca`) |
@@ -43,16 +43,16 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | S10 / R2 | Low | A `PLANNR_DB` that is set but empty opens the real database (incident 1) | `db.js:31` | **Fixed** (`a3ea627`) |
 | Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | Open |
 | Q8 / R3 | Low | `node:sqlite` stores numbers as REAL: `sqlite_sequence.seq` and unchecked TEXT columns from hand-edited backups differ between desktop and phone | `db.js:1001,1101,1337`; `backup-format.js:122-283,328` | Open |
-| Q9 | Low | A backup's `sequences` naming a table without an id gives a 500 instead of a 400 | `backup-format.js:178-184,326` | Open |
+| Q9 | Low | A backup's `sequences` naming a table without an id gives a 500 instead of a 400 | `backup-format.js:178-184,326` | **Fixed** 2026-11-22 (`d8ef781`, `ws-a-fixes`) |
 | Q10 | Low | No upper limit on amounts; a typo near ₹90 trillion can break the Overview's sums | `core/parsers.js:11-17` | Open |
 | Q11 | Low | Any I/O error is reported as "storage full" on every engine | `db.js:1717-1723` | Open |
-| Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | Open |
-| Q13 | Low | If planning the upgrade throws, the phone shows a blank page | `public/local-bootstrap.js:54` | Open |
-| Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | Open |
+| Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | **Fixed** 2026-11-22 (`7b2d695`, `ws-a-fixes`) |
+| Q13 | Low | If planning the upgrade throws, the phone shows a blank page | `public/local-bootstrap.js:54` | **Fixed** 2026-11-22 (`76d4c3d`, `ws-a-fixes`) |
+| Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
 | F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | **Fixed** 2026-11-22 (`5e6afb7`) |
-| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `db-engine.js:39` | Open |
-| F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open |
+| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `test-ui/offline.js:57-59`; `db-engine.js:39` | **Fixed** 2026-11-22, follow-ups 2026-11-23 (`c927071`, `d11f8ac`, `c3b63d6`, `ws-a-fixes`; proof in section 9) |
+| F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open (partly: `contract-phase-a` waits for the condition and lets only a timeout pass, `8b5546a`, `420416a`; proof in section 9) |
 | F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | Open |
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
 | F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | Open |
@@ -178,3 +178,28 @@ measurements and what is still open are in `docs/session-report-2026-11-22.md`.
 | Incident 3 | Left as it is, as decided | none |
 | Playwright browser | `npx playwright install chromium` run: the UI suites use Chromium revision 1228 again | none |
 | F4 | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`) | `50997b1`, `eb73860`, `ade8d3d`, `7e3a915` |
+
+## 9. Follow-up, 2026-11-22 (`ws-a-fixes`)
+
+Fixed on the branch `ws-a-fixes` (pull request into `plannr-phase3`, not merged yet). The F7 and
+F8 / F9 follow-ups `c3b63d6` and `420416a` are from 2026-11-23. Each fix has
+a test that failed on the code before it. For F7 and F8 / F9 the fix is to a UI suite itself, so
+the failing runs used scratch harnesses that are not in the repository: they forced the problem
+(a `.wasm` file served with the wrong type, a slow page load, a broken wait), ran the old and the
+new suite, and are described in each commit message.
+
+| Finding | What changed | Commit |
+|---|---|---|
+| Q4 | "Move data back" also counts the old copy, its rollback journal and the other `localStorage` keys (`moveBack()`, `moveBackRoomBytes()`) | `883aabd` |
+| Q2 | The Data Backup page says that, while the data is in `localStorage`, a sudden close can lose the last seconds of saves, and points to the move | `08939c1` |
+| Q14 | A ledger entry and its custom-name write are one transaction | `908b9d4` |
+| Q9 | A backup whose `sequences` names a table without an id is refused with a 400 | `d8ef781` |
+| Q13 | If planning the upgrade throws, the phone shows the reason instead of a blank page | `76d4c3d` |
+| Q12 | A storage-move snapshot no longer cuts the rotation of regular safety snapshots | `7b2d695` |
+| F7 | The "no console errors" checks in `static-hosting` and `offline` ignore sqlite-wasm's own two-line fallback message ("wasm streaming compile failed: ..." then "falling back to ArrayBuffer instantiation"), and only that pair; any other console error still fails them. Both suites use one shared collector, `test-ui/_console-errors.js`. The pair appears when a suite leaves a page while its `.wasm` is still downloading. A wrong Content-Type for `sqlite3.wasm` also causes the pair, so `static-hosting` now checks that header itself: every `.wasm` the pages load must come back as `application/wasm`. Proof: a scratch harness (not committed) served every `.wasm` as `text/plain`; the old suites failed (14 and 12 checks), the new ones pass and still fail three planted errors. With the `.wasm` type removed from `local-server.js`, the header check is the one check that fails | `c927071`, `d11f8ac`, `c3b63d6` |
+| F8 / F9 (partly) | `contract-phase-a` waits for what it reads next (15 s at most) instead of sleeping a fixed time, and its waits let only a timeout pass: any other error stops the suite at the wait that broke. Proof: scratch copies of the suite (not committed) made the page's contract load answer late (the old suite crashed, the new one passes) and broke single waits (the old suite passed or failed at an unrelated check, the new one stops at that wait). The fixed ports, the other suites and the node tests named in the finding are unchanged | `8b5546a`, `420416a` |
+
+Elsewhere the same day (other branches, statuses to be set here when they merge): F4 option (b)
+is on `ws-b-f4` as a draft, awaiting the decision; F18 (modal focus) is fixed on `ws-c-cleanup`.
+Q7 and Q16 (`public/local-api.js`) were left for later because that file was being cleaned up on
+`ws-c-cleanup` at the same time.
