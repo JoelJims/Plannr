@@ -134,6 +134,6 @@ On the **Data Backup** page, **Restore from encrypted backup** with the file fro
 safety snapshot of whatever is there first). The JSON backup restores with **Import / Restore** on
 the same page.
 
-On the owner's phone during a round of `docs/PHONE-TEST-CHECKLIST.md`, do not restore anything on
-the phone: stop and ask, as the checklist says (its "Rules for this round" and C1). The backups,
-and the copy on the emulator until D, are the fallback.
+On the owner's phone, do not restore anything on the phone: stop and ask, as
+`docs/PHONE-TEST-CHECKLIST.md` says (its "Rules for this round" and C1). The backups, and the copy
+on the emulator until D, are the fallback.
