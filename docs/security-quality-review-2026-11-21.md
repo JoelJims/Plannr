@@ -51,7 +51,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
 | F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | **Fixed** 2026-11-22 (`5e6afb7`) |
-| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `test-ui/offline.js:57-59`; `db-engine.js:39` | **Fixed** 2026-11-22 (`c927071`, `d11f8ac`, `c3b63d6`, `ws-a-fixes`; proof in section 9) |
+| F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `test-ui/offline.js:57-59`; `db-engine.js:39` | **Fixed** 2026-11-22, follow-ups 2026-11-23 (`c927071`, `d11f8ac`, `c3b63d6`, `ws-a-fixes`; proof in section 9) |
 | F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open (partly: `contract-phase-a` waits for the condition and lets only a timeout pass, `8b5546a`, `420416a`; proof in section 9) |
 | F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | Open |
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
@@ -181,7 +181,8 @@ measurements and what is still open are in `docs/session-report-2026-11-22.md`.
 
 ## 9. Follow-up, 2026-11-22 (`ws-a-fixes`)
 
-Fixed on the branch `ws-a-fixes` (pull request into `plannr-phase3`, not merged yet). Each fix has
+Fixed on the branch `ws-a-fixes` (pull request into `plannr-phase3`, not merged yet). The F7 and
+F8 / F9 follow-ups `c3b63d6` and `420416a` are from 2026-11-23. Each fix has
 a test that failed on the code before it. For F7 and F8 / F9 the fix is to a UI suite itself, so
 the failing runs used scratch harnesses that are not in the repository: they forced the problem
 (a `.wasm` file served with the wrong type, a slow page load, a broken wait), ran the old and the

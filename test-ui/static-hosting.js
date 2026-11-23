@@ -12,7 +12,9 @@
 //      live database has always had one seeded (out of band, long before this migration), so this
 //      never surfaces there; a brand-new local database has none. Phase 8d.
 // This suite clicks through the real nav (not page.goto to a hardcoded path) so a reintroduced clean
-// URL fails exactly the way a tap would, and asserts zero console/page errors on every page.
+// URL fails exactly the way a tap would, and asserts no console/page errors on every page, apart
+// from sqlite-wasm's own two-line fallback note (review finding F7). It also checks that every
+// .wasm file the pages load is served as application/wasm.
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
