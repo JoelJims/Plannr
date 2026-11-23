@@ -191,6 +191,8 @@ export function validateBackup(data, ctx) {
       if (!data.sequences || typeof data.sequences !== 'object' || Array.isArray(data.sequences)) return { error: 'Backup has an invalid "sequences" section.' };
       for (const [name, seq] of Object.entries(data.sequences)) {
         if (!BACKUP_TABLES.includes(name)) return { error: `sequences: unknown table ${JSON.stringify(name)}.` };
+        // Q9: only a table with an id column has an AUTOINCREMENT sequence (the restore reads MAX(id)).
+        if (!BACKUP_COLS[name] || !BACKUP_COLS[name].includes('id')) return { error: `sequences: ${name} has no id column, so it cannot have a sequence.` };
         if (!isInt(seq) || seq < 0) return { error: `sequences: ${name} must be a non-negative integer.` };
       }
     }
