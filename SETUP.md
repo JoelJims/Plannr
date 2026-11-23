@@ -143,12 +143,17 @@ lines go or if such a file is ever tracked.
 > its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
 
-**The debug key matters too, for the owner's phone.** Until the owner decides how that phone moves
-to the release build (`docs/release-plan.md` §6), the owner's phone can only be updated with builds signed by this laptop's
-Android debug key (certificate `fd12f081…b95629`; Android's default debug keystore in the user
-profile, which the Android build tools made for the first debug build). A debug build made on another PC, or on this one after that
-keystore is lost, will not install over the phone's Plannr (the checklist says stop). Whether and
-how to keep a copy of that debug key is the owner's call; note it with the release-key to-do.
+**The debug key matters too, for the owner's phone.** That phone runs a debug build. As long as it does (today, until any move in
+`docs/release-plan.md` §6 is carried out, and for good if it stays on debug builds), it can only
+be updated with debug builds signed by the same Android debug key as the app on it. The last build
+made for it (`9d7fd97`) was signed with the debug key of the owner's current laptop (certificate
+`fd12f081…b95629`; Android's default debug keystore in the user profile, which the Android build
+tools made for the first debug build); the checklist confirms the phone's own copy before any
+install. A debug build made on another PC, or on that laptop after its debug keystore is lost,
+will not install over the phone's Plannr (the checklist says stop). On a new machine, check a
+debug APK built there as the checklist's "Check the APK on the laptop" says before any phone
+step: its certificate must be `fd12f081…b95629`. Whether and how to keep a copy of that debug key
+is the owner's call.
 
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
 financial records.
@@ -273,7 +278,8 @@ Notes:
   `docs/PHONE-TEST-CHECKLIST.md` instead.
 - **Do not turn off signing, or switch to debug signing, to make the warning go away.**
   The warning is about how the app was distributed, not about the signature being invalid,
-  and unsigned or debug-signed builds break upgrades over an existing install (see section 2).
+  and unsigned or debug-signed builds break upgrades over an existing release install (see
+  section 2; the owner's phone, which runs a debug build, is the exception described there).
 - If you are handing the APK to someone else, warn them about this dialog first. Without
   warning, "Unsafe app blocked" reads as a virus alert and most people will cancel.
 

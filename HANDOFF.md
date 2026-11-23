@@ -496,7 +496,9 @@ There is deliberately **no reset button inside the app**.
 - **How the owner's phone moves from the debug build to the release build is not decided.**
   A release APK cannot be installed over a debug build, and that phone holds the real data on a
   debug build. Until the owner decides, it gets debug builds only, as in
-  `docs/PHONE-TEST-CHECKLIST.md`. The question is in `docs/release-plan.md` §6.
+  `docs/PHONE-TEST-CHECKLIST.md`. The question is in `docs/release-plan.md` §6. While it runs a
+  debug build, only builds signed by the current laptop's debug key install over it; whether to
+  keep a copy of that key is also the owner's call (`SETUP.md` §2).
 - **A database made before 2026-08-23 (user_version 1) whose upgrade fails in its last steps
   needs two starts.** The next start shows an error once ("no such column:
   contract_allowance_id"); the start after that finishes the upgrade. Nothing is lost, and the

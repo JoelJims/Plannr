@@ -243,6 +243,9 @@ After pull requests #4 to #8 were merged into `plannr-phase3` (`9c6e394`). The f
   (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), and Plannr is never uninstalled on that phone. Not
   decided; the question is in `docs/release-plan.md` section 6. Until then the phone gets debug
   builds only, through `docs/PHONE-TEST-CHECKLIST.md`.
+- **A copy of the laptop's debug key.** While the owner's phone runs a debug build, only debug
+  builds signed by the owner's current laptop's debug key install over it (`SETUP.md` §2).
+  Whether and how to keep a copy of that key: not decided.
 - **Q12, the rest.** Move snapshots (`plannr-pre-move-*`, `plannr-old-copy-*`,
   `plannr-pre-move-back-*`) are never pruned: prune them, or keep them all.
 
