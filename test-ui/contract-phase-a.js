@@ -8,17 +8,22 @@
 //
 // Run: node test-ui/contract-phase-a.js
 const H = require('../test/helpers');
-const { chromium } = require('playwright');
+const { chromium, errors: { TimeoutError } } = require('playwright');
 
 // No fixed pauses (review finding F8/F9). This suite used to sleep for a set time (120 to 700 ms)
 // and then read the page. On a busy PC that is a guess that can lose: 600 ms after 'networkidle'
 // the Contract Details page had not drawn its allowance rows yet, and the suite crashed reading
 // them. 'networkidle' only means the network went quiet, not that the page has finished with what
 // came back. So every wait below is for the thing the next step reads, with a long timeout so a
-// slow machine still passes. Where the timeout is swallowed (.catch), the check after it still
-// runs and fails with its own message: a real bug costs up to WAIT_MS of extra time, never a pass.
+// slow machine still passes. Where the timeout is swallowed (.catch(onlyTimeout)), the check after
+// it still runs and fails with its own message: a real bug costs up to WAIT_MS of extra time,
+// never a pass.
 const WAIT_MS = 15000;
-const waitUntil = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: WAIT_MS }).catch(() => {});
+// Swallow Playwright's TimeoutError and nothing else. Any other error is thrown again and stops
+// the suite with its own message: a wait whose test throws (it reads an element that is gone), a
+// malformed selector, or a closed page. Swallowing those too would hide a broken wait.
+const onlyTimeout = (e) => { if (!(e instanceof TimeoutError)) throw e; };
+const waitUntil = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: WAIT_MS }).catch(onlyTimeout);
 
 // The main ledger is chosen through the searchable browser now, not a <select>. Search for the code,
 // then click the result — which is what a user does, and what a selectOption() call stopped testing
@@ -86,7 +91,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   // optional metadata, including the derived expected completion date. Phase C moved all of this
   // behind a collapsed <details> — open it first, exactly as a user would.
   await page.click('#cdOptional > summary');
-  await page.waitForSelector('#cdOptional[open]', { state: 'attached', timeout: WAIT_MS }).catch(() => {});
+  await page.waitForSelector('#cdOptional[open]', { state: 'attached', timeout: WAIT_MS }).catch(onlyTimeout);
   await page.check('#hasSignedDate');
   // Month and year FIRST: attachDatePicker builds the day list for the currently selected month, so
   // picking the 31st before switching to January only works in a 31-day month. Written in August,
@@ -153,7 +158,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('there is no button that installs a default set of caps', (await page.$('#alwSeedBtn')) === null);
 
   await page.click('#alwAddOneBtn');
-  await page.waitForSelector('#allowanceForm', { state: 'visible', timeout: WAIT_MS }).catch(() => {});
+  await page.waitForSelector('#allowanceForm', { state: 'visible', timeout: WAIT_MS }).catch(onlyTimeout);
   check('the prompt reveals the add form', await page.isVisible('#allowanceForm'));
 
   await addAllowance(page, { name: 'Sanitaryware', kind: 'lump', cap: '40000' });
@@ -192,7 +197,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.goto(base + '/contract-details', { waitUntil: 'networkidle' });
   // The allowance rows are drawn when the page's own load of the contract comes back, which can be
   // well after 'networkidle' on a busy PC. A fixed 600 ms here once found nothing drawn yet.
-  await page.waitForSelector('.cd-alw-pos', { state: 'attached', timeout: WAIT_MS }).catch(() => {});
+  await page.waitForSelector('.cd-alw-pos', { state: 'attached', timeout: WAIT_MS }).catch(onlyTimeout);
   const drawnPos = await page.$$eval('.cd-alw-pos', (els) => els.map((e) => e.textContent.trim())).then((all) => all[0] || '');
   check('the draw shows up as an over-cap position on Contract Details',
     drawnPos.includes('₹60,000.00') && drawnPos.includes('₹20,000.00 over'), drawnPos);
