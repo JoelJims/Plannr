@@ -1,8 +1,21 @@
 # Releasing a new version to the phone
 
-Plannr keeps all its data **inside the app on the phone** (the WebView's storage for
-`https://localhost`). An update keeps that data only when it is installed **over** the old app.
-Uninstalling first deletes it. Follow these steps in order, every time.
+Plannr keeps all its data **inside the app on the phone**: in the WebView's storage for
+`https://localhost`, or, after Data Backup → **Move to the new storage**, in a database file of
+its own (`plannrSQLite.db`). An update keeps that data only when it is installed **over** the old
+app. Uninstalling first deletes it. Follow these steps in order, every time.
+
+> **A phone with real data** (the owner's phone first of all): back it up and install exactly as
+> `docs/PHONE-TEST-CHECKLIST.md` says, not with the short steps in sections 1 and 3 here. That
+> means both backups copied to the laptop by cable and both restored and compared on the emulator
+> first (A1 to A4), then `adb -d install -r`, never uninstall, and stop on any answer other than
+> `Success`.
+>
+> **The owner's phone runs a debug build.** A release APK cannot be installed over it: Android
+> answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and the only way past that on the phone itself is
+> to uninstall, which is never done on that phone. How that phone moves to the release key is an
+> open decision for the owner (`docs/release-plan.md` §6). Until then it gets debug builds only,
+> installed with the checklist.
 
 ## What keeps the data through an update
 
@@ -15,9 +28,16 @@ Uninstalling first deletes it. Follow these steps in order, every time.
 
 A debug APK (`Plannr-debug.apk`) is signed with the Android debug key, not the release key. A
 phone that has the release build cannot take a debug build over it, and the other way round.
-Always update a phone with the same kind of build it already has.
+Always update a phone with the same kind of build it already has. So the first release APK
+cannot go over a debug build: Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. For other
+people's phones the one-time move is in `docs/release-plan.md` §3; for the owner's phone it is the
+open decision above.
 
 ## 1. Back up the phone first
+
+On a phone with real data, do A1 to A4 of `docs/PHONE-TEST-CHECKLIST.md` instead: they also
+prove that both backups restore, on the emulator, before anything is installed. The short steps
+below are for a test phone.
 
 1. Open Plannr on the phone → **Data Backup**.
 2. **Download encrypted backup** (the whole database). Choose a password you will remember.
@@ -72,21 +92,28 @@ reads only the old v1 signature, which this APK may not have (`minSdkVersion` 24
 
 ## 3. Install over the old app
 
-**Do not uninstall Plannr.** Install the new APK on top of it:
+**Do not uninstall Plannr.** Install the new APK on top of it. On a phone with real data, only
+as step B of `docs/PHONE-TEST-CHECKLIST.md`, after A4 says go.
 
-- with a cable: `adb install -r android/app/build/outputs/apk/release/Plannr.apk`
-- or copy `Plannr.apk` to the phone and open it; Android asks to **update** the app. If it says
-  "install" instead of "update", stop: it does not see this as the same app.
+- with a cable: `adb -d install -r android/app/build/outputs/apk/release/Plannr.apk`. `-d` means
+  "the phone on USB"; the emulator is often running too, and without it adb could reach the
+  wrong device (for the emulator, use `-s emulator-5554` instead). It must answer `Success`.
+  Anything else: stop, do not uninstall, do not try other flags, and ask.
+- on a test phone only: copy `Plannr.apk` to the phone and open it; Android asks to **update**
+  the app. If it says "install" instead of "update", stop: it does not see this as the same app.
 
 If the install fails, **do not uninstall to get past it**:
 
 | Message | Meaning | What to do |
 |---|---|---|
-| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not installed as package conflicts" | Signed with a different key (for example a debug build over a release build) | Build with the right key. |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not installed as package conflicts" | Signed with a different key (for example a release build over a debug build, or the other way round) | Stop. If the phone has a debug build: on the owner's phone this is the open decision at the top of this page; for anyone else, `docs/release-plan.md` §3. Otherwise check the APK's certificate with `apksigner` (section 2). |
 | `INSTALL_FAILED_VERSION_DOWNGRADE` | `versionCode` is not higher than the installed one | Build again with `npm run release:android`. |
 | Play Protect warning | Normal for an app not from the Play Store (`SETUP.md` §4) | Continue. |
 
 ## 4. Check the data
+
+On a phone with real data, check it with C1 of `docs/PHONE-TEST-CHECKLIST.md` first (a fresh
+JSON export compared with the backup).
 
 1. Open Plannr. The ledger list shows the same ledgers as before.
 2. Open one ledger and compare its total with the number you noted.
@@ -105,3 +132,7 @@ version (higher `versionCode`). As a last resort, restore the backup from step 1
 On the **Data Backup** page, **Restore from encrypted backup** with the file from step 1 (it takes a
 safety snapshot of whatever is there first). The JSON backup restores with **Import / Restore** on
 the same page.
+
+On the owner's phone during a round of `docs/PHONE-TEST-CHECKLIST.md`, do not restore anything on
+the phone: stop and ask, as the checklist says (its "Rules for this round" and C1). The backups,
+and the copy on the emulator until D, are the fallback.
