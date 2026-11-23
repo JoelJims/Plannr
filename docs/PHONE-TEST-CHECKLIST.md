@@ -100,17 +100,18 @@ data first, then your OK, then real data. The phone most likely has `9d7fd97`, f
 and the APK under test is the first build after step 1.4 to run on a real phone. You chose to install
 it over your real data (option 1 of the earlier question), but only with proof first: before
 anything is installed on the phone, both backups are restored on the emulator, with the same APK,
-and compared with the phone.
+and compared with the phone, and the install itself is rehearsed there.
 
 1. **A1.** On the phone: make an encrypted backup and a JSON backup, and write down the figures.
    From then until C1 passes, change nothing in Plannr on the phone.
-2. **A2.** Copy both files to the laptop, and check them.
+2. **A2.** Copy both files to the laptop by cable, and check them.
 3. **A3.** On the emulator, with the APK under test: empty Plannr, restore the JSON backup, and
    compare the figures and the files. Empty it again, restore the encrypted backup, and compare
-   again.
-4. **A4.** Only if both restores match completely, go to **B**: install over the phone with
-   `adb -d install -r <APK under test>`. If either restore fails or is incomplete: stop, do not
-   install, keep the backups, and ask.
+   again. Then rehearse B: empty it again, install the phone's own APK, restore the JSON backup
+   with it, install the APK under test over it, and compare again.
+4. **A4.** Only if both restores and the rehearsal match completely, go to **B**: install over the
+   phone with `adb -d install -r <APK under test>`. If any of them fails or is incomplete: stop, do
+   not install, keep the backups, and ask.
 
 Then **C** (the checks for this build) and **D** (clear your data from the emulator). The test-data
 checks (2, 3, 6, 9, C7, C8) are not needed before B. They never run on the phone while it holds your
@@ -129,10 +130,9 @@ real data: run them on the emulator with test data, after D.
 
 The phone was not connected when the current candidate was made: `adb devices` listed only the
 emulator at 11:47, 11:50 and 11:52 on 2026-11-22. So nothing on the phone was read. The last build
-made for it is `9d7fd97`: `android/app/build/outputs/apk/debug/Plannr-debug.apk` in the main
-folder, and in `D:\Backups\plannr\`. SHA-256
-`7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef`, versionCode 1, versionName 1.0,
-signed with the same debug key (`fd12f081…b95629`).
+made for it is `9d7fd97`, kept as `D:\Backups\plannr\Plannr-debug-realphone-9d7fd97.apk`. SHA-256
+`7dc29db34fa1bad4de338232b38273fe848f22e7a098f1553ac39f0665b6a2ef`, 5,974,512 bytes, versionCode 1,
+versionName 1.0, signed with the same debug key (`fd12f081…b95629`).
 
 **Assume the Plannr on the phone holds your real data.** Nothing on the PC can see inside it, and
 it was not installed just now. So do step A before anything is installed.
@@ -144,12 +144,30 @@ emulator instead and give a false match:
 ```powershell
 adb -d shell dumpsys package com.plannr.app | findstr /R "versionName versionCode firstInstallTime lastUpdateTime"
 adb -d shell pm path com.plannr.app                    # prints package:/data/app/…/base.apk
-adb -d pull <that path without the package: prefix> $env:TEMP\phone-base.apk
+adb -d pull "<that path without the package: prefix>" D:\Backups\plannr\phone-current.apk
+Get-FileHash D:\Backups\plannr\phone-current.apk -Algorithm SHA256
 ```
 
-Then run the `apksigner verify --print-certs` line above on `$env:TEMP\phone-base.apk`. If its
-certificate SHA-256 is not the one in the box, the APK under test will not install over it: stop
-and ask.
+- `pm path` prints one line. If it prints nothing, Plannr is not on the device adb reached. If it
+  prints more than one line, the app was installed in parts. Either way, stop and ask.
+- `adb -d pull` copies the phone's own Plannr APK to the laptop: the app only, none of your data.
+  Like `pm path`, it only reads the phone. Keep the copy: A3 installs it on the emulator to rehearse
+  B. If the pull fails, stop and ask.
+- If the phone still has `9d7fd97`, the hash is `7DC29DB3…A2EF`, the same as
+  `D:\Backups\plannr\Plannr-debug-realphone-9d7fd97.apk`. This line compares the two hashes in
+  full. It prints `True` if they are the same and `False` if not:
+
+  ```powershell
+  (Get-FileHash D:\Backups\plannr\phone-current.apk -ErrorAction Stop).Hash -eq (Get-FileHash D:\Backups\plannr\Plannr-debug-realphone-9d7fd97.apk -ErrorAction Stop).Hash
+  ```
+
+  Write the hash in the results table ("What was installed before"). If it prints `False`, the
+  phone has another build: stop and ask before A1. If it prints red error text instead, a file is
+  missing or misnamed: stop and ask too. The names in A1 and in the rehearsal (A3) were checked
+  against `9d7fd97` only.
+- Run the `apksigner verify --print-certs` line above on `D:\Backups\plannr\phone-current.apk`. If
+  its certificate SHA-256 is not the one in the box, the APK under test will not install over it:
+  stop and ask.
 
 ### Rules for this round
 
@@ -180,6 +198,10 @@ and ask.
 Do this in the Plannr that is on the phone now. Its Data Backup page uses the same names as below.
 **From now until C1 passes, do not add, edit or delete anything in Plannr on the phone.** If you
 have to, start again here: new backups, then A2 and A3 again with the new files, before B.
+
+Keep both files on the phone, in **Download**: A2 copies them to the laptop by cable. Do not upload
+them (to Google Drive or anywhere else) unless the cable does not work. The JSON file holds your
+Daily Report contacts unencrypted, and a file deleted from Drive stays in Drive's Trash for 30 days.
 
 1. Open Plannr. On Home, tap **DATA BACKUP** in the grid of four buttons at the top. The page is
    called **Data Backup**.
@@ -229,10 +251,11 @@ Report contacts unencrypted, so it is better not to upload it.
   Use the names `ls` shows: if a file of that name was there already, the phone may have saved the
   new one as `… (1).json`.
 - **Only if the cable does not work:** save them to Google Drive from the share sheet, then
-  download them on the laptop.
+  download them on the laptop. A file you delete from Drive stays in Drive's **Trash** (called
+  **Bin** in some languages) for 30 days, so D deletes them from both.
 
-Keep the copies in `D:\Backups\plannr\` for good. Once C1 passes, delete the copies from Google
-Drive (if you used it) and from the phone's Download folder (D).
+Keep the copies in `D:\Backups\plannr\` for good. Once C1 passes, delete the copies from the phone's
+Download folder, and from Google Drive and then Drive's Trash if you used it (D).
 
 Check them on the laptop:
 
@@ -268,10 +291,11 @@ Check them on the laptop:
 This proves that both files hold all your data, and that the APK under test restores them, before
 the phone gets that APK. Each restore starts from an empty Plannr, with its data in the old storage
 like the phone's, so it cannot borrow anything from the emulator's test data or from the other
-restore. **The emulator's own test data is deleted.** The emulator is `emulator-5554` ("Running
-these on an emulator" below). From now until D, start it from a terminal with
-`emulator -avd <name> -no-snapshot-save` (if it is running, close it and start it this way; D says
-why).
+restore. Then steps 11 to 17 rehearse B itself: the phone's own build writes your data, and the APK
+under test is installed over it. **The emulator's own test data is deleted.** The emulator is
+`emulator-5554` ("Running these on an emulator" below). From now until D, start it from a terminal
+with `emulator -avd <name> -no-snapshot-save` (if it is running, close it and start it this way; D
+says why).
 
 1. Install the APK under test on the emulator, over the build that is there:
 
@@ -321,8 +345,56 @@ why).
     comparison line marked "After the encrypted restore": its second file is
     `emulator-after-enc.json`, not the JSON round's file. It must end with `ALL THE SAME`.
 
-The order does not matter: each restore starts from an empty Plannr (steps 3 and 7), so a gap in
-one file cannot be hidden by the other.
+The order of the two restores does not matter: each starts from an empty Plannr (steps 3 and 7), so
+a gap in one file cannot be hidden by the other.
+
+**Rehearse B** (steps 11 to 17). In steps 3 to 10 the APK under test wrote your data itself. On the
+phone, B installs it over the phone's own build, which wrote your data into the old storage. These
+steps do the same on the emulator. They change nothing on the phone. The emulator runs under
+Results (2026-11-20 and 2026-11-21) did the same with test data.
+
+11. **The phone's own APK.** "What the phone has now" copied it to
+    `D:\Backups\plannr\phone-current.apk`. Check that it is still the same file:
+
+    ```powershell
+    Get-FileHash D:\Backups\plannr\phone-current.apk -Algorithm SHA256
+    ```
+
+    The hash must be the one you wrote in the results table ("What was installed before"; for
+    `9d7fd97` it is `7DC29DB3…A2EF`). If the file is not there, copy it again with the read-only
+    `pm path` and `adb -d pull` lines in "What the phone has now", and check its hash. If the hash
+    is another one, stop and ask.
+12. **Empty the emulator's Plannr** with the `pm clear` line from step 3. It must answer `Success`.
+    Do not open Plannr yet.
+13. **Install the phone's own APK** over the APK under test:
+
+    ```powershell
+    adb -s emulator-5554 install -r D:\Backups\plannr\phone-current.apk
+    ```
+
+    It must answer `Success`. The current candidate and `9d7fd97` both have versionCode 1 and the
+    same debug key, so `-r` works. If it answers anything else (for example
+    `INSTALL_FAILED_VERSION_DOWNGRADE`, when the APK under test has a higher versionCode than the
+    phone's build): stop and ask. Do not try other flags, and do not uninstall.
+14. **Restore the JSON backup with the phone's build.** Open Plannr and wait for Home: it is the
+    phone's build, empty, with its data in the old storage. Restore the `.json` file as in step 4:
+    Data Backup → **Import / Restore**, choose the file in **Downloads**, tap **Import / Restore**,
+    then OK on "This REPLACES all current data with the backup…". The `9d7fd97` build has the same
+    section, button and messages. It must answer "Restored ✓ — …" with the numbers A2 printed. If
+    it also says that entries "referenced a person not in this install", stop. If it answers
+    "Storage is full — …", stop and ask: this build has no **Move to the new storage**.
+15. **Install the APK under test over it**, as B does on the phone:
+
+    ```powershell
+    adb -s emulator-5554 install -r <APK under test>
+    ```
+
+    It must answer `Success`. If it does not, stop and ask.
+16. Open Plannr and wait for Home. Data Backup → **Where your data is kept** offers **Move to the
+    new storage**: the data is still in the old storage, as it will be on the phone after B. Leave
+    it. Compare every figure from A1 step 5: every one must match exactly.
+17. **Compare the files** once more. Save the new export as `emulator-after-update.json`, and run
+    the comparison line marked "After the rehearsal of B". It must end with `ALL THE SAME`.
 
 ##### After each restore: compare the files
 
@@ -344,14 +416,14 @@ the phone's JSON file, table by table and row by row.
    cmd /c "adb -s emulator-5554 exec-out run-as com.plannr.app cat cache/plannr-backup-<date>.json > D:\Backups\plannr\emulator-after-json.json"
    ```
 
-   That `cmd /c` line is for the JSON round (A3 step 6). After the encrypted restore (A3 step 10),
-   write `emulator-after-enc.json` at its end instead. `cmd /c` copies the file byte for byte
-   (PowerShell's own `>` would rewrite it as UTF-16 text). `run-as` works with the debug build only.
-   `pm clear` (A3 steps 3 and 7) empties the cache folder, so every file there was exported after
-   this round's restore.
+   That `cmd /c` line is for the JSON round (A3 step 6). At its end, write `emulator-after-enc.json`
+   instead after the encrypted restore (A3 step 10), and `emulator-after-update.json` after the
+   rehearsal of B (A3 step 17). `cmd /c` copies the file byte for byte (PowerShell's own `>` would
+   rewrite it as UTF-16 text). `run-as` works with the debug build only. `pm clear` (A3 steps 3, 7
+   and 12) empties the cache folder, so every file there was exported in this round.
 
    If the share sheet on your emulator can save into **Download**, you may do that instead. That
-   folder also holds the two files you pushed in A3 step 2, and it may hold the other round's
+   folder also holds the two files you pushed in A3 step 2, and it may hold an earlier round's
    export, so take care to copy the new file:
    - Before each export, delete the emulator's earlier export there, if there is one (the `rm` line
      in D). Do not delete the two files you pushed.
@@ -359,40 +431,48 @@ the phone's JSON file, table by table and row by row.
      The new file is the one with the time of a minute ago. Its name may end in `(1).json`.
    - Copy only that file, with
      `adb -s emulator-5554 pull "/sdcard/Download/<that file>" D:\Backups\plannr\emulator-after-json.json`
-     (`emulator-after-enc.json` after the encrypted restore). D then deletes it there too.
-3. Compare it with the phone's JSON from A2 (PowerShell, one line). Use the line for the round you
-   are in. Both start with the phone's file. The encrypted round's line names the JSON round's
-   export as a third file, so that the old export cannot pass in place of the new one.
+     (`emulator-after-enc.json` after the encrypted restore, `emulator-after-update.json` after the
+     rehearsal). D then deletes it there too.
+3. Compare it with the phone's JSON from A2 (PowerShell, one line). Use the line for the step you
+   are in. Each line starts with the A2 file, and the second file is the new export. From the
+   encrypted round on, a third file names the export made before it, so that an old export cannot
+   pass in place of the new one. (C1 has its own line, for the phone after B.)
 
    After the JSON restore (A3 step 6):
 
    ```powershell
-   node -e "const fs=require('fs');const [p,e,o]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,'utf8')));const rows=(b,t)=>(b.tables[t]||[]).filter(r=>t!=='settings'||r.key!=='last_encrypted_export_at');const ck=b=>rows(b,'settings').filter(s=>s.key==='daily_report_recipients'||s.key==='daily_report_whatsapp').map(s=>s.key).join(', ')||'none';let bad=0;const show=(n,x,y,a,c)=>{const ok=JSON.stringify(x)===JSON.stringify(y);if(!ok)bad++;console.log(n.padEnd(24),String(a).padStart(6),String(c).padStart(9),ok?'same':'DIFFERENT')};console.log('table'.padEnd(24),' phone','emulator');for(const t of new Set(Object.keys(p.tables).concat(Object.keys(e.tables))))show(t,rows(p,t),rows(e,t),rows(p,t).length,rows(e,t).length);const sp=p.sequences||{},se=e.sequences||{};show('sequences',sp,se,Object.keys(sp).length,Object.keys(se).length);console.log('contact keys: phone',ck(p),'| emulator',ck(e));if(ck(p)!==ck(e))bad++;console.log('exported: phone',p.exportedAt,'| emulator',e.exportedAt+(o?' | JSON round '+o.exportedAt:''));if(e.exportedAt===p.exportedAt||(o&&!(e.exportedAt>o.exportedAt))||!(Date.now()-Date.parse(e.exportedAt)<=30*60*1000)){bad++;console.log('The emulator file is not a new export (the same as another file, or older than 30 minutes). Export again.')}console.log(bad?'NOT THE SAME: '+bad+' line(s) differ. Stop.':'ALL THE SAME')" D:\Backups\plannr\plannr-backup-<date>.json D:\Backups\plannr\emulator-after-json.json
+   node -e "const fs=require('fs');const [p,e,o]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,'utf8')));const rows=(b,t)=>(b.tables[t]||[]).filter(r=>t!=='settings'||r.key!=='last_encrypted_export_at');const ck=b=>rows(b,'settings').filter(s=>s.key==='daily_report_recipients'||s.key==='daily_report_whatsapp').map(s=>s.key).join(', ')||'none';let bad=0;const show=(n,x,y,a,c)=>{const ok=JSON.stringify(x)===JSON.stringify(y);if(!ok)bad++;console.log(n.padEnd(24),String(a).padStart(7),String(c).padStart(10),ok?'same':'DIFFERENT')};console.log('table'.padEnd(24),'A2 file','new export');for(const t of new Set(Object.keys(p.tables).concat(Object.keys(e.tables))))show(t,rows(p,t),rows(e,t),rows(p,t).length,rows(e,t).length);const sp=p.sequences||{},se=e.sequences||{};show('sequences',sp,se,Object.keys(sp).length,Object.keys(se).length);console.log('contact keys: A2 file',ck(p),'| new export',ck(e));if(ck(p)!==ck(e))bad++;console.log('exported: A2 file',p.exportedAt,'| new export',e.exportedAt+(o?' | earlier export '+o.exportedAt:''));if(e.exportedAt===p.exportedAt||(o&&!(e.exportedAt>o.exportedAt))||!(Date.now()-Date.parse(e.exportedAt)<=30*60*1000)){bad++;console.log('The second file is not a new export (the same as another file, not newer than the third file, or older than 30 minutes). Export again.')}console.log(bad?'NOT THE SAME: '+bad+' line(s) differ. Stop.':'ALL THE SAME')" D:\Backups\plannr\plannr-backup-<date>.json D:\Backups\plannr\emulator-after-json.json
    ```
 
    After the encrypted restore (A3 step 10):
 
    ```powershell
-   node -e "const fs=require('fs');const [p,e,o]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,'utf8')));const rows=(b,t)=>(b.tables[t]||[]).filter(r=>t!=='settings'||r.key!=='last_encrypted_export_at');const ck=b=>rows(b,'settings').filter(s=>s.key==='daily_report_recipients'||s.key==='daily_report_whatsapp').map(s=>s.key).join(', ')||'none';let bad=0;const show=(n,x,y,a,c)=>{const ok=JSON.stringify(x)===JSON.stringify(y);if(!ok)bad++;console.log(n.padEnd(24),String(a).padStart(6),String(c).padStart(9),ok?'same':'DIFFERENT')};console.log('table'.padEnd(24),' phone','emulator');for(const t of new Set(Object.keys(p.tables).concat(Object.keys(e.tables))))show(t,rows(p,t),rows(e,t),rows(p,t).length,rows(e,t).length);const sp=p.sequences||{},se=e.sequences||{};show('sequences',sp,se,Object.keys(sp).length,Object.keys(se).length);console.log('contact keys: phone',ck(p),'| emulator',ck(e));if(ck(p)!==ck(e))bad++;console.log('exported: phone',p.exportedAt,'| emulator',e.exportedAt+(o?' | JSON round '+o.exportedAt:''));if(e.exportedAt===p.exportedAt||(o&&!(e.exportedAt>o.exportedAt))||!(Date.now()-Date.parse(e.exportedAt)<=30*60*1000)){bad++;console.log('The emulator file is not a new export (the same as another file, or older than 30 minutes). Export again.')}console.log(bad?'NOT THE SAME: '+bad+' line(s) differ. Stop.':'ALL THE SAME')" D:\Backups\plannr\plannr-backup-<date>.json D:\Backups\plannr\emulator-after-enc.json D:\Backups\plannr\emulator-after-json.json
+   node -e "const fs=require('fs');const [p,e,o]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,'utf8')));const rows=(b,t)=>(b.tables[t]||[]).filter(r=>t!=='settings'||r.key!=='last_encrypted_export_at');const ck=b=>rows(b,'settings').filter(s=>s.key==='daily_report_recipients'||s.key==='daily_report_whatsapp').map(s=>s.key).join(', ')||'none';let bad=0;const show=(n,x,y,a,c)=>{const ok=JSON.stringify(x)===JSON.stringify(y);if(!ok)bad++;console.log(n.padEnd(24),String(a).padStart(7),String(c).padStart(10),ok?'same':'DIFFERENT')};console.log('table'.padEnd(24),'A2 file','new export');for(const t of new Set(Object.keys(p.tables).concat(Object.keys(e.tables))))show(t,rows(p,t),rows(e,t),rows(p,t).length,rows(e,t).length);const sp=p.sequences||{},se=e.sequences||{};show('sequences',sp,se,Object.keys(sp).length,Object.keys(se).length);console.log('contact keys: A2 file',ck(p),'| new export',ck(e));if(ck(p)!==ck(e))bad++;console.log('exported: A2 file',p.exportedAt,'| new export',e.exportedAt+(o?' | earlier export '+o.exportedAt:''));if(e.exportedAt===p.exportedAt||(o&&!(e.exportedAt>o.exportedAt))||!(Date.now()-Date.parse(e.exportedAt)<=30*60*1000)){bad++;console.log('The second file is not a new export (the same as another file, not newer than the third file, or older than 30 minutes). Export again.')}console.log(bad?'NOT THE SAME: '+bad+' line(s) differ. Stop.':'ALL THE SAME')" D:\Backups\plannr\plannr-backup-<date>.json D:\Backups\plannr\emulator-after-enc.json D:\Backups\plannr\emulator-after-json.json
    ```
 
-   It prints one line per table: the number of rows in the phone's file, the number in the
-   emulator's, and `same` only if every row is identical. Then `sequences` (the last id each table
-   handed out), the contact keys in both files, when each file was exported (`exported: …`, in UTC
-   time), and last `ALL THE SAME` or `NOT THE SAME`. Two things may differ without counting as a
-   difference in your data: the export time (`exportedAt`), and the setting
-   `last_encrypted_export_at` (when the last encrypted backup was saved; step 9 says why it can
-   differ). Every table line and the `sequences` line must say `same`, and the last line must be
-   `ALL THE SAME`. If not, stop (A4).
+   After the rehearsal of B (A3 step 17):
 
-   It uses the export times for one check: it refuses an emulator file that is not a new export.
-   That is: one exported at the same time as the phone's file (the same file twice), one not newer
-   than the JSON round's export (in the encrypted round), or one exported more than 30 minutes
-   ago. Then it prints "The emulator
-   file is not a new export…" and `NOT THE SAME`. Make the export again (step 1; an export changes
-   nothing in Plannr), copy it (step 2), and compare within 30 minutes. If it still says so about
-   an export you have just made, the emulator's clock is wrong: stop and ask. If `node` prints an
-   error instead (for example, a file it cannot find), check the file names and run it again.
+   ```powershell
+   node -e "const fs=require('fs');const [p,e,o]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,'utf8')));const rows=(b,t)=>(b.tables[t]||[]).filter(r=>t!=='settings'||r.key!=='last_encrypted_export_at');const ck=b=>rows(b,'settings').filter(s=>s.key==='daily_report_recipients'||s.key==='daily_report_whatsapp').map(s=>s.key).join(', ')||'none';let bad=0;const show=(n,x,y,a,c)=>{const ok=JSON.stringify(x)===JSON.stringify(y);if(!ok)bad++;console.log(n.padEnd(24),String(a).padStart(7),String(c).padStart(10),ok?'same':'DIFFERENT')};console.log('table'.padEnd(24),'A2 file','new export');for(const t of new Set(Object.keys(p.tables).concat(Object.keys(e.tables))))show(t,rows(p,t),rows(e,t),rows(p,t).length,rows(e,t).length);const sp=p.sequences||{},se=e.sequences||{};show('sequences',sp,se,Object.keys(sp).length,Object.keys(se).length);console.log('contact keys: A2 file',ck(p),'| new export',ck(e));if(ck(p)!==ck(e))bad++;console.log('exported: A2 file',p.exportedAt,'| new export',e.exportedAt+(o?' | earlier export '+o.exportedAt:''));if(e.exportedAt===p.exportedAt||(o&&!(e.exportedAt>o.exportedAt))||!(Date.now()-Date.parse(e.exportedAt)<=30*60*1000)){bad++;console.log('The second file is not a new export (the same as another file, not newer than the third file, or older than 30 minutes). Export again.')}console.log(bad?'NOT THE SAME: '+bad+' line(s) differ. Stop.':'ALL THE SAME')" D:\Backups\plannr\plannr-backup-<date>.json D:\Backups\plannr\emulator-after-update.json D:\Backups\plannr\emulator-after-enc.json
+   ```
+
+   It prints one line per table: the number of rows in the A2 file (column `A2 file`), the number
+   in the new export (column `new export`), and `same` only if every row is identical. Then
+   `sequences` (the last id each table handed out), the contact keys in both files, when each file
+   was exported (`exported: …`, in UTC time), and last `ALL THE SAME` or `NOT THE SAME`. Two things
+   may differ without counting as a difference in your data: the export time (`exportedAt`), and
+   the setting `last_encrypted_export_at` (when the last encrypted backup was saved; step 9 says why
+   it can differ). Every table line and the `sequences` line must say `same`, and the last line
+   must be `ALL THE SAME`. If not, stop (A4).
+
+   It uses the export times for one check: it refuses a second file that is not a new export. That
+   is: one exported at the same time as the A2 file (the same file twice), one not newer than the
+   third file (the export made before it), or one exported more than 30 minutes ago. Then it prints
+   "The second file is not a new export…" and `NOT THE SAME`. Make the export again (step 1; an
+   export changes nothing in Plannr), copy it (step 2), and compare within 30 minutes. If it still
+   says so about an export you have just made, the clock of the device that made it is wrong: stop
+   and ask. If `node` prints an error instead (for example, a file it cannot find), check the file
+   names and run it again.
 
 ##### The file picker
 
@@ -429,8 +509,9 @@ is full:
 
 #### A4. Go, or stop
 
-- **Go to B** only if both restores answered "Restored ✓", every figure matched after each (Home's
-  backup banner after the encrypted restore aside, A3 step 9), and both file comparisons ended with
+- **Go to B** only if both restores and the restore in the rehearsal answered "Restored ✓", every
+  figure matched after each (Home's backup banner after the encrypted restore aside, A3 step 9),
+  every install on the emulator answered `Success`, and all three file comparisons ended with
   `ALL THE SAME`.
 - **Otherwise stop.** Do not install anything on the phone. Keep both backups and the emulator as
   they are, and ask. Do D only once the problem is settled.
@@ -443,11 +524,19 @@ Only after A4 says go. The phone is connected, and the emulator may be running.
 adb -d install -r <APK under test>
 ```
 
-It must answer `Success`. `-r` replaces the app and keeps its data. Never uninstall. If it answers
-anything else (for example `INSTALL_FAILED_UPDATE_INCOMPATIBLE`,
-`INSTALL_FAILED_VERSION_DOWNGRADE`, `INSTALL_FAILED_INSUFFICIENT_STORAGE` or "more than one
-device"), or it times out, or the cable comes out: stop, do not run it again with other flags, and
-ask ("Rules for this round").
+It must answer `Success`. `-r` replaces the app and keeps its data. Never uninstall.
+
+**Anything other than `Success` means stop.** That is any other answer from adb (for example
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `INSTALL_FAILED_VERSION_DOWNGRADE`,
+`INSTALL_FAILED_INSUFFICIENT_STORAGE`, "more than one device" or "no devices found"), and also no
+answer (it hangs or times out), or the cable coming out during the install. Then:
+
+- do not run it again, with the same flags or with other ones;
+- do not uninstall Plannr, and do not restore anything on the phone;
+- do not follow advice from the web;
+- run the read-only `dumpsys` line from "What the phone has now", and write down what it prints and
+  what adb answered. Its `lastUpdateTime` shows whether Plannr was replaced after all (every build
+  so far has the same version numbers, so they cannot tell). Then ask ("Rules for this round").
 
 Check 7 is skipped: Plannr keeps the INTERNET permission (owner's decision, 2026-11-15). Check 4
 (airplane mode) is the offline check on the phone. Do it only after C1 passes, and follow the part
@@ -465,10 +554,40 @@ Write each result in the table "The owner's phone: the APK under test" at the en
    The data is still in the old storage: Data Backup → **Where your data is kept** offers **Move to
    the new storage**. Leave it for now.
 
-   **If C1 fails** (a figure differs, something is missing, or Plannr does not open): stop. On the
-   phone, do not restore any backup, do not tap **Move to the new storage**, and do not uninstall.
-   Do not run C2 to C6 or `phone-test.ps1`, and do not do D. Keep the backups and the emulator as
-   they are (the emulator holds your data from the encrypted restore), and ask.
+   Then prove the rest with a file, as on the emulator. The figures do not cover the contacts, the
+   people, the custom category names, the contract services and allowances, or the settings.
+   - Data Backup → section **JSON backup** → tick **Include Daily Report contacts (Gmail addresses
+     & WhatsApp numbers)** → **Download JSON backup**. Save the file in **Download**, as in A1
+     step 3. A JSON backup changes nothing in Plannr.
+   - Copy it to the laptop by cable. The first line lists the folder with times: the new file is
+     the one from a minute ago. The A1 files are still there, so its name may end in `(1).json`.
+     Both lines only read the phone.
+
+     ```powershell
+     adb -d shell ls -l /sdcard/Download/
+     adb -d pull "/sdcard/Download/<that file>" D:\Backups\plannr\phone-after-update.json
+     ```
+
+     If the cable does not work, use Google Drive as in A2; D then deletes the file there and from
+     Drive's Trash.
+   - Compare it with the A2 file, as in "After each restore: compare the files" (PowerShell, one
+     line):
+
+     ```powershell
+     node -e "const fs=require('fs');const [p,e,o]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,'utf8')));const rows=(b,t)=>(b.tables[t]||[]).filter(r=>t!=='settings'||r.key!=='last_encrypted_export_at');const ck=b=>rows(b,'settings').filter(s=>s.key==='daily_report_recipients'||s.key==='daily_report_whatsapp').map(s=>s.key).join(', ')||'none';let bad=0;const show=(n,x,y,a,c)=>{const ok=JSON.stringify(x)===JSON.stringify(y);if(!ok)bad++;console.log(n.padEnd(24),String(a).padStart(7),String(c).padStart(10),ok?'same':'DIFFERENT')};console.log('table'.padEnd(24),'A2 file','new export');for(const t of new Set(Object.keys(p.tables).concat(Object.keys(e.tables))))show(t,rows(p,t),rows(e,t),rows(p,t).length,rows(e,t).length);const sp=p.sequences||{},se=e.sequences||{};show('sequences',sp,se,Object.keys(sp).length,Object.keys(se).length);console.log('contact keys: A2 file',ck(p),'| new export',ck(e));if(ck(p)!==ck(e))bad++;console.log('exported: A2 file',p.exportedAt,'| new export',e.exportedAt+(o?' | earlier export '+o.exportedAt:''));if(e.exportedAt===p.exportedAt||(o&&!(e.exportedAt>o.exportedAt))||!(Date.now()-Date.parse(e.exportedAt)<=30*60*1000)){bad++;console.log('The second file is not a new export (the same as another file, not newer than the third file, or older than 30 minutes). Export again.')}console.log(bad?'NOT THE SAME: '+bad+' line(s) differ. Stop.':'ALL THE SAME')" D:\Backups\plannr\plannr-backup-<date>.json D:\Backups\plannr\phone-after-update.json
+     ```
+
+     Every table line and the `sequences` line must say `same`, and the last line must be
+     `ALL THE SAME`. If it says the second file is not a new export, export and copy it again.
+
+   Keep `phone-after-update.json` in `D:\Backups\plannr\`: it is a backup of your data after the
+   update. D deletes the copy in the phone's Download folder.
+
+   **If C1 fails** (a figure differs, something is missing, the comparison of a new export does not
+   end with `ALL THE SAME`, or Plannr does not open): stop. On the phone, do not restore any backup,
+   do not tap **Move to the new storage**, and do not uninstall. Do not run C2 to C6 or
+   `phone-test.ps1`, and do not do D. Keep the backups and the emulator as they are (the emulator
+   holds your data from the rehearsal of B, A3 steps 11 to 17), and ask.
 2. **CSV export: one share sheet (F2).** Data Backup → **CSV for Excel** → **Download CSV (for
    Excel)**. ONE share sheet opens with all the CSV files (one per table). Before this build the
    page said "Downloading … CSV files" on the phone and nothing was saved. Close the sheet with
@@ -539,15 +658,19 @@ the problem is settled.
 2. On the laptop, delete the emulator's exports from A3. They hold your contacts unencrypted:
 
    ```powershell
-   Remove-Item D:\Backups\plannr\emulator-after-json.json, D:\Backups\plannr\emulator-after-enc.json
+   Remove-Item D:\Backups\plannr\emulator-after-json.json, D:\Backups\plannr\emulator-after-enc.json, D:\Backups\plannr\emulator-after-update.json
    ```
+
+   Keep `phone-after-update.json` (C1) and `phone-current.apk`: the first is one of your backups,
+   the second is only the app.
 
    If you made the readable copy in A2 (the optional first look) and it is still there, delete it
    too: `Remove-Item $env:TEMP\plannr-check.db`.
-3. Delete the copies of the two backups from Google Drive (if you used it in A2), then also from
-   Drive's **Trash**: Drive keeps a deleted file there for 30 days. Delete them from the phone's
-   **Download** folder too (with the phone's Files app). Keep the copies in `D:\Backups\plannr\`
-   for good.
+3. On the phone, delete the two backups from A1 and the JSON export from C1 from the **Download**
+   folder (with the phone's Files app). If you used Google Drive for any of them (A2 or C1), delete
+   them there, then also from Drive's **Trash** (called **Bin** in some languages; there, **Delete
+   forever**): Drive keeps a deleted file there for 30 days. Keep the copies in
+   `D:\Backups\plannr\` for good.
 4. **Quick Boot.** When the emulator closes, Quick Boot saves its memory to the laptop, and from A3
    to D that memory can hold your data. That is why A3 starts the emulator with
    `-no-snapshot-save`. If it was closed with Quick Boot in that time, or if you want no trace left
@@ -578,10 +701,10 @@ your phone (`adb -d …`).
 
 An emulator proves the app's own behaviour (storage, backups, updates, offline, permissions). It
 does not prove a particular phone maker's WebView or a real Google Drive backup. When you have a
-phone that does not hold your real data, repeat checks 2, 5 and 6 on it with test data. For your
-own phone, you decided on 2026-11-22 to install over your real data once both backups restore on
-the emulator ("Decided: install over the real data, with proof first", above); this paragraph does
-not hold that up.
+phone that does not hold your real data, repeat checks 2, 5 and 6 on it with test data. That is not
+a condition for your own phone. There the decision of 2026-11-22 applies ("Decided: install over
+the real data, with proof first", above): the proof is on the emulator (A3), check 5 is C1 on your
+real data, and checks 2 and 6 never run on it while it holds your real data.
 
 ### The automated part: `scripts/phone-test.ps1`
 
@@ -834,9 +957,11 @@ another device, never the phone that holds your real data), and after you say OK
 order, and do not skip a step:
 
 1. **Back up first, in the app you have now.** Data Backup → **Download encrypted backup** and
-   **Download JSON backup** (with **Include Daily Report contacts** ticked, as in A1). Copy both to
-   the PC, by cable if you can (as in A2: the JSON holds your contacts unencrypted), then check on
-   the PC that the encrypted one opens. In PowerShell, in the Plannr folder:
+   **Download JSON backup** (with **Include Daily Report contacts** ticked, as in A1). Save both in
+   **Download** and copy them to the PC with `adb -d pull`, as in A2 (the JSON holds your contacts
+   unencrypted). Use Google Drive only if the cable does not work; then, once they are on the PC,
+   delete them from Drive and from Drive's Trash. Check on the PC that the encrypted one opens. In
+   PowerShell, in the Plannr folder:
 
    ```powershell
    $env:PLANNR_BACKUP_PASSPHRASE = Read-Host 'Passphrase'
@@ -970,16 +1095,18 @@ Same emulator and method as above, with the RC (`1c54c4c8…e1f0`).
 | E6 | Move back, move again, delete the old copy (update from `9d7fd97`, then the RC) | Pass (27) | Moved back: on `localStorage`, every row, the marker `localstorage-v1` with the time, the database file kept, the page says so; a save goes to `localStorage` (and a save killed at once was kept this time). Moved again: every row, the save included, marker `native-v1`, old copy kept; on the file a save survives an immediate kill. Deleting the old copy is refused until an encrypted backup is saved after the move; then it is deleted (0.4 MB freed), no `localStorage` copy left, the marker records it, the Google backup estimate is the file alone, and the meter and panel stop counting an old copy. Run 2 stopped after 11 passing checks on a script race (the page navigated while the script read it after a force-stop); the script's page open now retries, app unchanged. |
 | `phone-test.ps1` | The owner's script, run against the emulator (`-Serial emulator-5554`, test data) | S, 1, 2, 3 pass; 4 and 8 fail | After `986ac78` (a tap waits until the element stops moving; longer waits). On the data E1 left (moved: the database file, 1,229 rows in 14 tables, old copy kept). 1: data location and sizes. S: storage in use. 2: the meter ("Your data file is 0.4 MB…"). 3: the JSON backup opens the share sheet and BACK closes it. "4 Home opens offline" was marked FAIL, but its screenshot shows Home open in airplane mode with no error text, still filling ("WELCOME, …"), so most likely the script read the screen too early on the slow emulator; the real phone's check 4 decides (decision 47 in the session report). **The PDF checks (4, 8) fail:** the app's own 25 s PDF limit ran out ("the native print adapter did not respond"), also when driven through Playwright. The PDF path is unchanged since `5736195`, where both passed; the emulator was slow that day (the Data Backup page took 13–15 s to fill on both builds), so this is recorded as finding E1 (measure the PDF time on the real phone), not an RC fault. |
 
-**Not automatable on the emulator, so still for a real phone:** 0 (the phone's own details), the real `localStorage` limit in 2, 4 on a real phone's print service, 5 over the build that is on the phone now, 6 with a real Google account, and 9 with your hands on the device. Checks 2, 6 and 9 only on a real phone with test data, never on the phone that holds your real data ("Rules for this round").
+**Not automatable on the emulator, so still for a real phone:** 0 (the phone's own details), the real `localStorage` limit in 2, 4 on a real phone's print service, 5 over the build that is on the phone now, 6 with a real Google account, and 9 with your hands on the device. On a real phone, checks 2, 6 and 9 only with test data, never on the phone that holds your real data ("Rules for this round").
 
 ### The owner's phone: the APK under test
 
-Not yet run. Step A comes first: both backups made on the phone, copied to the laptop, and both
-restored on the emulator and compared. Step B (the install) only if both restores match. The step
-1.4 RC (`53db636`) was never run on the phone; the APK under test replaces it.
+Not yet run. Step A comes first: both backups made on the phone, copied to the laptop, both
+restored on the emulator and compared, and B rehearsed there. Step B (the install) only if all of
+that matches. The step 1.4 RC (`53db636`) was never run on the phone; the APK under test replaces
+it.
 Checks 2, 3, 6, 9, C7 and C8 need test data: on a phone that holds your real data they cannot run
 without uninstalling or restoring, so run them on another device or the emulator (after D), never
-here. Check 0 and C1 to C6 run on this phone.
+here. Check 0, C1 to C6, check 4 (its part for the phone that holds your real data, after C1) and S
+run on this phone.
 
 APK under test (copy it from the box at the top). File: . SHA-256: . Built from commit: .
 Signing certificate SHA-256: .
@@ -988,12 +1115,13 @@ Date tested:
 
 | Check | Expected | Result | Notes |
 |---|---|---|---|
-| What was installed before | versionName, versionCode, `firstInstallTime`; certificate SHA-256 the same as the APK under test's (for `9d7fd97`: `fd12f081…b95629`) | | |
+| What was installed before | versionName, versionCode, `firstInstallTime`; SHA-256 of `phone-current.apk` (for `9d7fd97`: `7dc29db3…a2ef`); certificate SHA-256 the same as the APK under test's (for `9d7fd97`: `fd12f081…b95629`) | | |
 | A. Backups made | Encrypted and JSON backups (with **Include Daily Report contacts** ticked) made on the phone and copied to the laptop; the figures from A1 step 5 written down; the JSON has `"schemaVersion": 2`, and the row counts and contact keys from A2 | | |
 | Restore proof on the emulator: JSON | Same APK as the phone gets; `pm clear` first; "Restored ✓" with the numbers from A2 (they only show the right file was chosen); no person missing; every figure from A1 step 5 matches exactly; the comparison of `emulator-after-json.json` with the phone's JSON ends with `ALL THE SAME` | | |
 | Restore proof on the emulator: encrypted | Same APK; `pm clear` first; "Restored ✓" and the page reloads; every figure from A1 step 5 matches exactly (Home's backup banner may differ, A3 step 9); the comparison line for the encrypted restore (`emulator-after-enc.json`, then `emulator-after-json.json`) ends with `ALL THE SAME` | | |
-| B. Install over it | Only after both restore proofs passed; `adb -d install -r <APK under test>` answers `Success`; no uninstall | | |
-| C1. Update keeps every entry (5) | Every figure the same as in A1 step 5; `firstInstallTime` unchanged | | |
+| Rehearsal of B on the emulator | `pm clear` first; the phone's own APK (`phone-current.apk`, the hash above) installed with `install -r`: `Success`; the JSON restored with it: "Restored ✓", no person missing; the APK under test installed over it: `Success`; still in the old storage; every figure from A1 step 5 matches exactly; the comparison line for the rehearsal (`emulator-after-update.json`, then `emulator-after-enc.json`) ends with `ALL THE SAME` | | |
+| B. Install over it | Only after both restore proofs and the rehearsal passed; `adb -d install -r <APK under test>` answers `Success` (anything else: stopped and asked); no uninstall | | |
+| C1. Update keeps every entry (5) | Every figure the same as in A1 step 5; `firstInstallTime` unchanged; the comparison of `phone-after-update.json` (contacts ticked) with the A2 file ends with `ALL THE SAME` | | |
 | C2. CSV export (F2) | One share sheet with all the CSV files; BACK says nothing was saved; saved files open | | |
 | C3. PDF time (E1) | Share sheet opens well under 25 s; write down both times | | |
 | C4. Overview loading (F3) | "…" while loading, never ₹0.00; a failed load shows "—" and says so | | |
@@ -1001,12 +1129,12 @@ Date tested:
 | C6. No biometric permission (S7) | No `USE_BIOMETRIC` or `USE_FINGERPRINT` | | |
 | C7. Restore rollback (S3/Q6), test backups only | A good test restore works and writes a safety snapshot; a failed one says "Nothing was changed" and the data is as before | | |
 | C8. Strict import (F1), test backups only | A backup with a code like `"22"` is refused and nothing changes; the unchanged backup restores | | |
-| D. Your data cleared from the emulator | After C1: `pm clear` done; every Plannr file deleted from the emulator's Download folder; no local-transport backup left (`bmgr`); `emulator-after-json.json`, `emulator-after-enc.json` and any `plannr-check.db` deleted from the laptop; the copies on Google Drive (and in its Trash) and in the phone's Download folder deleted; the backups kept in `D:\Backups\plannr\` | | |
+| D. Your data cleared from the emulator | After C1: `pm clear` done; every Plannr file deleted from the emulator's Download folder; no local-transport backup left (`bmgr`); `emulator-after-json.json`, `emulator-after-enc.json`, `emulator-after-update.json` and any `plannr-check.db` deleted from the laptop; the A1 backups and the C1 export deleted from the phone's Download folder, and from Google Drive and its Trash if used; the backups (`phone-after-update.json` included) kept in `D:\Backups\plannr\` | | |
 | 0. Phone, Android, WebView version | Written down | | |
 | 2. Meter; real `localStorage` limit (fresh test install only; not on this phone while it holds real data) | Meter shown; limit about 5,242,880 characters | | |
-| 3. JSON + encrypted export/restore (test data) | Both files saved and restored; a wrong passphrase changes nothing | | |
+| 3. JSON + encrypted export/restore (test data; not on this phone while it holds real data) | Both files saved and restored; a wrong passphrase changes nothing | | |
 | 4. Airplane mode | Every page opens offline; PDF and backups work; a reminder fires | | |
 | 6. Auto Backup (test install only; never on this phone while it holds real data) | `bmgr backupnow` says `Success`; data comes back after a reinstall | | |
 | 7. Without INTERNET | skipped (decision, 2026-11-15) | skipped | |
 | S. Storage check (`phone-test.ps1 -AllowExisting`, with `-Serial` as in C3) | Which storage is in use; file sizes | | |
-| 9. The storage move, test data (then real data, its own steps) | All tables match; totals the same; old copy kept | | |
+| 9. The storage move: test data on another device or the emulator, then real data on this phone with its own steps ("Moving your real data") | All tables match; totals the same; old copy kept | | |
