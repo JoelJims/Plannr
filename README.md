@@ -55,6 +55,10 @@ To build it yourself:
 3. In the `Plannr` folder, run `npm install`, then `npm run android:sync`.
 4. Open the `android` folder in Android Studio, connect your phone, and press **Run**.
 
+If Plannr is already on your phone with your data, don't press **Run**: make a backup first
+(Data Backup) and follow [docs/RELEASE.md](docs/RELEASE.md). Never accept an offer to uninstall
+Plannr: that deletes your data.
+
 ## Built with
 
 [Capacitor](https://capacitorjs.com/), SQLite and plain JavaScript.

@@ -2,6 +2,9 @@
 
 Status: **proposal only, nothing implemented.** Phase 2, Step 8. Needs a decision (see the end).
 
+> A record. This proposal was replaced by `docs/step-1.4-storage-plan.md`, which is built (the
+> native SQLite file, Option A here) and in `main` since PR #1.
+
 ## The problem
 
 On the phone the database lives in the WebView's `localStorage`. `@sqlite.org/sqlite-wasm`'s

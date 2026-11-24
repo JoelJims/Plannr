@@ -1,8 +1,13 @@
 # Plan: publishing a public release APK safely
 
-Status: **plan only**, apart from the key's new place: on 2026-11-22 the owner decided to move the
-release key out of the project to `D:\Keys\plannr\` (section 1.2). Nothing else here changes a
-signing setting or a signing file. Written 2026-11-22.
+Status (2026-11-23): **a plan, partly built.** Decided by the owner on 2026-11-22 and done since:
+the release key is out of the project, in `D:\Keys\plannr\` (section 1.2), and
+`npm run release:android` checks the key before it builds; the first public `versionName` is
+`1.0.0`, and the script makes it from today's `1.0` (section 2). CI runs the tests on every pull
+request into `main` and `plannr-phase3` (`.github/workflows/tests.yml`). Still open: the owner's
+second offline backup copy of the key (section 1.3), the question in section 6, and the first
+public release itself. Nothing else here changes a signing setting or a signing file. Written
+2026-11-22.
 
 This page is about the first **public** release: an APK anyone can download from a GitHub Release.
 The step-by-step build and install routine for every release is already in
@@ -138,8 +143,17 @@ debug key. The release build is signed with the release key. The keys differ, so
 to install the release APK over the debug app**, and uninstalling the debug app **deletes all its
 data**. The only safe way across is a backup.
 
-Tell every user to do these steps, in this order. The button names are the ones on the
-**Data Backup** page (`public/data-backup.html`).
+> **Not for the owner's real-data phone.** That phone runs a debug build (debug key) and holds the
+> only live copy of the real data. Step 5 below uninstalls the app, and Plannr is never uninstalled
+> on that phone. A release APK installed over it fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+> How that phone moves to the release key is an **open decision for the owner** (section 6). Until
+> it is decided, that phone follows `docs/PHONE-TEST-CHECKLIST.md`: debug builds only, both backups
+> proven on the emulator first (A1 to A4), then `adb -d install -r`, never uninstall, and stop on
+> any answer other than `Success`.
+
+The steps below are for other people who have a debug build. Tell each of them to do these steps,
+in this order. The button names are the ones on the **Data Backup** page
+(`public/data-backup.html`).
 
 1. **Make an encrypted backup.** Open Plannr → **Data Backup** → **Download encrypted backup**.
    Type a passphrase of at least 10 characters, twice, and remember it. The file is the whole
@@ -175,7 +189,8 @@ no uninstall, as `docs/RELEASE.md` describes.
 ## 4. GitHub Release notes (draft template)
 
 Make the release as a **draft** first, attach `Plannr.apk`, and publish only after the checklist in
-section 5 is done.
+section 5 is done. The "How to update" lines are for other people. They do not cover the owner's
+real-data phone: see the note at the top of section 3.
 
 ```markdown
 ## Plannr vX.Y.Z
@@ -227,3 +242,35 @@ section 5 is done.
       published.
 - [ ] Nothing personal in the notes or the attached files (no names, e-mail addresses or local
       paths).
+
+## 6. Open questions
+
+1. **How does the owner's phone move from the debug build to the release build?** (open, for the
+   owner to decide) The phone runs the debug build (debug key) and holds the only live copy of the
+   real data. A release APK cannot be installed over a debug-key app: Android answers
+   `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The ways named so far:
+   - keep using debug builds on that phone;
+   - uninstall the debug app, install the release build and restore a backup into it. Uninstalling
+     deletes the app's data on the phone, and the rule today is never to uninstall on that phone;
+   - give release builds a different app id, so the two apps can sit side by side, and move the
+     data by backup and restore. Android treats a different app id as a different app, and
+     changing the app id is the owner's call.
+
+   None is chosen. Until the owner decides, that phone
+   follows `docs/PHONE-TEST-CHECKLIST.md`: debug builds, `adb -d install -r`, never uninstall, and
+   stop on any answer other than `Success`.
+
+   That phone runs a debug build. As long as it does (today, until any move above is
+   carried out, and for good if it stays on debug builds), it can only
+   be updated with debug builds signed by the same Android debug key as the app on it. The last build
+   made for it (`9d7fd97`) was signed with the debug key of the owner's current laptop (certificate
+   `fd12f081…b95629`; Android's default debug keystore in the user profile, which the Android build
+   tools made for the first debug build); the checklist confirms the phone's own copy before any
+   install. A debug build made on another PC, or on that laptop after its debug keystore is lost,
+   will not install over the phone's Plannr (the checklist says stop). On a new machine, check a
+   debug APK built there as the checklist's "Check the APK on the laptop" says before any phone
+   step: its certificate must be `fd12f081…b95629`. Whether and how to keep a copy of that debug key
+   is the owner's call (open; also in `SETUP.md` §2).
+
+Owner to-do (2026-11-23): make the second offline backup copy of the release key (section 1.3),
+and decide whether to keep a copy of the laptop's debug key (above).

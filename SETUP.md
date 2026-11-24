@@ -27,16 +27,19 @@ it uses `server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Serve
 
 Why that matters in practice:
 
-- `server.js` and `public/local-api.js` are two separate pieces of code that answer the
-  same requests. A change to one is not a change to the other. **Fixing a bug in
-  `server.js` alone fixes nothing on the device.**
-- `server.js` is the easier of the two to read, so it is the one to read when you want to
-  understand how something behaves — but when the two disagree, **the Android path is the
-  one that is true**, because it is the one users run.
-- `repo.js` is the single deliberate exception: one shared file used by both, copied into
-  `public/` by `sync-public-modules.js`. Edit it at the project root, never in `public/`.
-- A green `npm test` proves the desktop version works. It does **not** prove the APK
-  works. `npm run test:static-hosting` is the closest automated stand-in for the device.
+- The route code lives **once**, in `core/` (`core/routes/` and its helpers), and both
+  `server.js` and `public/local-api.js` run it. So do the shared files at the project root
+  (`db.js`, `repo.js`, `ledgers.js`, `backup-format.js`, `request-rules.js`).
+  `sync-public-modules.js` copies all of them, and the phone's database engine
+  `db-engine.js`, into `public/`. Edit them at the project root or in `core/`, never in
+  `public/`.
+- `server.js` and `public/local-api.js` themselves are thin hosts, and each keeps what has
+  to differ by platform (for example the PDF renderer). **A fix in `server.js` alone fixes
+  nothing on the device.** When the two disagree, **the Android path is the one that is
+  true**, because it is the one users run.
+- A green `npm test` runs the HTTP tests twice: against `server.js`, and against the phone's
+  `public/local-api.js` loaded in Node. It still does **not** prove the APK works.
+  `npm run test:static-hosting` is the closest automated stand-in for the device.
 
 ---
 
@@ -140,6 +143,18 @@ lines go or if such a file is ever tracked.
 > its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
 
+**The debug key matters too, for the owner's phone.** That phone runs a debug build. As long as it does (today, until any move in
+`docs/release-plan.md` §6 is carried out, and for good if it stays on debug builds), it can only
+be updated with debug builds signed by the same Android debug key as the app on it. The last build
+made for it (`9d7fd97`) was signed with the debug key of the owner's current laptop (certificate
+`fd12f081…b95629`; Android's default debug keystore in the user profile, which the Android build
+tools made for the first debug build); the checklist confirms the phone's own copy before any
+install. A debug build made on another PC, or on that laptop after its debug keystore is lost,
+will not install over the phone's Plannr (the checklist says stop). On a new machine, check a
+debug APK built there as the checklist's "Check the APK on the laptop" says before any phone
+step: its certificate must be `fd12f081…b95629`. Whether and how to keep a copy of that debug key
+is the owner's call.
+
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
 financial records.
 
@@ -192,12 +207,15 @@ npm run android:sync        # = sync-public-modules.js  +  npx cap sync android
 repository, and this is the command that creates them:
 
 - `public/db.js`, `public/repo.js`, `public/db-engine.js`, `public/ledgers.js`,
+  `public/backup-format.js`, `public/request-rules.js`,
   `public/node-builtins-browser-stub.js` — copies of the files at the project root
+- `public/core/` — a copy of `core/`, the route code both backends run
 - `public/node_modules/` — the packages the app's import maps refer to
 - `android/app/src/main/assets/`, `android/app/src/main/res/xml/config.xml`,
   `android/capacitor-cordova-android-plugins/` — Capacitor's own output
 
-**Never hand-edit any of those.** Edit the copy at the project root and re-run the sync.
+**Never hand-edit any of those.** Edit the copy at the project root (or in `core/`) and
+re-run the sync.
 Re-run it after every change to `public/` or to a root file, and before every build:
 whatever is in `public/` at sync time is exactly what ships.
 
@@ -220,8 +238,14 @@ From `android/`, or via Studio's Run button for debug builds:
 ```sh
 ./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/Plannr-debug.apk
 ./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/Plannr.apk  (signed)
-adb install -r android/app/build/outputs/apk/release/Plannr.apk
+adb -s emulator-5554 install -r android/app/build/outputs/apk/debug/Plannr-debug.apk   # the emulator
 ```
+
+Always tell adb which device: `-s emulator-5554` for the emulator, `-d` for the phone on USB,
+straight after `adb`. With both connected, a command without them can reach the wrong device.
+**A phone that holds real data** gets an APK only as `docs/PHONE-TEST-CHECKLIST.md` says: both
+backups proven on the emulator first, then `adb -d install -r`, never uninstall. A release APK
+cannot be installed over a debug build (`docs/RELEASE.md`).
 
 App id `com.plannr.app`. For a real release use `npm run release:android`: it runs every test,
 raises `versionCode`/`versionName` in `android/app/build.gradle`, syncs and builds the signed APK.
@@ -248,11 +272,14 @@ What you will usually see, in order (wording varies by Android version and manuf
 
 Notes:
 
-- `adb install -r ...` skips the installer screens entirely, so it is the fastest route
-  during development. Play Protect can still warn on first launch.
+- `adb -d install -r ...` (or `adb -s emulator-5554 install -r ...` for the emulator) skips
+  the installer screens entirely, so it is the fastest route during development. Play Protect
+  can still warn on first launch. On a phone with real data, follow
+  `docs/PHONE-TEST-CHECKLIST.md` instead.
 - **Do not turn off signing, or switch to debug signing, to make the warning go away.**
   The warning is about how the app was distributed, not about the signature being invalid,
-  and unsigned or debug-signed builds break upgrades over an existing install (see section 2).
+  and unsigned or debug-signed builds break upgrades over an existing release install (see
+  section 2; the owner's phone, which runs a debug build, is the exception described there).
 - If you are handing the APK to someone else, warn them about this dialog first. Without
   warning, "Unsafe app blocked" reads as a virus alert and most people will cancel.
 
@@ -301,8 +328,8 @@ live-database rule in section 3.2 first).
   every test that can run in a browser — but browsers always report themselves as
   non-native, so the Android-specific branch is not covered. Try it on real hardware
   before putting real data in.
-- **`server.js` is one very large file** (~142 KB). It works and it is tested, but it is
-  the main thing that needs tidying.
+- **`server.js` is a thin host** (about 600 lines). The route code is in `core/routes/`,
+  shared with the phone, so that is where most changes go (section 0).
 
 ---
 
@@ -324,7 +351,9 @@ cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/P
 # apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
 # SHA-256 you noted for this key (section 2)
 apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk
-adb install -r app/build/outputs/apk/release/Plannr.apk
+# install on the emulator (-s emulator-5554); for a test phone on USB, use -d instead. Never on
+# a phone with real data: that one goes through docs/PHONE-TEST-CHECKLIST.md (see section 3.5)
+adb -s emulator-5554 install -r app/build/outputs/apk/release/Plannr.apk
 # expect a Play Protect warning on the device — More details -> Install anyway
 ```
 

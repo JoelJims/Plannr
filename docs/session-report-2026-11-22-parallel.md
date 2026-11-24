@@ -1,5 +1,9 @@
 # Session report, 2026-11-22 (parallel workstreams)
 
+> A dated record of that session. Every decision in its section 5 has since been taken, and pull
+> requests #4 to #8 were merged into `plannr-phase3` on 2026-11-23. The current state is in
+> `CHANGELOG.md` and `docs/security-quality-review-2026-11-21.md` (section 10).
+
 A 60-minute session from 11:38 IST, with five workstreams run in parallel by sub-agents, each in
 its own git worktree. It is the second session of the day; the first is in
 `docs/session-report-2026-11-22.md`.

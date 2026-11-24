@@ -1,5 +1,9 @@
 # Session reports, 2026-11-21
 
+> A dated record of those runs; their open decisions and next steps are from that day. The current
+> state is in `CHANGELOG.md` and `docs/security-quality-review-2026-11-21.md` (section 10). For the
+> phone, follow `docs/PHONE-TEST-CHECKLIST.md`, not the steps below.
+
 Two autonomous runs end on this date: **A**, the run that finished step 1.4 (2026-11-18 → 2026-11-21), and **B**, the 3-hour session after it.
 
 ## A. Step 1.4 finished (2026-11-18 → 2026-11-21)

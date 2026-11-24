@@ -1,5 +1,8 @@
 # Session report, 2026-11-22
 
+> A dated record of that session; its open decisions and next steps are from that day. The current
+> state is in `CHANGELOG.md` and `docs/security-quality-review-2026-11-21.md` (section 10).
+
 A 2-hour autonomous session on a new branch, `plannr-phase3`, cut from `main` at `b9b4e7d`. It
 started at 00:15 IST. At about 01:28 the PC went to sleep in the middle of a suite run and stayed
 asleep until about 07:25; the session went on at 07:51, when you asked it to continue. The one suite

@@ -4,8 +4,11 @@ Status: **approved by the owner on 2026-11-15**, with the decisions recorded in 
 step at a time, starting with step 1.1 (§8); each step's report comes back to the owner before
 the next. Written 2026-11-15 on branch `plannr-phase2`.
 
-Progress: steps 1.1 and 1.2 done on 2026-11-15; step 1.3 under way (see the notes under the §8
-table).
+Progress (2026-11-23): steps 1.1 to 1.4 are done. Phases 2 and 3 were built together as one track,
+"step 1.4" (`docs/step-1.4-storage-plan.md`, finished on 2026-11-21 and in `main` since PR #1),
+apart from the owner's real-phone part of step 3.4 (`docs/PHONE-TEST-CHECKLIST.md`). From Phase 5,
+the test workflow (`.github/workflows/tests.yml`, part of 5.2) and the MIT license (part of 5.3)
+are in. The notes under the §8 table are from 2026-11-15.
 
 Plannr stays single-user and offline-first everywhere. Each person on Android, Windows, macOS or
 Linux has their own separate data. There is no sync and no server. Data moves between devices only
