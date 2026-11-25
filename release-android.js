@@ -22,7 +22,12 @@
 // points to it with a path relative to the project root, so the key folder must be on the same drive
 // as the project. If no key file is there, it also stops before doing anything. From
 // keystore.properties it reads only that storeFile line (and checks the file is not saved with a
-// UTF-8 byte-order mark or as UTF-16, which Gradle cannot read).
+// UTF-8 byte-order mark or as UTF-16, which Gradle cannot read, and that it has no password lines).
+// Passwords: keystore.properties holds only storeFile and keyAlias. The store and key passwords come
+// from PLANNR_STORE_PASSWORD and PLANNR_KEY_PASSWORD; if either is not set and a terminal is attached,
+// the script asks for it without echo. They reach Gradle only through its process environment: never
+// in argv, never written to disk, never printed. A keystore.properties that still has password lines
+// stops the release before anything runs (the owner removes the lines; see docs/RELEASE.md).
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -87,6 +92,82 @@ function readStoreFile(propertiesText) {
   return value;
 }
 
+// The release passwords never live in a file: build.gradle reads them from these two environment
+// variables, which this script sets for the Gradle run only.
+const PASSWORD_ENV = { store: 'PLANNR_STORE_PASSWORD', key: 'PLANNR_KEY_PASSWORD' };
+const PASSWORD_KEYS = ['storePassword', 'keyPassword'];
+
+// The NAMES of the password lines keystore.properties still has (storePassword, keyPassword), in file
+// order, so the script can tell the owner to remove them. Never a value: only the key name of each
+// line is looked at. Same Properties rules as readStoreFile (comments start with # or !, the key ends
+// at "=", ":" or a space).
+function passwordLinesIn(propertiesText) {
+  const found = [];
+  for (const raw of String(propertiesText).split(/\r\n|\r|\n/)) {
+    const line = raw.replace(/^[ \t\f]+/, '');
+    if (line.startsWith('#') || line.startsWith('!')) continue;
+    const m = /^([A-Za-z]+)(?:[ \t\f]*[=:]|[ \t\f]|$)/.exec(line);
+    if (m && PASSWORD_KEYS.includes(m[1]) && !found.includes(m[1])) found.push(m[1]);
+  }
+  return found;
+}
+
+// passwordLinesIn for the project's keystore.properties ([] if there is none).
+function passwordLines(root) {
+  const propsFile = path.join(root, 'keystore.properties');
+  if (!fs.existsSync(propsFile)) return [];
+  return passwordLinesIn(fs.readFileSync(propsFile).toString('latin1'));
+}
+
+// Where the passwords will come from: { source: 'environment' | 'prompt' | null, missing, problem? }.
+// Both variables set (and not empty): the environment. Otherwise, in a terminal: a hidden prompt for
+// the missing ones. With no terminal (e.g. CI or a piped run): stop, naming the variables.
+function passwordPlan({ env, interactive }) {
+  const missing = Object.values(PASSWORD_ENV).filter((name) => !env[name]);
+  if (!missing.length) return { source: 'environment', missing };
+  if (interactive) return { source: 'prompt', missing };
+  const which = missing.join(' and ');
+  return {
+    source: null,
+    missing,
+    problem: `${which} ${missing.length > 1 ? 'are' : 'is'} not set, and there is no terminal to ask in. Set ${missing.length > 1 ? 'them' : 'it'} in this shell for this run only, or run npm run release:android in a terminal so it can ask (without echo). The passwords are never read from a file. See SETUP.md section 2.`,
+  };
+}
+
+// The Gradle release build: the command, its arguments and its environment. The passwords go into
+// the child's environment only, never into the arguments (other programs on the PC can read a
+// process's command line). passwords is null for an unsigned build (--allow-unsigned).
+function gradleInvocation(platform, passwords, baseEnv) {
+  const env = { ...baseEnv };
+  if (passwords) {
+    env[PASSWORD_ENV.store] = passwords.store;
+    env[PASSWORD_ENV.key] = passwords.key;
+  }
+  return { cmd: platform === 'win32' ? 'gradlew.bat' : './gradlew', args: ['assembleRelease'], env };
+}
+
+// Asks for one value in the terminal without echoing it. Ctrl+C cancels (nothing has changed yet).
+function readHidden(question) {
+  return new Promise((resolve, reject) => {
+    const { stdin, stdout } = process;
+    stdout.write(question);
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    let value = '';
+    const finish = () => { stdin.removeListener('data', onData); stdin.setRawMode(false); stdin.pause(); stdout.write('\n'); };
+    function onData(chunk) {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') { finish(); resolve(value); return; }
+        if (ch === '\u0003') { finish(); reject(new Error('cancelled at the password prompt. Nothing was changed.')); return; }
+        if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
+        else value += ch;
+      }
+    }
+    stdin.on('data', onData);
+  });
+}
+
 // Why a release must not go ahead, or null. The facts are passed in, so this can be tested without
 // the real files:
 //   signed        keystore.properties exists in the project root;
@@ -98,7 +179,8 @@ function readStoreFile(propertiesText) {
 //   allowUnsigned --allow-unsigned was given.
 // An unsigned release APK cannot update the installed app, and a keystore.properties that points to
 // a missing key makes the Gradle build fail after the version bump.
-function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, bom, utf16 }) {
+//   passwordLines the names of the password lines keystore.properties still has (passwordLines).
+function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, bom, utf16, passwordLines: pwLines }) {
   if (!signed) {
     if (allowUnsigned) return null;
     return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
@@ -111,6 +193,10 @@ function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, b
   // that entry is lost (a storeFile line at the top then looks missing). The BOM is not stripped
   // here: Gradle would still fail, so the owner has to save the file without it.
   if (bom) return 'keystore.properties starts with a UTF-8 byte-order mark (BOM), so Gradle cannot read its first entry: it reads this file as Latin-1 and takes the BOM as part of that entry\'s name. Save it without one (in Notepad: Save as, Encoding "UTF-8", not "UTF-8 with BOM"). See SETUP.md section 2.';
+  // A stop, not a warning: the build no longer reads these lines, so they only keep the passwords in a
+  // plain file next to the project (the risk this change removes), and a warning would scroll away
+  // under the test output. Removing two lines takes a minute; the release runs rarely.
+  if (pwLines && pwLines.length) return `keystore.properties still has password lines (${pwLines.join(', ')}). The build no longer reads passwords from any file: it takes them from ${PASSWORD_ENV.store} and ${PASSWORD_ENV.key}, or asks for them without echo. Remove those lines from keystore.properties (keep storeFile and keyAlias; the passwords belong in your password manager), then run this again. See SETUP.md section 2.`;
   if (!storeFile) return 'keystore.properties has no storeFile line, so Gradle cannot find the release key. See SETUP.md section 2.';
   // A drive letter with no slash after it ("C:Keys\...") is not absolute, but it is not relative to
   // the project root either, so it is refused too.
@@ -153,7 +239,7 @@ function run(cmd, args, opts = {}) {
   return r.status === 0;
 }
 
-function main(argv) {
+async function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const i = argv.indexOf('--version-name');
   const versionName = i >= 0 ? argv[i + 1] : undefined;
@@ -167,8 +253,15 @@ function main(argv) {
   const tests = testCommands(pkg);
 
   console.log(`Plannr Android release: versionCode ${bump.from.code} -> ${bump.to.code}, versionName ${bump.from.name} -> ${bump.to.name}`);
-  const problem = signingProblem({ ...facts, allowUnsigned: argv.includes('--allow-unsigned') });
+  const problem = signingProblem({ ...facts, passwordLines: signed ? passwordLines(ROOT) : [], allowUnsigned: argv.includes('--allow-unsigned') });
   console.log(signingLine(facts, problem));
+  // Only a signed build needs the passwords. A dry run never asks; it says where they would come from.
+  const plan = signed && !problem ? passwordPlan({ env: process.env, interactive: Boolean(process.stdin.isTTY) }) : null;
+  if (plan) {
+    const names = `${PASSWORD_ENV.store}, ${PASSWORD_ENV.key}`;
+    if (plan.source === 'environment') console.log(`Passwords: from the environment (${names}).`);
+    else console.log(`Passwords: ${plan.missing.join(' and ')} not set; the real run asks for ${plan.missing.length > 1 ? 'them' : 'it'} without echo in a terminal, and stops if there is no terminal.`);
+  }
   // A dry run exits 0 either way: it only reports. The real-project dry run in
   // test/release-script.test.js runs in every checkout, with or without keystore.properties and a key.
   if (dryRun) {
@@ -187,6 +280,15 @@ function main(argv) {
     return 0;
   }
   if (problem) { console.error(`\n${problem}\nNothing was changed.`); return 1; }
+  if (plan && plan.problem) { console.error(`\n${plan.problem}\nNothing was changed.`); return 1; }
+  // Asked for before the tests, so the rest of the run needs nobody at the keyboard. Kept in memory
+  // only, and handed to Gradle through its environment.
+  let passwords = null;
+  if (plan) {
+    const value = async (name) => process.env[name] || readHidden(`${name === PASSWORD_ENV.store ? 'Key store' : 'Key'} password (not shown): `);
+    passwords = { store: await value(PASSWORD_ENV.store), key: await value(PASSWORD_ENV.key) };
+    if (!passwords.store || !passwords.key) { console.error('\nAn empty password was given. Nothing was changed.'); return 1; }
+  }
 
   console.log('\n== 1/4 Tests ==');
   for (const [c, a] of tests) {
@@ -202,15 +304,17 @@ function main(argv) {
   if (!run('npm', ['run', 'android:sync'])) return restore('android:sync failed.');
 
   console.log('\n== 4/4 Release build ==');
-  const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
-  if (!run(gradlew, ['assembleRelease'], { cwd: path.join(ROOT, 'android') })) return restore('The Gradle release build failed.');
+  const gradle = gradleInvocation(process.platform, passwords, process.env);
+  if (!run(gradle.cmd, gradle.args, { cwd: path.join(ROOT, 'android'), env: gradle.env })) return restore('The Gradle release build failed.');
 
   console.log(`\nDone: ${path.relative(ROOT, APK)} (versionCode ${bump.to.code}, versionName ${bump.to.name}${signed ? ', signed' : ', UNSIGNED'}).`);
   console.log('Next: commit the version bump, then follow docs/RELEASE.md (export a backup on the phone BEFORE installing).');
   return 0;
 }
 
-module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile, signingFacts };
+module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile, signingFacts,
+  passwordLinesIn, passwordLines, passwordPlan, gradleInvocation };
 if (require.main === module) {
-  try { process.exit(main(process.argv.slice(2))); } catch (e) { console.error(`release:android: ${e.message}`); process.exit(1); }
+  main(process.argv.slice(2)).then((code) => process.exit(code),
+    (e) => { console.error(`release:android: ${e.message}`); process.exit(1); });
 }
