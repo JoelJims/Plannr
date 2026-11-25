@@ -1,6 +1,7 @@
 # Plan: send the PDF to WhatsApp or email, from Overview and from a reminder
 
-Status: **part 1 built (2026-11-25), no button sends anything yet.** Written 2026-11-15; plugin
+Status: **part 1 built (2026-11-25), with the Overview's Send buttons; the reminder Send PDF is next.
+Nothing is ever sent without your tap.** Written 2026-11-15; plugin
 versions and the notification action support re-checked on 2026-11-22 against the installed packages
 (section 7).
 
@@ -16,10 +17,25 @@ Built on 2026-11-25:
 
 - `public/share-pdf.js`: the Overview's share-sheet path, moved out of `overview.html` unchanged.
   Test: `test/share-sheet.test.js`.
+- Overview: **Send to WhatsApp** and **Send by email** next to **Download PDF**, in the app only. In a
+  plain browser they are hidden and Download PDF works as before. The target in the "Sending PDFs"
+  settings is the filled (primary) button; "Ask each time" shows both the same.
+  - WhatsApp opens through `ShareTo`, the mail app through `MailComposer` (To and Subject from the
+    settings, `{date}` filled in with the phone's date), with the PDF attached. You tap Send there.
+  - WhatsApp or a mail app missing, or its plugin failing: the share sheet opens and the page says
+    why (for example "WhatsApp is not installed, so the share sheet opened instead.").
+  - Offline: the PDF is still made and handed over, with a short note that the app will send it
+    when the phone is back online.
+  - Tests: `test/ws2c-share-pdf.test.js`, and `npm run test:share-pdf` (`test-ui/ws2c-share.js`,
+    recording stand-ins for the plugins, on a 320 px phone profile and in a plain browser).
+  - Emulator (debug build, 2026-11-25): no WhatsApp, so `ShareTo` answered "not-installed", the share
+    sheet opened with the PDF, and after BACK the page showed the reason. Gmail is installed (no
+    account), so `canComposeMail` answered true and Gmail opened; after BACK the page said the mail
+    app opened. Nothing was sent. The "no mail app" fallback is covered by the UI suite only.
+  - Still for the owner on the real phone (section 9): WhatsApp and Gmail open with the PDF attached.
 
-Not built yet: the **Send to WhatsApp** and **Send by email** buttons on the Overview, with their
-fallbacks and UI suite (the rest of build steps 4 to 6), the reminder data change (step 2), and the
-reminder **Send PDF** action (step 7, next).
+Not built yet: the reminder **Send PDF** action (step 7, **next**), the reminder data change
+(step 2), and the new checks in `docs/PHONE-TEST-CHECKLIST.md` (step 8).
 
 **Decided by the owner on 2026-11-22:** the **Send PDF** action goes on the existing daily report
 reminders (ids 101–105). A payment-due reminder is a separate, later feature and is not part of
