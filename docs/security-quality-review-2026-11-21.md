@@ -1,4 +1,4 @@
-# Security and quality review of `plannr-phase2`, 2026-11-21
+# Security and quality review of `plannr-phase2`, 2026-11-21**Fixed** 2026-11-25 (`c6a9a33`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`d184d3b`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`055c7c9`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`d59d5df`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`8ee6c0b`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`e1761b5`, `ws2-a-fixes`) |
 
 > **Status on 2026-11-23.** This review was written on 2026-11-21. Since then:
 > - `plannr-phase2` was merged into `main` (PR #1, `4b3ab08`, 2026-11-21). That fixed S1: `server.js`
@@ -48,14 +48,14 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F2 | Medium | "Download CSV (for Excel)" uses a plain download link, a dead end in the Android WebView, and reports success | `public/data-backup.html:875-878` (vs `saveFile()` elsewhere) | **Fixed** 2026-11-22 (`8b9101e`) |
 | F3 | Medium | The Overview shows ₹0.00 while loading and after a failed load, with no message | `public/overview.html:375-381, 620-621, 637-638` | **Fixed** 2026-11-22 (`e5b30ca`) |
 | F4 | Medium | "₹X left" compares a date-range spend with the whole-project budget | `public/overview.html:725-741` (renderTotalBar); `core/overview-pdf.js:118-135` (budgetBlock) | **Fixed** 2026-11-22: option (b), decided by the owner (`ws-b-f4`, merged as PR #4 on 2026-11-23) |
-| Q5 | Low | An unreadable marker file plus a lost `localStorage` key after a kill could lead startup to delete the database file (two faults) | `public/storage-native.js:128-135,177`; `core/storage-move.js:227` | Open |
-| S2 | Low | Dev server: no Origin check; two body-less POST routes (mark exported, restore from bin) can be triggered by a web page while it runs | `core/routes/backup-reminder.js:78`; `core/routes/trash.js:45` | Open |
+| Q5 | Low | An unreadable marker file plus a lost `localStorage` key after a kill could lead startup to delete the database file (two faults) | `public/storage-native.js:128-135,177`; `core/storage-move.js:227` | **Fixed** 2026-11-25 (`d59d5df`, `ws2-a-fixes`) |
+| S2 | Low | Dev server: no Origin check; two body-less POST routes (mark exported, restore from bin) can be triggered by a web page while it runs | `core/routes/backup-reminder.js:78`; `core/routes/trash.js:45` | **Fixed** 2026-11-25 (`e1761b5`, `ws2-a-fixes`) |
 | S4 | Low | A crafted backup can bring triggers or views; the `localStorage` restore runs schema SQL from the file | `public/local-snapshot.js:59-60,76-77`; `db-adapter-node.js:95` | Open |
 | S5 | Low | Backup key derivation scrypt N=2^14 (below current advice), minimum passphrase 10 characters; parameters not in the header | `core/backup-crypto.js:29,34` | Planned, not built (decided 2026-11-21): backup format v2; v1 files always stay readable |
 | S7 | Low | The APK has `USE_BIOMETRIC` and `USE_FINGERPRINT` from the storage plugin's dependencies; Plannr never uses them | merged manifest; `aapt dump permissions` of the RC | **Fixed** 2026-11-22 (`4cf1784`), checked on the built APK and the emulator |
 | S9 / F19 | Low | `.gitignore` misses `*.jks`, `*.p12`, `*.pem`, `.env.*`, plain exports and pulled snapshots | `.gitignore` | **Fixed** (`d33953b`) |
 | S10 / R2 | Low | A `PLANNR_DB` that is set but empty opens the real database (incident 1) | `db.js:31` | **Fixed** (`a3ea627`) |
-| Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | Open |
+| Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | **Fixed** 2026-11-25 (`c6a9a33`, `ws2-a-fixes`) |
 | Q8 / R3 | Low | `node:sqlite` stores numbers as REAL: `sqlite_sequence.seq` and unchecked TEXT columns from hand-edited backups differ between desktop and phone | `db.js:1001,1101,1337`; `backup-format.js:122-283,328` | Open |
 | Q9 | Low | A backup's `sequences` naming a table without an id gives a 500 instead of a 400 | `backup-format.js:178-184,326` | **Fixed** 2026-11-22 (`d8ef781`, `ws-a-fixes`) |
 | Q10 | Low | No upper limit on amounts; a typo near ₹90 trillion can break the Overview's sums | `core/parsers.js:11-17` | Open |
@@ -63,13 +63,13 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | **Partly fixed** 2026-11-22 (`7b2d695`, `ws-a-fixes`): a move snapshot no longer cuts the rotation. Move snapshots are still never pruned, so they add up: open (prune them, or keep them all; not decided) |
 | Q13 | Low | If planning the upgrade throws, the phone shows a blank page | `public/local-bootstrap.js:54` | **Fixed** 2026-11-22 (`76d4c3d`, `ws-a-fixes`) |
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
-| Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | Open |
+| Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | **Fixed** 2026-11-25 (`d184d3b`, `ws2-a-fixes`) |
 | F5 | Low | Home says "First login — welcome." on every start (left from the removed login) | `public/home.html:233-258` | **Fixed** 2026-11-22 (`5e6afb7`) |
 | F7 | Low | The UI "no console errors" rule fails on sqlite-wasm's harmless "wasm streaming compile failed" fallback | `test-ui/static-hosting.js:41-58`; `test-ui/offline.js:57-59`; `db-engine.js:39` | **Fixed** 2026-11-22, follow-ups 2026-11-23 (`c927071`, `d11f8ac`, `c3b63d6`, `ws-a-fixes`; proof in section 9) |
 | F8 / F9 | Low | Fixed ports and sleeps in UI and node tests (flake risk) | `test-ui/*.js`; `test/stop-sentinel.test.js:16-31`; `test/request-queue-wiring.test.js:54` | Open (partly: `contract-phase-a` waits for the condition and lets only a timeout pass, `8b5546a`, `420416a`; proof in section 9) |
-| F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | Open |
+| F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | **Fixed** 2026-11-25 (`055c7c9`, `ws2-a-fixes`) |
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
-| F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | Open |
+| F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | **Fixed** 2026-11-25 (`8ee6c0b`, `ws2-a-fixes`) |
 | F14 | Low | Encrypted restore body limit 20 MB (base64), so a database over about 15 MB cannot be restored on the phone; export does not warn | `request-rules.js:11,26` | Open |
 | F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open (F18 **Fixed** 2026-11-22: `f2f1701`, `ws-c-cleanup`; checked by `npm run test:modal-focus`) |
 | F20 | Low | `engines` says Node ≥22.12.0; `node:sqlite` is unflagged from 22.13 (unchecked) | `package.json:41` | Open |
@@ -272,3 +272,20 @@ After pull requests #4 to #8 were merged into `plannr-phase3` (`9c6e394`). The f
 - `docs/images/budget.png` and `docs/images/pdf-export.png`, both shown in `README.md`, were made
   before F4 and still show the old "left" wording. Retake them with the demo data, as
   `docs/DEVELOPERS.md` ("README images") describes.
+
+## 11. Follow-up, 2026-11-25 (`ws2-a-fixes`)
+
+Fixed on the branch `ws2-a-fixes`. Each fix has a test (`test/ws2a-*.test.js`) that failed on the
+code before it.
+
+| Finding | What changed | Commit |
+|---|---|---|
+| Q7 | `measureStorage()` still counts a leftover `kvvfs-local-jrnl` record in the space used, but not as database bytes | `c6a9a33` |
+| Q16 | The phone's API URL-decodes route params (a malformed one gets 400) and keeps the status of an error that carries one, as `server.js` does. The phone pass still has the same 17 known differences | `d184d3b` |
+| F10 | `run-tests.js` picks the phone-pass files with `usesHelpers()`: any quote style, an optional `.js`, spaces. It finds the same files today | `055c7c9` |
+| Q5 | Startup reports a marker file that is there but unreadable; the database file is then set aside, never deleted | `d59d5df` |
+| F13 | `reset-db` keeps the `_migrated_*` rows in `settings` | `8ee6c0b` |
+| S2 | The dev server answers 403 to a POST, PUT, PATCH or DELETE whose `Origin` is another site. Same-origin pages and requests with no `Origin` are unchanged | `e1761b5` |
+
+Still open from this list: Q11, Q10, F14, S4, F15, F16, F17 (Q10 and F14 need a limit value from
+the owner). F20 needs `package.json`, which this branch does not change.
