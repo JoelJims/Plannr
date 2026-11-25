@@ -78,7 +78,8 @@ const PRIMARY_KEY = { ledger_mains: 'code', ledger_subs: 'code', settings: 'key'
 
 // Phase 8B — settings keys that held contact details for the retired Daily Report feature. Left out
 // of a user-facing export unless explicitly asked for, so a backup you share carries no personal data.
-export const CONTACT_SETTINGS_KEYS = ['daily_report_recipients', 'daily_report_whatsapp'];
+// share_email_to (the share-PDF email recipients, core/routes/notification-times.js) is contact data too.
+export const CONTACT_SETTINGS_KEYS = ['daily_report_recipients', 'daily_report_whatsapp', 'share_email_to'];
 // What a restored user's password_hash is set to: there is no login, so no real hash is ever needed.
 export const NO_PASSWORD = 'local-single-user-no-auth';
 

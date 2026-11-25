@@ -39,4 +39,63 @@ export function register(app, ctx) {
     await adapter.run("INSERT INTO settings (key, value) VALUES ('daily_report_times', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(times)]);
     res.json({ times });
   });
+
+  // Share settings for "send the PDF to WhatsApp or email" (docs/share-and-reminder-pdf-plan.md,
+  // section 3). Kept here, next to the reminder times, because both hosts already call this register().
+  // New keys only: the retired daily_report_recipients / daily_report_whatsapp rows are never read, so
+  // no address is used that was not typed here. share_email_to is contact data (backup-format.js
+  // CONTACT_SETTINGS_KEYS). No WhatsApp number is stored: WhatsApp opens on its own contact picker.
+  const SHARE_TARGETS = ['whatsapp', 'email', 'ask'];
+  const SHARE_DEFAULTS = { target: 'ask', emailTo: [], emailSubject: 'Plannr report – {date}' };
+  const MAX_RECIPIENTS = 5;
+  const MAX_SUBJECT = 120;
+  const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>".]+(\.[^\s@,;<>".]+)+$/;
+  // A list or comma-separated text -> trimmed addresses without repeats (any case); null when invalid.
+  function normalizeRecipients(raw) {
+    const list = typeof raw === 'string' ? raw.split(',') : raw;
+    if (!Array.isArray(list)) return null;
+    const seen = new Set(); const out = [];
+    for (const a of list) {
+      if (typeof a !== 'string') return null;
+      const s = a.trim();
+      if (!s) continue;
+      if (s.length > 254 || !EMAIL_RE.test(s)) return null;
+      if (!seen.has(s.toLowerCase())) { seen.add(s.toLowerCase()); out.push(s); }
+    }
+    return out.length > MAX_RECIPIENTS ? null : out;
+  }
+  async function readSetting(key) {
+    const r = await adapter.get('SELECT value FROM settings WHERE key = ?', [key]);
+    return r && r.value != null ? String(r.value) : null;
+  }
+  async function getShareSettings() {
+    const target = await readSetting('share_target');
+    let emailTo = [];
+    try { emailTo = normalizeRecipients(JSON.parse(await readSetting('share_email_to'))) || []; } catch { emailTo = []; }
+    const subject = (await readSetting('share_email_subject')) || '';
+    return {
+      target: SHARE_TARGETS.includes(target) ? target : SHARE_DEFAULTS.target,
+      emailTo,
+      emailSubject: subject.trim() && subject.length <= MAX_SUBJECT ? subject.trim() : SHARE_DEFAULTS.emailSubject,
+    };
+  }
+  const putSetting = (key, value) => adapter.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, value]);
+
+  app.get('/api/share-settings', auth, async (req, res) => {
+    res.json(await getShareSettings());
+  });
+
+  app.put('/api/share-settings', auth, async (req, res) => {
+    const body = req.body || {};
+    if (!SHARE_TARGETS.includes(body.target)) return res.status(400).json({ error: 'Choose where PDFs go: WhatsApp, email, or ask each time.' });
+    const emailTo = normalizeRecipients(body.emailTo ?? []);
+    if (emailTo === null) return res.status(400).json({ error: `Give up to ${MAX_RECIPIENTS} email addresses, separated by commas.` });
+    if (body.emailSubject != null && typeof body.emailSubject !== 'string') return res.status(400).json({ error: 'The email subject must be text.' });
+    const subject = (body.emailSubject || '').trim();
+    if (subject.length > MAX_SUBJECT) return res.status(400).json({ error: `Keep the email subject to ${MAX_SUBJECT} characters.` });
+    await putSetting('share_target', body.target);
+    await putSetting('share_email_to', JSON.stringify(emailTo));
+    await putSetting('share_email_subject', subject);
+    res.json(await getShareSettings());
+  });
 }
