@@ -285,15 +285,21 @@ export function installFetchShim(repo) {
   }
 
   window.fetch = async function (input, init) {
-    const rawUrl = typeof input === 'string' ? input : input.url;
-    if (!rawUrl.startsWith('/api/')) return originalFetch(input, init);
-    const method = ((init && init.method) || 'GET').toUpperCase();
-    const u = new URL(rawUrl, window.location.origin);
+    // F15: a string, a URL object or a Request; an absolute address on the page's own origin is ours too.
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : String(input && input.url);
+    let u = null;
+    try { u = new URL(rawUrl, window.location.origin); } catch { /* not a URL: not ours */ }
+    const ours = u && u.pathname.startsWith('/api/') && (rawUrl.startsWith('/api/') || (/^[a-z][a-z0-9+.-]*:/i.test(rawUrl) && u.origin === window.location.origin));
+    if (!ours) return originalFetch(input, init);
+    // A Request carries its own method and body; init, when given, wins (as fetch does).
+    const fromRequest = typeof input === 'object' && !(input instanceof URL) && typeof input.text === 'function';
+    const method = ((init && init.method) || (fromRequest && input.method) || 'GET').toUpperCase();
     const pathname = u.pathname;
     const query = Object.fromEntries(u.searchParams);
+    const rawBody = init && init.body != null ? String(init.body) : fromRequest && !(init && 'body' in init) ? await input.text() : '';
     // Same body rules as server.js (request-rules.js): a size limit per kind of route, and a body
     // that is not a JSON object or array is refused instead of being read as {}.
-    const parsed = requestRules.parseJsonBody(init && init.body != null ? String(init.body) : '', requestRules.bodyKind(method, pathname));
+    const parsed = requestRules.parseJsonBody(rawBody, requestRules.bodyKind(method, pathname));
     if (parsed.error) return toResponse(new Res().status(parsed.status).json(parsed.error));
     const body = parsed.body;
 
@@ -301,17 +307,29 @@ export function installFetchShim(repo) {
       if (r.method !== method) continue;
       const m = r.regex.exec(pathname);
       if (!m) continue;
+      // Route params are URL-decoded, as Express does; a malformed one is a 400 (Q16).
       const params = {};
-      r.paramNames.forEach((name, i) => { params[name] = m[i + 1]; });
+      try {
+        r.paramNames.forEach((name, i) => { params[name] = decodeURIComponent(m[i + 1]); });
+      } catch {
+        return toResponse(new Res().status(400).json(requestRules.invalidRequest()));
+      }
       const req = { params, query, body };
       const res = new Res();
       try {
         await r.handler(req, res); // handlers may be sync or async (Phase 7's encrypted backup routes are async)
       } catch (e) {
-        console.error('local-api handler error:', e);
-        // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
-        // hits the storage limit lands here. Say so, instead of the generic message.
-        res.status(500).json({ error: isStorageFullError(e) ? storageFull('this change was not saved.') : 'Something went wrong.' });
+        // As server.js's error handler (Q16): an error that carries a status keeps it, and only a
+        // server error (5xx) is logged and answered "Something went wrong.".
+        const status = Number((e && (e.statusCode || e.status)) || 500);
+        if (status < 500) {
+          res.status(status).json(requestRules.invalidRequest());
+        } else {
+          console.error('local-api handler error:', e);
+          // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
+          // hits the storage limit lands here. Say so, instead of the generic message.
+          res.status(status).json({ error: isStorageFullError(e) ? storageFull('this change was not saved.') : 'Something went wrong.' });
+        }
       }
       return toResponse(res);
     }

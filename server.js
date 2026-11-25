@@ -79,6 +79,17 @@ function accessGate(req, res, next) {
   next();
 }
 app.use(accessGate);
+// S2: a request that changes something and comes from another site's page (its Origin is not this
+// server's own address) is refused, so a web page open in the same browser cannot trigger a
+// body-less POST (mark exported, restore from the Recycle Bin). No Origin (curl, tests) is allowed.
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  if (origin === undefined || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  let host = null;
+  try { host = new URL(origin).host; } catch { /* "null" or malformed: not this server */ }
+  if (host && host === req.get('Host')) return next();
+  res.status(403).json({ error: 'Refused: this request came from another site.' });
+});
 // Basic hardening headers on every response. (No Content-Security-Policy yet: the pages still carry
 // inline scripts and import maps, which a strict CSP would block.)
 app.use((req, res, next) => {

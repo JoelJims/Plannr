@@ -208,10 +208,13 @@ export async function moveToFile(host, { onStep } = {}) {
  *   main            the database file (plannrSQLite.db) is there
  *   mainOk          the database file opens and PRAGMA quick_check is ok (only asked when needed)
  *   moveInProgress  the progress record says a move had started
+ *   markerUnreadable the marker file is there but could not be read (Q5): the move may have finished,
+ *                   so the database file may hold the live data and is set aside, never deleted
  * Returns { use: 'localstorage' | 'native' | 'recovery', remove: [...], setAside: [...], prompt? }.
  * remove/setAside name files the caller deletes or renames aside before going on ('candidate' | 'main').
  */
-export async function decideAtStartup({ marker, candidate, main, mainOk, moveInProgress }) {
+export async function decideAtStartup({ marker, candidate, main, mainOk, moveInProgress: started, markerUnreadable = false }) {
+  const moveInProgress = started && !markerUnreadable;
   const kind = marker && marker.storage;
   if (kind === MARKER_NATIVE) {
     const ok = main && (await mainOk());

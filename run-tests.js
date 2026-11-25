@@ -17,31 +17,42 @@ const crypto = require('node:crypto');
 const LIVE = path.join(__dirname, 'data', 'plannr.db');
 const stamp = () => (fs.existsSync(LIVE) ? fs.statSync(LIVE).mtimeMs : null);
 
-const before = stamp();
-console.log(`[run-tests] data/plannr.db mtime BEFORE: ${before === null ? '(absent)' : new Date(before).toISOString()}`);
+// `npm test` runs main(); requiring this file (test/ws2a-run-tests.test.js) only loads its functions.
+if (require.main === module) main();
 
-const files = fs.readdirSync(path.join(__dirname, 'test'))
-  .filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join('test', f));
+function main() {
+  const before = stamp();
+  console.log(`[run-tests] data/plannr.db mtime BEFORE: ${before === null ? '(absent)' : new Date(before).toISOString()}`);
 
-// --- pass 1: server.js -----------------------------------------------------------------------------
-const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', cwd: __dirname });
-const pass1 = r.status == null ? 1 : r.status;
+  const files = fs.readdirSync(path.join(__dirname, 'test'))
+    .filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join('test', f));
 
-// --- pass 2: the phone's API code --------------------------------------------------------------------
-const pass2 = runPhonePass();
+  // --- pass 1: server.js -----------------------------------------------------------------------------
+  const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', cwd: __dirname });
+  const pass1 = r.status == null ? 1 : r.status;
 
-const after = stamp();
-console.log(`[run-tests] data/plannr.db mtime AFTER:  ${after === null ? '(absent)' : new Date(after).toISOString()}`);
+  // --- pass 2: the phone's API code --------------------------------------------------------------------
+  const pass2 = runPhonePass(files);
 
-if (before !== after) {
-  console.error('[run-tests] ✖ FAIL: data/plannr.db was modified during the run — the suite must NEVER open the live database.');
-  process.exit(1);
+  const after = stamp();
+  console.log(`[run-tests] data/plannr.db mtime AFTER:  ${after === null ? '(absent)' : new Date(after).toISOString()}`);
+
+  if (before !== after) {
+    console.error('[run-tests] ✖ FAIL: data/plannr.db was modified during the run — the suite must NEVER open the live database.');
+    process.exit(1);
+  }
+  console.log('[run-tests] ✓ data/plannr.db mtime unchanged — the live database was never opened.');
+  process.exit(pass1 || pass2);
 }
-console.log('[run-tests] ✓ data/plannr.db mtime unchanged — the live database was never opened.');
-process.exit(pass1 || pass2);
 
-function runPhonePass() {
-  const helperFiles = files.filter((f) => /require\('\.\/helpers'\)/.test(fs.readFileSync(path.join(__dirname, f), 'utf8')));
+// F10: a test file goes through test/helpers.js when it requires './helpers': any quote style, with
+// or without '.js', spaces allowed inside the parentheses.
+function usesHelpers(source) {
+  return /\brequire\(\s*(['"`])\.\/helpers(?:\.js)?\1\s*\)/.test(source);
+}
+
+function runPhonePass(files) {
+  const helperFiles = files.filter((f) => usesHelpers(fs.readFileSync(path.join(__dirname, f), 'utf8')));
   const listFile = path.join(__dirname, 'test', 'phone-code-differences.json');
   const known = JSON.parse(fs.readFileSync(listFile, 'utf8')).differences;
   const keyOf = (file, test) => `${file} :: ${test}`;
@@ -106,3 +117,5 @@ function parseJunit(text) {
   }
   return out;
 }
+
+module.exports = { usesHelpers, parseJunit };
