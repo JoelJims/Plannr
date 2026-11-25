@@ -3,7 +3,8 @@
 // picked where the file goes (or rejects with "Share canceled" when they close the sheet). A 20 s
 // timeout around it reported "✗ … timed out after 20s" while the sheet was still open (seen on the
 // emulator), so a backup saved after that was never marked as exported.
-// These pages are plain HTML with inline scripts, so the checks read the source.
+// These pages are plain HTML with inline scripts, so the checks read the source. The Overview PDF's
+// share-sheet path lives in public/share-pdf.js (overview.html imports it), so that file is read for it.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -11,11 +12,11 @@ const path = require('node:path');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
 
-for (const page of ['data-backup.html', 'overview.html']) {
+for (const page of ['data-backup.html', 'share-pdf.js']) {
   test(`${page}: Share.share() is not wrapped in withTimeout`, () => {
     const src = read(page);
     const calls = (src.match(/^.*Share\.share\(.*$/gm) || []).filter((l) => !l.trim().startsWith('//'));
-    assert.strictEqual(calls.length, 1, 'one share call per page');
+    assert.strictEqual(calls.length, 1, 'one share call per file');
     assert.doesNotMatch(calls[0], /withTimeout/);
     assert.match(calls[0], /await Share\.share\(/);
   });

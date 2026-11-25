@@ -854,19 +854,6 @@
       return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
     }
     const errText = (err) => (err && err.message) ? err.message : String(err);
-    // @capacitor/filesystem's writeFile *declares* data: string | Blob, but on-device a raw Blob
-    // failed native validation ("the 'writeFile' input parameters aren't valid") — a Blob isn't
-    // JSON-serializable across the bridge, so nothing meaningful was actually crossing it. Per the
-    // plugin's own docs, omitting `encoding` means data is read as base64 — so convert here instead.
-    function blobToBase64(blob) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-        reader.onerror = () => reject(reader.error || new Error('Could not read the PDF data.'));
-        reader.readAsDataURL(blob);
-      });
-    }
-
     async function downloadPdf(part) {
       ovMsg.clear();
       // Light/dark theme choice before rendering (cancel aborts).
@@ -898,20 +885,11 @@
         catch (err) { ovMsg.show('Could not load the native bridge: ' + errText(err), 'error'); return; }
 
         if (Capacitor.isNativePlatform()) {
-          try {
-            const [{ Filesystem, Directory }, { Share }] = await Promise.all([import('@capacitor/filesystem'), import('@capacitor/share')]);
-            const base64Data = await blobToBase64(blob);
-            const written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the PDF file');
-            // Both `url` and `files` set to the same file:// URI — some Android/OEM combinations have
-            // only honoured one or the other for attaching an actual file (vs. sharing a link).
-            // No timeout here: Share.share() resolves only once the user has chosen where the PDF goes,
-            // which can take any length of time (a 20 s timeout reported failure while the sheet was
-            // still open — seen on the emulator, Phase 2 Step 9). Closing the sheet is not an error.
-            await Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: 'Share report' });
-          } catch (err) {
-            if (/cancel/i.test(errText(err))) ovMsg.show('PDF not shared: the share sheet was closed. Tap the button again to share it.', 'info');
-            else ovMsg.show('Generated the PDF but could not share it: ' + errText(err), 'error');
-          }
+          // The share sheet path lives in share-pdf.js (docs/share-and-reminder-pdf-plan.md).
+          let sharePdf;
+          try { sharePdf = await import('/share-pdf.js'); }
+          catch (err) { ovMsg.show('Could not load the PDF sharing code: ' + errText(err), 'error'); return; }
+          await sharePdf.sharePdfSheet({ blob, fname, msg: ovMsg });
           return;
         }
 
