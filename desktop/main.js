@@ -9,16 +9,16 @@ import path from 'node:path';
 import { resolvePublicFile } from './paths.js';
 import { windowOptions, allowRequest, lockDownContents, denyPermissions } from './security.js';
 import { createDesktopApi } from './core-api.js';
+import { parseSelfTest, selfTestRefusal, runSelfTest, selfTestLine } from './self-test.js';
 
 const PUBLIC_DIR = path.join(import.meta.dirname, '..', 'public');
 const PRELOAD = path.join(import.meta.dirname, 'preload.cjs');
 
-// Tests and trials run on a folder of their own, never the real userData.
-if (process.env.PLANNR_DESKTOP_USERDATA) app.setPath('userData', path.resolve(process.env.PLANNR_DESKTOP_USERDATA));
-
-protocol.registerSchemesAsPrivileged([
-  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true } },
-]);
+// --self-test=write|verify (self-test.js): the app drives its own window, prints one JSON line and
+// quits. It is refused (before any window or database) without a test folder in PLANNR_DESKTOP_USERDATA.
+const selfTestArg = parseSelfTest(process.argv);
+const selfTest = selfTestArg.mode || null;
+const refusal = selfTestArg.error || selfTestRefusal({ mode: selfTest, env: process.env });
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -73,18 +73,39 @@ async function start() {
   const win = new BrowserWindow(windowOptions(PRELOAD));
   win.once('ready-to-show', () => win.show());
   await win.loadURL('app://plannr/home.html');
+
+  if (selfTest) {
+    const result = await runSelfTest({ mode: selfTest, win, userData: app.getPath('userData') });
+    process.stdout.write(selfTestLine(result));
+    api.close();
+    app.exit(result.ok ? 0 : 1);
+  }
 }
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit(); // two windows never open the same database file
+if (refusal) {
+  process.stdout.write(selfTestLine({ selfTest, ok: false, steps: [{ name: 'start', ok: false, detail: refusal }] }));
+  app.exit(1);
 } else {
-  app.on('second-instance', () => {
-    const [win] = BrowserWindow.getAllWindows();
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
-  });
-  app.on('window-all-closed', () => app.quit());
-  app.whenReady().then(start).catch((e) => {
-    console.error('Plannr desktop trial could not start:', e);
-    app.exit(1);
-  });
+  // Tests and trials run on a folder of their own, never the real userData.
+  if (process.env.PLANNR_DESKTOP_USERDATA) app.setPath('userData', path.resolve(process.env.PLANNR_DESKTOP_USERDATA));
+
+  protocol.registerSchemesAsPrivileged([
+    { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true } },
+  ]);
+
+  if (!app.requestSingleInstanceLock()) {
+    if (selfTest) process.stdout.write(selfTestLine({ selfTest, ok: false, steps: [{ name: 'start', ok: false, detail: 'Another copy of the app is open on this folder.' }] }));
+    app.quit(); // two windows never open the same database file
+  } else {
+    app.on('second-instance', () => {
+      const [win] = BrowserWindow.getAllWindows();
+      if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    });
+    app.on('window-all-closed', () => app.quit());
+    app.whenReady().then(start).catch((e) => {
+      console.error('Plannr desktop trial could not start:', e);
+      if (selfTest) process.stdout.write(selfTestLine({ selfTest, ok: false, steps: [{ name: 'start', ok: false, detail: String(e && e.message) }] }));
+      app.exit(1);
+    });
+  }
 }
