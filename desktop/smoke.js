@@ -1,77 +1,63 @@
-// The desktop trial's smoke run (not part of `npm test`; it needs the Electron binary).
+// The desktop trial's smoke run (not part of `npm test`: it needs the Electron binary in
+// desktop/node_modules). It starts the app twice with its self-test (self-test.js):
 //
-//   node desktop/smoke.js <empty-folder-for-userData>
+//   node desktop/smoke.js [parent-folder]
 //
-// It starts the app twice on that folder with Playwright's _electron (the root `playwright`
-// package) and the Electron in desktop/node_modules. Run 1: the home page opens from app://plannr,
-// a loan is added and then edited through the page's own /api. Run 2 (a restart): the edited loan is
-// still there. Any request that is not app://plannr/ fails the run. Exit code 0 = passed.
+// Run 1, --self-test=write: the security settings as the page sees them, a request to an outside
+// address is cancelled, a Cash Inflow entry is added and edited through the form, the edit shows.
+// Run 2, --self-test=verify (a restart on the same folder): the edited entry is still there.
+// Both runs use one new, empty folder made inside parent-folder (default: the system temp folder)
+// as PLANNR_DESKTOP_USERDATA. The folder is kept and its path printed. Exit code 0 = PASS.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron } from 'playwright';
+import { spawnSync } from 'node:child_process';
 
-const userData = process.argv[2];
-if (!userData) { console.error('Usage: node desktop/smoke.js <empty-folder-for-userData>'); process.exit(2); }
-fs.mkdirSync(userData, { recursive: true });
-if (fs.readdirSync(userData).length) { console.error('The userData folder must be empty.'); process.exit(2); }
+export const ELECTRON = path.join(import.meta.dirname, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
+const RUN_MS = 180000;
 
-const exe = path.join(import.meta.dirname, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
-const env = { ...process.env, PLANNR_DESKTOP_USERDATA: path.resolve(userData) };
-delete env.PLANNR_DB;
-delete env.ELECTRON_RUN_AS_NODE;
-
-const offApp = [];
-const pageErrors = [];
-async function launch() {
-  const app = await electron.launch({ executablePath: exe, args: [import.meta.dirname], env });
-  const page = await app.firstWindow();
-  page.on('request', (r) => { if (!r.url().startsWith('app://plannr/')) offApp.push(r.url()); });
-  page.on('pageerror', (e) => pageErrors.push(String(e)));
-  await page.waitForLoadState('load');
-  await page.waitForFunction(() => window.__plannrMode !== undefined, null, { timeout: 15000 });
-  return { app, page };
+/** One run's answer: ok only with exit code 0 and exactly one JSON line for this mode with ok: true. */
+export function readRun(mode, r) {
+  const lines = String(r.stdout || '').split(/\r?\n/).filter((l) => l.startsWith('{"selfTest"'));
+  let result = null;
+  try { result = lines.length === 1 ? JSON.parse(lines[0]) : null; } catch { result = null; }
+  const ok = !r.error && r.status === 0 && !!result && result.selfTest === mode && result.ok === true;
+  const out = { mode, ok, status: r.status, result };
+  if (r.error) out.error = String(r.error.message || r.error);
+  if (!ok) out.stderr = String(r.stderr || '').slice(-2000);
+  return out;
 }
-const call = (page, method, url, body) => page.evaluate(async ([m, u, b]) => {
-  const r = await fetch(u, { method: m, headers: { 'content-type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) });
-  return { status: r.status, body: await r.json() };
-}, [method, url, body]);
 
-const results = {};
-try {
-  let { app, page } = await launch();
-  results.url = page.url();
-  results.mode = await page.evaluate(() => window.__plannrMode);
-  results.preload = await page.evaluate(() => JSON.stringify(window.plannrDesktop));
-  results.nodeInPage = await page.evaluate(() => typeof require !== 'undefined' || typeof process !== 'undefined');
-  const added = await call(page, 'POST', '/api/loans', { amountRupees: '1500', bankName: 'Smoke bank', interestRate: '9', tenure: '24 months' });
-  results.add = added.status;
-  const list1 = await call(page, 'GET', '/api/loans');
-  const loans1 = Object.values(list1.body).find(Array.isArray) || [];
-  const id = loans1[0] && loans1[0].id;
-  const edited = await call(page, 'PUT', `/api/loans/${id}`, { amountRupees: '1750', bankName: 'Smoke bank edited', interestRate: '9', tenure: '24 months' });
-  results.edit = edited.status;
-  results.outside = await page.evaluate(() => fetch('https://example.com/').then(() => 'loaded', () => 'blocked'));
-  await app.close();
+/** Write, then verify, on one fresh folder. `run` is spawnSync (the tests pass a stand-in). */
+export function smoke({ parent = os.tmpdir(), run = spawnSync, env = process.env } = {}) {
+  fs.mkdirSync(parent, { recursive: true });
+  const userData = fs.mkdtempSync(path.join(path.resolve(parent), 'plannr-smoke-'));
+  const childEnv = { ...env, PLANNR_DESKTOP_USERDATA: userData };
+  delete childEnv.PLANNR_DB;
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  const runs = [];
+  for (const [mode, arg] of [['write', '--self-test=write'], ['verify', '--self-test=verify']]) {
+    const r = run(ELECTRON, [import.meta.dirname, arg], { env: childEnv, encoding: 'utf8', timeout: RUN_MS, cwd: import.meta.dirname });
+    runs.push(readRun(mode, r));
+    if (!runs[runs.length - 1].ok) break;
+  }
+  return { pass: runs.length === 2 && runs.every((x) => x.ok), userData, runs };
+}
 
-  ({ app, page } = await launch());
-  const list2 = await call(page, 'GET', '/api/loans');
-  const loans2 = Object.values(list2.body).find(Array.isArray) || [];
-  results.afterRestart = loans2.map((l) => ({ bankName: l.bankName, amountPaise: l.amountPaise }));
-  await app.close();
-
-  results.dbFile = fs.existsSync(path.join(userData, 'plannr.db'));
-  results.offAppRequests = offApp.filter((u) => u !== 'https://example.com/');
-  results.blockedOutside = offApp.includes('https://example.com/') && results.outside === 'blocked';
-  results.pageErrors = pageErrors;
-  const ok = results.url === 'app://plannr/home.html' && results.mode === 'server' && results.preload === '{"runtime":"desktop"}'
-    && results.nodeInPage === false && results.add >= 200 && results.add < 300 && results.edit === 200
-    && results.afterRestart.length === 1 && results.afterRestart[0].bankName === 'Smoke bank edited' && results.afterRestart[0].amountPaise === 175000
-    && results.dbFile && results.offAppRequests.length === 0 && results.outside === 'blocked';
-  console.log(JSON.stringify(results, null, 2));
-  console.log(ok ? 'SMOKE PASSED' : 'SMOKE FAILED');
-  process.exit(ok ? 0 : 1);
-} catch (e) {
-  console.log(JSON.stringify(results, null, 2));
-  console.error('SMOKE FAILED:', e);
-  process.exit(1);
+const isMain = import.meta.main ?? (!!process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename);
+if (isMain) {
+  if (!fs.existsSync(ELECTRON)) {
+    console.error(`Electron is not installed here: ${ELECTRON}\nRun npm install in desktop/ first.`);
+    process.exit(2);
+  }
+  const out = smoke({ parent: process.argv[2] || os.tmpdir() });
+  console.log(`userData: ${out.userData}`);
+  for (const r of out.runs) {
+    console.log(`${r.mode}: ${r.ok ? 'ok' : 'FAILED'} (exit ${r.status})`);
+    for (const s of (r.result && r.result.steps) || []) console.log(`  ${s.ok ? 'ok  ' : 'FAIL'} ${s.name}${s.ok ? '' : ` - ${JSON.stringify(s.detail)}`}`);
+    if (!r.ok && r.error) console.log(`  error: ${r.error}`);
+    if (!r.ok && r.stderr) console.log(`  stderr (end):\n${r.stderr}`);
+  }
+  console.log(out.pass ? 'SMOKE PASS' : 'SMOKE FAIL');
+  process.exit(out.pass ? 0 : 1);
 }
