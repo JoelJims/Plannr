@@ -44,7 +44,8 @@ keytool -genkeypair -v -storetype PKCS12 -keystore D:\Keys\plannr\plannr-release
   and are public once the APK is shared; a project name is enough), then confirms.
 - `-validity 10000` is about 27 years. The key must outlive every update you will ever ship.
 - Choose long, random passwords and put them straight into a password manager (1.3).
-- Then create `keystore.properties` in the project root with the four entries from `SETUP.md` §2.
+- Then create `keystore.properties` in the project root with the two entries from `SETUP.md` §2
+  (`storeFile` and `keyAlias`; the passwords are never in a file, the release build asks for them).
   Its `storeFile` line is the key's path relative to the project root
   (`storeFile=../../Keys/plannr/plannr-release.keystore` for a checkout at `D:\Projects\Plannr`;
   `SETUP.md` §2 explains it and says how to save the file without a byte-order mark).
@@ -67,8 +68,10 @@ update those installs.
   Documents/Desktop folder. A synced copy is a copy you do not control.
 - How the build finds it: `android/app/build.gradle` reads `keystore.properties` from the project
   root and joins its `storeFile` value to the project root (`new File(projectRootDir, ...)` in the
-  `signingConfigs.release` block). `SETUP.md` §2 describes the file's four entries (the store file,
-  the alias, and the two password lines).
+  `signingConfigs.release` block). `SETUP.md` §2 describes the file's two entries (the store file
+  and the alias). The two passwords come from `PLANNR_STORE_PASSWORD` and `PLANNR_KEY_PASSWORD`,
+  which `npm run release:android` sets for the Gradle run only, from the environment or a hidden
+  prompt (since 2026-11-25; a file that still has password lines stops the release).
 - **Where it is now (owner decision, 2026-11-22):** the key is in `D:\Keys\plannr\`, a folder of
   its own outside the project and outside git. `keystore.properties` stays in the project root
   (git-ignored), and its `storeFile` line is the path relative to the project root:
