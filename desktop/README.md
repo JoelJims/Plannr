@@ -53,7 +53,9 @@ npm start
 ## What does not work yet
 
 - **The smoke run does not finish.** `smoke.js` times out in Playwright's `electron.launch` (30 s)
-  before the first window. The cause is not found yet. Not checked: adding and editing an entry in
+  before the first window. A two-line Electron app with no Plannr code (CommonJS or ES module) times
+  out the same way, so the cause is Playwright `1.61.1` with Electron `45.3.2`, not this app. Not
+  checked yet: adding and editing an entry in
   the window, and seeing it after a restart. (The node tests check the same thing without a window.)
 - PDF export answers 501 ("not in the desktop trial yet").
 - No "Save as" (`saveFile`), so a backup export cannot be saved from the window yet.
