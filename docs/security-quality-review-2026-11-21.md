@@ -55,7 +55,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | S7 | Low | The APK has `USE_BIOMETRIC` and `USE_FINGERPRINT` from the storage plugin's dependencies; Plannr never uses them | merged manifest; `aapt dump permissions` of the RC | **Fixed** 2026-11-22 (`4cf1784`), checked on the built APK and the emulator |
 | S9 / F19 | Low | `.gitignore` misses `*.jks`, `*.p12`, `*.pem`, `.env.*`, plain exports and pulled snapshots | `.gitignore` | **Fixed** (`d33953b`) |
 | S10 / R2 | Low | A `PLANNR_DB` that is set but empty opens the real database (incident 1) | `db.js:31` | **Fixed** (`a3ea627`) |
-| Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | **Fixed** 2026-11-25 (`c6a9a33`, `ws2-a-fixes`) |
+| Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | Open (a fix, `c6a9a33`, was reverted in `4e87808`: see section 11) |
 | Q8 / R3 | Low | `node:sqlite` stores numbers as REAL: `sqlite_sequence.seq` and unchecked TEXT columns from hand-edited backups differ between desktop and phone | `db.js:1001,1101,1337`; `backup-format.js:122-283,328` | Open |
 | Q9 | Low | A backup's `sequences` naming a table without an id gives a 500 instead of a 400 | `backup-format.js:178-184,326` | **Fixed** 2026-11-22 (`d8ef781`, `ws-a-fixes`) |
 | Q10 | Low | No upper limit on amounts; a typo near ₹90 trillion can break the Overview's sums | `core/parsers.js:11-17` | Open |
@@ -280,7 +280,7 @@ code before it.
 
 | Finding | What changed | Commit |
 |---|---|---|
-| Q7 | `measureStorage()` still counts a leftover `kvvfs-local-jrnl` record in the space used, but not as database bytes | `c6a9a33` |
+| Q7 | **Reverted.** `c6a9a33` left a leftover `kvvfs-local-jrnl` record out of `measureStorage()`'s database bytes. That number is also the old copy's size in `/api/storage`'s `backupBytes`, and `test-ui/storage-startup.js` counts the journal there; the move-back room check (Q4) counts it on purpose. Still open | `c6a9a33`, reverted in `4e87808` |
 | Q16 | The phone's API URL-decodes route params (a malformed one gets 400) and keeps the status of an error that carries one, as `server.js` does. The phone pass still has the same 17 known differences | `d184d3b` |
 | F10 | `run-tests.js` picks the phone-pass files with `usesHelpers()`: any quote style, an optional `.js`, spaces. It finds the same files today | `055c7c9` |
 | Q5 | Startup reports a marker file that is there but unreadable; the database file is then set aside, never deleted | `d59d5df` |
