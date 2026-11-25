@@ -29,7 +29,7 @@
 
   --text: #f4f4f5;           /* near-white */
   --text-dim: #a1a1aa;       /* gray */
-  --text-faint: #8b8b93;     /* fainter gray — raised from #6b6b73 to meet WCAG AA (>=4.5:1) on --bg and --panel-2 */
+  --text-faint: #8d8d95;     /* fainter gray — raised from #6b6b73, then #8b8b93, to meet WCAG AA (>=4.5:1) on --bg, --panel-2 and --accent-soft (test/ws2b-contrast.test.js) */
   --line: rgba(255, 255, 255, 0.10);
   --line-strong: rgba(255, 255, 255, 0.16);
 
