@@ -35,6 +35,7 @@
     "test:storage-move-ui": "node test-ui/storage-move-ui.js",
     "test:modal-focus": "node test-ui/c-modal-focus.js",
     "test:share-settings": "node test-ui/ws2c-share-settings.js",
+    "test:share-pdf": "node test-ui/ws2c-share.js",
     "sync:public-modules": "node sync-public-modules.js",
     "android:sync": "node sync-public-modules.js && npx cap sync android",
     "release:android": "node release-android.js"
