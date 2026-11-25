@@ -304,17 +304,29 @@ export function installFetchShim(repo) {
       if (r.method !== method) continue;
       const m = r.regex.exec(pathname);
       if (!m) continue;
+      // Route params are URL-decoded, as Express does; a malformed one is a 400 (Q16).
       const params = {};
-      r.paramNames.forEach((name, i) => { params[name] = m[i + 1]; });
+      try {
+        r.paramNames.forEach((name, i) => { params[name] = decodeURIComponent(m[i + 1]); });
+      } catch {
+        return toResponse(new Res().status(400).json(requestRules.invalidRequest()));
+      }
       const req = { params, query, body };
       const res = new Res();
       try {
         await r.handler(req, res); // handlers may be sync or async (Phase 7's encrypted backup routes are async)
       } catch (e) {
-        console.error('local-api handler error:', e);
-        // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
-        // hits the storage limit lands here. Say so, instead of the generic message.
-        res.status(500).json({ error: isStorageFullError(e) ? storageFull('this change was not saved.') : 'Something went wrong.' });
+        // As server.js's error handler (Q16): an error that carries a status keeps it, and only a
+        // server error (5xx) is logged and answered "Something went wrong.".
+        const status = Number((e && (e.statusCode || e.status)) || 500);
+        if (status < 500) {
+          res.status(status).json(requestRules.invalidRequest());
+        } else {
+          console.error('local-api handler error:', e);
+          // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
+          // hits the storage limit lands here. Say so, instead of the generic message.
+          res.status(status).json({ error: isStorageFullError(e) ? storageFull('this change was not saved.') : 'Something went wrong.' });
+        }
       }
       return toResponse(res);
     }
