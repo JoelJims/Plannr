@@ -27,6 +27,46 @@ npm start
   empty folder first. Use this for every test and trial.
 - Only one copy runs at a time (single-instance lock), so two windows never open the same file.
 
+## Self-test
+
+The app can test itself. It opens its normal window (the same options, preload and request filter)
+and drives the page from the main process with `webContents.executeJavaScript`. There is no remote
+debugging port, no IPC and no network. This replaces the Playwright launch, which timed out.
+
+The easy way runs the app twice, from the repository root:
+
+```
+node desktop/smoke.js              (makes a new folder in the system temp folder)
+node desktop/smoke.js <folder>     (makes a new folder inside <folder>)
+```
+
+It prints each step and then `SMOKE PASS` (exit code 0) or `SMOKE FAIL` (exit code 1). The test
+folder is kept, and its path is printed. A window opens for about 20 seconds per run.
+
+The two runs, by hand (PowerShell, in `desktop/`, on a new empty folder):
+
+```
+$env:PLANNR_DESKTOP_USERDATA = '<absolute path of a new empty folder>'
+npx electron . --self-test=write
+npx electron . --self-test=verify
+```
+
+- `--self-test=write`: checks the security settings (below), opens Cash Inflow, adds an entry with a
+  unique reason through the form, edits it (amount and reason, with the "Save changes?" dialog) and
+  checks that the edited row shows and is saved. It leaves `plannr-self-test.json` in the folder.
+- `--self-test=verify` (a restart on the same folder): the same security checks, then the edited
+  entry is still on the Cash Inflow page and in `/api/cash-in`.
+- The security checks: the page has no `require`, `process`, `module` or `Buffer`;
+  `window.plannrDesktop` is exactly `{ runtime: 'desktop' }` and frozen; the running window has
+  `contextIsolation` and `sandbox` on and `nodeIntegration` off; a page request to
+  `https://plannr-selftest.invalid/` fails; and the window itself sent to that address is cancelled
+  by the request filter (`ERR_BLOCKED_BY_CLIENT`, not a DNS error). `.invalid` never resolves.
+- Each run prints one JSON line, `{ "selfTest": "write"|"verify", "ok": true|false, "steps": [...] }`,
+  and exits 0 or 1. It stops at the first failed step.
+- It refuses to start (one JSON line, exit 1, before any window or database) without
+  `PLANNR_DESKTOP_USERDATA` set to an absolute path; `write` also needs a new or empty folder, and
+  `verify` needs the folder of a `write` run. So it never adds an entry to real data.
+
 ## Files
 
 | File | What it does |
@@ -36,7 +76,9 @@ npm start
 | `paths.js` | The path check for `app://plannr/...` (only files inside `public/`) |
 | `security.js` | The window options, the request filter, the navigation and permission blocks |
 | `preload.cjs` | The preload: one frozen object, `window.plannrDesktop = { runtime: 'desktop' }` |
-| `smoke.js` | A two-run smoke test with Playwright (not part of `npm test`) |
+| `self-test.js` | The self-test mode: the `--self-test` argument, the refusals, the steps |
+| `self-test-page.js` | The self-test's page side (run in the window, never served or imported) |
+| `smoke.js` | Runs the self-test twice, write then verify (not part of `npm test`) |
 
 ## What works
 
@@ -49,19 +91,27 @@ npm start
   - the window's security options;
   - only `app://plannr/` requests load; navigation, new windows and permissions are refused;
   - the main-process files have no `http`, `https`, `net`, `fetch` or `listen(`.
+- The smoke run passes (2026-11-25, Windows 11, Electron 45.3.2): write 11 steps, verify 9 steps.
+  So adding and editing an entry in the window works, and the entry is there after a restart.
+- The node tests for the self-test (`test/desktop-selftest.test.js`, `test/desktop-smoke.test.js`)
+  run `main.js` with a stand-in for Electron. They check the refusals, the argument, that the
+  self-test window has exactly the normal security options and handlers, and that the main process
+  has no remote debugging, inspector, open port or network module.
 
 ## What does not work yet
 
-- **The smoke run does not finish.** `smoke.js` times out in Playwright's `electron.launch` (30 s)
-  before the first window. A two-line Electron app with no Plannr code (CommonJS or ES module) times
-  out the same way, so the cause is Playwright `1.61.1` with Electron `45.3.2`, not this app. Not
-  checked yet: adding and editing an entry in
-  the window, and seeing it after a restart. (The node tests check the same thing without a window.)
+- **Links between pages do not open.** The `will-navigate` block stops every navigation the page
+  starts, `app://plannr/` links too. Checked with the self-test window: a click on the
+  `/cash-flow.html` link on the Cash Inflow page stays on Cash Inflow. The self-test opens its pages
+  from the main process instead. Letting `app://plannr/` links through is a security-settings
+  change, so it waits for a decision.
+- If `main.js` cannot load, Electron shows an error box and waits. The smoke run then stops after
+  its time limit (3 minutes per run) with `SMOKE FAIL`.
 - PDF export answers 501 ("not in the desktop trial yet").
 - No "Save as" (`saveFile`), so a backup export cannot be saved from the window yet.
 - No reminders or notifications.
-- The pages run in "dev server" mode (the `X-Plannr-Dev-Server` marker). A `desktop` mode in
-  `public/runtime-mode.js` comes later.
+- The pages run in "dev server" mode (the `X-Plannr-Dev-Server` marker). This stays as it is for
+  now (decided 2026-11-25); there is no `desktop` mode in `public/runtime-mode.js`.
 - No packaging, installer, icon, code signing or auto-update. `@electron/fuses` is not set.
 
 ## Security settings
@@ -79,4 +129,5 @@ npm start
 | Navigation | `will-navigate` and `will-redirect` are blocked; `setWindowOpenHandler` denies |
 | Permissions | Every permission request and check is denied |
 | Content Security Policy | Sent with every page: only `app://plannr`; inline scripts are allowed because the pages use them |
-| Main process | No network calls (a test checks the source) |
+| Main process | No network calls, no remote debugging, no inspector (tests check the source) |
+| Self-test | The same window, options, preload and request filter; driven with `executeJavaScript` |
