@@ -294,12 +294,15 @@ export function installFetchShim(repo) {
     try { u = new URL(rawUrl, window.location.origin); } catch { /* not a URL: not ours */ }
     const ours = u && u.pathname.startsWith('/api/') && (rawUrl.startsWith('/api/') || (/^[a-z][a-z0-9+.-]*:/i.test(rawUrl) && u.origin === window.location.origin));
     if (!ours) return originalFetch(input, init);
-    const method = ((init && init.method) || 'GET').toUpperCase();
+    // A Request carries its own method and body; init, when given, wins (as fetch does).
+    const fromRequest = typeof input === 'object' && !(input instanceof URL) && typeof input.text === 'function';
+    const method = ((init && init.method) || (fromRequest && input.method) || 'GET').toUpperCase();
     const pathname = u.pathname;
     const query = Object.fromEntries(u.searchParams);
+    const rawBody = init && init.body != null ? String(init.body) : fromRequest && !(init && 'body' in init) ? await input.text() : '';
     // Same body rules as server.js (request-rules.js): a size limit per kind of route, and a body
     // that is not a JSON object or array is refused instead of being read as {}.
-    const parsed = requestRules.parseJsonBody(init && init.body != null ? String(init.body) : '', requestRules.bodyKind(method, pathname));
+    const parsed = requestRules.parseJsonBody(rawBody, requestRules.bodyKind(method, pathname));
     if (parsed.error) return toResponse(new Res().status(parsed.status).json(parsed.error));
     const body = parsed.body;
 

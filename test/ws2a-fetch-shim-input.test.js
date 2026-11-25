@@ -18,3 +18,12 @@ test('F15: the fetch shim takes a URL object and an absolute same-origin address
   assert.strictEqual(absolute.status, 200);
   await assert.rejects(globalThis.window.fetch('https://example.invalid/api/storage'), /not an \/api request/);
 });
+
+test('F15: a Request passed without init keeps its method and body', { skip: !phone && 'phone code only (pass 2)' }, async () => {
+  const origin = globalThis.window.location.origin;
+  const r = await globalThis.window.fetch(new Request(`${origin}/api/trash/cash_out/999999/restore`, { method: 'POST' }));
+  assert.strictEqual(r.status, 404);
+  assert.strictEqual((await r.json()).error, 'That deleted item was not found.');
+  const bad = await globalThis.window.fetch(new Request(`${origin}/api/trash/cash_out/999999/restore`, { method: 'POST', body: 'not json' }));
+  assert.strictEqual(bad.status, 400);
+});
