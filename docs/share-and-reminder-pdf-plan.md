@@ -14,8 +14,12 @@ Built on 2026-11-25:
 - `ShareToPlugin.java` (WhatsApp, then WhatsApp Business; "not-installed" otherwise), registered in
   `MainActivity.java`, with `<queries>` in the manifest. Test: `test/ws2c-share-to-plugin.test.js`.
 
-Not built yet: `public/share-pdf.js` and the two Overview buttons (build step 4 and the rest of 5
-and 6), the reminder data change (step 2), and the reminder **Send PDF** action (step 7, next).
+- `public/share-pdf.js`: the Overview's share-sheet path, moved out of `overview.html` unchanged.
+  Test: `test/share-sheet.test.js`.
+
+Not built yet: the **Send to WhatsApp** and **Send by email** buttons on the Overview, with their
+fallbacks and UI suite (the rest of build steps 4 to 6), the reminder data change (step 2), and the
+reminder **Send PDF** action (step 7, next).
 
 **Decided by the owner on 2026-11-22:** the **Send PDF** action goes on the existing daily report
 reminders (ids 101–105). A payment-due reminder is a separate, later feature and is not part of
