@@ -288,10 +288,13 @@ export function installFetchShim(repo) {
   }
 
   window.fetch = async function (input, init) {
-    const rawUrl = typeof input === 'string' ? input : input.url;
-    if (!rawUrl.startsWith('/api/')) return originalFetch(input, init);
+    // F15: a string, a URL object or a Request; an absolute address on the page's own origin is ours too.
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : String(input && input.url);
+    let u = null;
+    try { u = new URL(rawUrl, window.location.origin); } catch { /* not a URL: not ours */ }
+    const ours = u && u.pathname.startsWith('/api/') && (rawUrl.startsWith('/api/') || (/^[a-z][a-z0-9+.-]*:/i.test(rawUrl) && u.origin === window.location.origin));
+    if (!ours) return originalFetch(input, init);
     const method = ((init && init.method) || 'GET').toUpperCase();
-    const u = new URL(rawUrl, window.location.origin);
     const pathname = u.pathname;
     const query = Object.fromEntries(u.searchParams);
     // Same body rules as server.js (request-rules.js): a size limit per kind of route, and a body
