@@ -47,15 +47,21 @@ function nativeStandIns() {
     ever,
     offline: false,
     behave: { whatsapp: 'opened', mail: 'yes', share: 'ok' },
+    // Like Capacitor's own plugin object (registerPlugin in @capacitor/core): every name except
+    // $$typeof and toJSON is a native method, `then` included. So code that awaits a plugin object,
+    // or returns one from an async function, calls "then" on the phone; that fails and never settles
+    // (seen on the emulator: "ShareTo.then()" is not implemented on android).
     plugin(name) {
       return new Proxy({}, {
         get(_, method) {
-          if (typeof method !== 'string' || method === 'then') return undefined; // not a thenable
+          if (typeof method !== 'string' || method === '$$typeof') return undefined;
+          if (method === 'toJSON') return () => ({});
           return (...args) => window.__native.call(name, method, args);
         },
       });
     },
     async call(plugin, method, args) {
+      if (method === 'then') { ever.push(`${plugin}.then`); throw new Error(`"${plugin}.then()" is not implemented on android`); }
       calls.push({ plugin, method, args: JSON.parse(JSON.stringify(args.filter((a) => typeof a !== 'function'))) });
       ever.push(`${plugin}.${method}`);
       const b = window.__native.behave;
@@ -265,6 +271,7 @@ const waitForServer = () => new Promise((resolve, reject) => {
     // Every plugin call of every page load (open() keeps each load's list before reloading).
     const all = everAll.concat(await page.evaluate(() => window.__native.ever));
     check('no plugin method that sends was ever called', all.length > 0 && !all.some((m) => /send/i.test(m)), `${all.length} calls: ${[...new Set(all)].join(', ')}`);
+    check('no plugin object was ever awaited (no "<Plugin>.then" call)', !all.some((m) => /\.then$/.test(m)), all.filter((m) => /\.then$/.test(m)).join(', '));
     check('app: no page errors', errors.length === 0, errors.join(' | '));
     check('no request went anywhere outside the app', outside.length === 0, outside.join(' | '));
   } catch (e) {

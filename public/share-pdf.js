@@ -85,11 +85,14 @@ export function offlineNote(kind, online) {
 const isOnline = () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false);
 const sentence = (...parts) => parts.filter(Boolean).join(' ');
 
-// ShareToPlugin.java, registered by MainActivity. Only ever asked for on the phone.
-let shareToPlugin = null;
+// ShareToPlugin.java, registered by MainActivity. Only ever asked for on the phone. Capacitor's
+// plugin object answers every name, `then` too, as a native method, so it must never be awaited or
+// returned from an async function: that calls "ShareTo.then()" on the phone, which fails and never
+// settles (seen on the emulator). It is handed over inside a plain object instead.
+let shareToBox = null;
 async function shareTo() {
-  if (!shareToPlugin) shareToPlugin = (await import('@capacitor/core')).registerPlugin('ShareTo');
-  return shareToPlugin;
+  if (!shareToBox) shareToBox = { plugin: (await import('@capacitor/core')).registerPlugin('ShareTo') };
+  return shareToBox;
 }
 
 // Send to WhatsApp: WhatsApp (then WhatsApp Business) opens with the PDF attached; the user picks
@@ -100,7 +103,7 @@ export async function sendPdfToWhatsApp({ blob, fname, msg, online = isOnline() 
   catch (err) { msg.show('Generated the PDF but could not save it for WhatsApp: ' + errText(err), 'error'); return; }
   let reason;
   try {
-    const plugin = await shareTo();
+    const { plugin } = await shareTo();
     const r = await withTimeout(plugin.whatsapp({ path: uri }), 20000, 'Opening WhatsApp');
     if (r && r.opened) {
       msg.show(sentence('WhatsApp opened with the PDF attached. Pick the chat and tap Send there.', offlineNote('whatsapp', online)), 'success');
