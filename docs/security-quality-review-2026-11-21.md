@@ -1,4 +1,4 @@
-# Security and quality review of `plannr-phase2`, 2026-11-21**Fixed** 2026-11-25 (`c6a9a33`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`d184d3b`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`055c7c9`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`d59d5df`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`8ee6c0b`, `ws2-a-fixes`) |**Fixed** 2026-11-25 (`e1761b5`, `ws2-a-fixes`) |
+# Security and quality review of `plannr-phase2`, 2026-11-21
 
 > **Status on 2026-11-23.** This review was written on 2026-11-21. Since then:
 > - `plannr-phase2` was merged into `main` (PR #1, `4b3ab08`, 2026-11-21). That fixed S1: `server.js`
