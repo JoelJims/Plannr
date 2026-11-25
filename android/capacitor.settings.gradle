@@ -14,5 +14,8 @@ project(':capacitor-local-notifications').projectDir = new File('../node_modules
 include ':capacitor-share'
 project(':capacitor-share').projectDir = new File('../node_modules/@capacitor/share/android')
 
+include ':capawesome-capacitor-mail-composer'
+project(':capawesome-capacitor-mail-composer').projectDir = new File('../node_modules/@capawesome/capacitor-mail-composer/android')
+
 include ':capgo-capacitor-pdf-generator'
 project(':capgo-capacitor-pdf-generator').projectDir = new File('../node_modules/@capgo/capacitor-pdf-generator/android')
