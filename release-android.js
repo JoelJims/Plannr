@@ -72,9 +72,9 @@ function bumpVersions(gradleText, { versionName } = {}) {
   return { text, from: { code, name }, to };
 }
 
-// The storeFile value from the text of keystore.properties, or null if there is none. That file also
-// holds the passwords, so this reads ONLY the storeFile key: no other line or value is returned, kept
-// or printed. It follows Java's Properties rules that this file can use (Gradle reads it with
+// The storeFile value from the text of keystore.properties, or null if there is none. An old copy of
+// that file may still hold passwords, so this reads ONLY the storeFile key: no other line or value is
+// returned, kept or printed. It follows Java's Properties rules that this file can use (Gradle reads it with
 // Properties.load): comment lines start with # or !, the key ends at "=", ":" or a space, a
 // backslash escapes the next character, and the last storeFile line wins. Not handled: a value
 // split over several lines with a trailing backslash.

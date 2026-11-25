@@ -250,7 +250,9 @@ From `android/`, or via Studio's Run button for debug builds:
 
 ```sh
 ./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/Plannr-debug.apk
-./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/Plannr.apk  (signed)
+# a signed release: from the project root, npm run release:android (it asks for the key
+# passwords without showing them). ./gradlew assembleRelease alone stops unless
+# PLANNR_STORE_PASSWORD and PLANNR_KEY_PASSWORD are set in that terminal window (only there)
 adb -s emulator-5554 install -r android/app/build/outputs/apk/debug/Plannr-debug.apk   # the emulator
 ```
 
@@ -361,7 +363,9 @@ npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs
 npm run android:sync                      # regenerate public/ copies + the native project
 # open the android/ directory in Android Studio, let it sync
-cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/Plannr.apk
+npm run release:android                   # runs the tests, raises the version, asks for the key
+                                          # passwords (not shown), then builds the signed APK
+cd android                                # -> app/build/outputs/apk/release/Plannr.apk
 # apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
 # SHA-256 you noted for this key (section 2)
 apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk
