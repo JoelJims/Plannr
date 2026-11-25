@@ -118,6 +118,7 @@
        without this the empty banner showed on every load, overdue or not. */
     .backup-banner[hidden] { display: none; }
     .backup-banner a { color: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; }
+    #shareSettings select, #shareSettings input[type="text"] { display: block; width: 100%; max-width: 420px; box-sizing: border-box; margin: 4px 0 10px; background: var(--panel); color: inherit; border: 1px solid var(--accent-line); padding: 6px 8px; font-family: inherit; }
     #backupReminderSettings select { margin-left: 8px; background: var(--panel); color: inherit; border: 1px solid var(--accent-line); padding: 6px 8px; font-family: inherit; }
     #backupReminderSettings label { font-size: 13px; }
 
@@ -183,6 +184,23 @@
           </div>
           <p class="notif-msg" id="notifMsg" hidden></p>
           <button type="button" id="notifExactBtn" class="notif-btn-sm" hidden>Allow on-time reminders</button>
+        </div>
+
+        <div class="notif-settings" id="shareSettings">
+          <p class="lead">Sending PDFs</p>
+          <p class="notif-hint">Where a report PDF goes when you send it. WhatsApp or your mail app opens with the PDF attached; nothing is sent until you tap Send there.</p>
+          <label for="shareTargetSelect">Send PDFs to</label>
+          <select id="shareTargetSelect">
+            <option value="ask">Ask each time</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">Email</option>
+          </select>
+          <label for="shareEmailTo">Email recipient(s), up to 5, separated by commas</label>
+          <input type="text" id="shareEmailTo" inputmode="email" autocomplete="off" spellcheck="false">
+          <label for="shareEmailSubject">Email subject ({date} becomes the report date)</label>
+          <input type="text" id="shareEmailSubject" maxlength="120">
+          <button type="button" id="shareSaveBtn" class="notif-btn-sm">Save</button>
+          <p class="notif-msg" id="shareMsg" hidden></p>
         </div>
 
         <div class="notif-settings" id="backupReminderSettings">
@@ -416,6 +434,43 @@
     });
 
     refreshBackupReminder();
+
+    // Sending PDFs (docs/share-and-reminder-pdf-plan.md, section 3): stored by /api/share-settings.
+    // Only settings here; Overview's send buttons read them. Nothing is ever sent from this page.
+    const shareSettings = document.getElementById('shareSettings');
+    const shareTargetSelect = document.getElementById('shareTargetSelect');
+    const shareEmailTo = document.getElementById('shareEmailTo');
+    const shareEmailSubject = document.getElementById('shareEmailSubject');
+    const shareMsg = document.getElementById('shareMsg');
+    function showShareMsg(text, kind) {
+      shareMsg.textContent = text;
+      shareMsg.className = 'notif-msg' + (kind ? ' ' + kind : '');
+      shareMsg.hidden = !text;
+    }
+    function fillShareSettings(s) {
+      shareTargetSelect.value = s.target;
+      shareEmailTo.value = (s.emailTo || []).join(', ');
+      shareEmailSubject.value = s.emailSubject || '';
+    }
+    async function loadShareSettings() {
+      try {
+        const r = await fetch('/api/share-settings');
+        if (r.ok) fillShareSettings(await r.json());
+      } catch { /* the fields keep their empty state; Save still works */ }
+      shareSettings.dataset.loaded = '1';
+    }
+    document.getElementById('shareSaveBtn').addEventListener('click', async () => {
+      const res = await fetch('/api/share-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: shareTargetSelect.value, emailTo: shareEmailTo.value, emailSubject: shareEmailSubject.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showShareMsg(data.error || 'Could not save — try again.', 'error'); return; }
+      fillShareSettings(data);
+      showShareMsg('Saved.', 'info');
+    });
+    loadShareSettings();
 
   });
   </script>
