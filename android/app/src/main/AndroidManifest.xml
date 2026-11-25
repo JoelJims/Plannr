@@ -57,4 +57,11 @@
          (test/android-permissions.test.js). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="remove" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" tools:node="remove" />
+
+    <!-- "Send to WhatsApp" (ShareToPlugin.java): Android 11+ hides other apps unless they are
+         named here. Only these two packages; no permission is added. -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+    </queries>
 </manifest>
