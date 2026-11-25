@@ -3,6 +3,18 @@
 Notable changes to Plannr. The phone app is the product; the desktop server (`server.js`) is a
 development and test tool.
 
+## 1.0.0 — first public release (in preparation, not released)
+
+The first public release will be versionName `1.0.0`. `npm run release:android` sets it, with the
+next versionCode, when the owner builds the release. User notes: `docs/release-notes-1.0.0.md`.
+
+### Changed
+- **Release signing passwords.** `keystore.properties` now holds only `storeFile` and `keyAlias`.
+  The store and key passwords come from `PLANNR_STORE_PASSWORD` and `PLANNR_KEY_PASSWORD`, or
+  `npm run release:android` asks for them without echo; they reach Gradle only through its
+  environment. A `keystore.properties` that still has password lines stops the release
+  (`SETUP.md` §2).
+
 ## In review — Phase 3 (branch `plannr-phase3`, pull request #3 into `main`, open)
 
 Fixes from the security and quality review of 2026-11-21
