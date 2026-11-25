@@ -382,13 +382,33 @@ async function validateLedgerCsv(csvText) {
     return { ok: false, error: 'Expected columns "Code, Main ledger, Sub-code, Sub-ledger" as the first row.', rowErrors: [] };
   }
 
+  const { rowErrors, mains, subs } = checkLedgerCsvRows(rows.slice(1));
+  if (rowErrors.length) return { ok: false, error: `${rowErrors.length} row(s) failed validation.`, rowErrors };
+
+  // The critical check: a code missing from the new file must not still be in use.
+  const stillUsed = await removedCodesStillInUse(mains, subs);
+  if (stillUsed.length) {
+    return {
+      ok: false,
+      error: 'Codes are permanent — some were removed or altered in this file but are still used by existing rows: ' + stillUsed.map((u) => `${u.code} (${u.rows} row${u.rows === 1 ? '' : 's'})`).join(', ') + '. Only the ledger/sub-ledger NAME can be changed; the code itself cannot.',
+      rowErrors: stillUsed.map((u) => ({ row: null, message: `Code "${u.code}" was removed or altered in this file, but is still used by ${u.rows} existing row${u.rows === 1 ? '' : 's'}. Codes cannot be changed once rows reference them — only the name can.` })),
+    };
+  }
+
+  return { ok: true, mains, subs };
+}
+
+// The per-row rules for the data rows (everything after the header) -> { rowErrors, mains, subs }.
+// Row numbers are 1-based with the header as row 1. A sub-ledger whose main is not declared anywhere
+// in the file is reported after the other row errors.
+function checkLedgerCsvRows(dataRows) {
   const rowErrors = [];
   const mains = [];
   const subRowsPending = [];
   const seenCodes = new Set();
   const declaredMains = new Set();
 
-  rows.slice(1).forEach((r, i) => {
+  dataRows.forEach((r, i) => {
     const rowNum = i + 2; // 1-based; row 1 is the header
     const code = (r[0] || '').trim();
     const mainLedger = (r[1] || '').trim();
@@ -421,26 +441,18 @@ async function validateLedgerCsv(csvText) {
     }
     subs.push({ code: p.code, mainCode: p.mainCode, name: p.name });
   }
+  return { rowErrors, mains, subs };
+}
 
-  if (rowErrors.length) return { ok: false, error: `${rowErrors.length} row(s) failed validation.`, rowErrors };
-
-  // The critical check: a code missing from the new file must not still be in use.
+// The codes in the database now that the new file leaves out but some row still references
+// -> [{ code, rows }] (empty when the import is safe).
+async function removedCodesStillInUse(mains, subs) {
   const newCodes = new Set([...mains.map((m) => m.code), ...subs.map((s) => s.code)]);
   const oldCodes = [...(await ledgerStmt.mains.all()).map((m) => m.code), ...(await ledgerStmt.allSubs.all()).map((s) => s.code)];
   const removedCodes = oldCodes.filter((c) => !newCodes.has(c));
-  if (removedCodes.length) {
-    const counts = await ledgerUsageCounts(removedCodes);
-    const stillUsed = removedCodes.filter((c) => counts[c] > 0).map((c) => ({ code: c, rows: counts[c] }));
-    if (stillUsed.length) {
-      return {
-        ok: false,
-        error: 'Codes are permanent — some were removed or altered in this file but are still used by existing rows: ' + stillUsed.map((u) => `${u.code} (${u.rows} row${u.rows === 1 ? '' : 's'})`).join(', ') + '. Only the ledger/sub-ledger NAME can be changed; the code itself cannot.',
-        rowErrors: stillUsed.map((u) => ({ row: null, message: `Code "${u.code}" was removed or altered in this file, but is still used by ${u.rows} existing row${u.rows === 1 ? '' : 's'}. Codes cannot be changed once rows reference them — only the name can.` })),
-      };
-    }
-  }
-
-  return { ok: true, mains, subs };
+  if (!removedCodes.length) return [];
+  const counts = await ledgerUsageCounts(removedCodes);
+  return removedCodes.filter((c) => counts[c] > 0).map((c) => ({ code: c, rows: counts[c] }));
 }
 
 // list, usageCounts, replaceAll and validateImport return Promises (step 1.4 B10); toCsv does not
