@@ -66,16 +66,13 @@ import { writeJsonSnapshot, writePreRestoreSnapshot } from './safety-snapshots.j
 // part is an estimate until it is checked on a device (docs/PHONE-TEST-CHECKLIST.md).
 export const LOCALSTORAGE_LIMIT_CHARS = 5 * 1024 * 1024;
 // What localStorage holds now (the levels are core/routes/storage.js's: warn from 70%, strongly from 90%).
-// kvvfs's rollback journal (kvvfs-local-jrnl) is not data: a leftover one takes quota (usedBytes)
-// but is not counted as database bytes (Q7).
-const KVVFS_JOURNAL_KEY = 'kvvfs-local-jrnl';
 export function measureStorage(storage = window.localStorage) {
   let chars = 0, databaseChars = 0;
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i);
     const n = key.length + (storage.getItem(key) || '').length;
     chars += n;
-    if (key.startsWith('kvvfs-local') && key !== KVVFS_JOURNAL_KEY) databaseChars += n;
+    if (key.startsWith('kvvfs-local')) databaseChars += n;
   }
   return { usedBytes: chars * 2, limitBytes: LOCALSTORAGE_LIMIT_CHARS * 2, databaseBytes: databaseChars * 2 };
 }
