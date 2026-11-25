@@ -1,8 +1,21 @@
 # Plan: send the PDF to WhatsApp or email, from Overview and from a reminder
 
-Status: **design only, nothing built.** Written 2026-11-15; plugin versions and the notification
-action support re-checked on 2026-11-22 against the installed packages (section 7). Every step below
-needs the owner's go-ahead before it starts.
+Status: **part 1 built (2026-11-25), no button sends anything yet.** Written 2026-11-15; plugin
+versions and the notification action support re-checked on 2026-11-22 against the installed packages
+(section 7).
+
+Built on 2026-11-25:
+- Settings: `GET/PUT /api/share-settings`. They live in `core/routes/notification-times.js` (not a new
+  `core/routes/share-settings.js`), because both hosts already register that file. `share_email_to`
+  is in `CONTACT_SETTINGS_KEYS`. Tests: `test/ws2c-share-settings.test.js` (both passes).
+- Home: the "Sending PDFs" settings. Test: `npm run test:share-settings`.
+- `@capawesome/capacitor-mail-composer` pinned to exactly `0.2.2`, in `sync-public-modules.js` and the
+  import maps of `overview.html` and `home.html`. Test: `test/ws2c-mail-composer.test.js`.
+- `ShareToPlugin.java` (WhatsApp, then WhatsApp Business; "not-installed" otherwise), registered in
+  `MainActivity.java`, with `<queries>` in the manifest. Test: `test/ws2c-share-to-plugin.test.js`.
+
+Not built yet: `public/share-pdf.js` and the two Overview buttons (build step 4 and the rest of 5
+and 6), the reminder data change (step 2), and the reminder **Send PDF** action (step 7, next).
 
 **Decided by the owner on 2026-11-22:** the **Send PDF** action goes on the existing daily report
 reminders (ids 101–105). A payment-due reminder is a separate, later feature and is not part of
