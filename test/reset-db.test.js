@@ -30,7 +30,9 @@ test('wipes a fully-seeded DB: every table -> 0, ids restart at 1, foreign_key_c
   const dbT = new DatabaseSync(target);
   const tables = dbT.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map((t) => t.name);
   assert.ok(tables.length >= 5, 'schema intact (tables still present)');
-  for (const t of tables) assert.strictEqual(dbT.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n, 0, `${t} must be empty`);
+  // F13: settings keeps only the _migrated_* markers (test/ws2a-reset-db.test.js checks them).
+  const dataRows = (t) => (t === 'settings' ? " WHERE key NOT LIKE '!_migrated!_%' ESCAPE '!'" : '');
+  for (const t of tables) assert.strictEqual(dbT.prepare(`SELECT COUNT(*) n FROM ${t}${dataRows(t)}`).get().n, 0, `${t} must be empty`);
   dbT.exec("INSERT INTO users (username, display_name, password_hash) VALUES ('x','x','x')");
   assert.strictEqual(dbT.prepare('SELECT id FROM users').get().id, 1, 'AUTOINCREMENT ids restart at 1');
   assert.strictEqual(dbT.prepare('PRAGMA foreign_key_check').all().length, 0, 'foreign_key_check clean');
