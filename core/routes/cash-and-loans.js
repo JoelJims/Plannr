@@ -181,6 +181,18 @@ export function register(app, ctx) {
     return l ? `${l.code} ${l.name}` : (ledgerCode || '');
   }
 
+  // An optional link to another row (a service, an allowance) -> { id } or { error }.
+  // id is undefined when the key is absent (keep the existing link), null when blank (clear it),
+  // otherwise a positive whole number.
+  function readOptionalLinkId(body, key, message) {
+    if (!(key in body)) return { id: undefined };
+    const raw = body[key];
+    if (raw == null || raw === '') return { id: null };
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) return { error: message };
+    return { id: n };
+  }
+
   // Shared ledger + sub-ledger resolution/validation from a request body. The SINGLE
   // source of ledger rules — used by cash_out and the contractor-payments ledger tag so
   // they accept the same dropdown + 'CUSTOM' inputs with identical error strings. Returns
@@ -372,21 +384,15 @@ export function register(app, ctx) {
       // spend was for). Manual entry stays valid: no contractServiceId means no link. undefined (key
       // absent, e.g. the editable table) tells finalize() to PRESERVE the existing link on edit;
       // null/'' clears it; a number is validated + guarded there.
-      let contractServiceId; // undefined = not sent
-      if ('contractServiceId' in req.body) {
-        const raw = req.body.contractServiceId;
-        if (raw == null || raw === '') contractServiceId = null;
-        else { const n = Number(raw); if (!Number.isInteger(n) || n <= 0) return { error: 'Invalid service selection.' }; contractServiceId = n; }
-      }
+      const service = readOptionalLinkId(req.body, 'contractServiceId', 'Invalid service selection.');
+      if (service.error) return { error: service.error };
+      const contractServiceId = service.id;
 
       // Contract Phase A — which allowance cap this spend draws against. Same undefined/null/number
       // convention as the service link above, resolved and validated in finalize().
-      let contractAllowanceId; // undefined = not sent
-      if ('contractAllowanceId' in req.body) {
-        const raw = req.body.contractAllowanceId;
-        if (raw == null || raw === '') contractAllowanceId = null;
-        else { const n = Number(raw); if (!Number.isInteger(n) || n <= 0) return { error: 'Invalid allowance selection.' }; contractAllowanceId = n; }
-      }
+      const allowance = readOptionalLinkId(req.body, 'contractAllowanceId', 'Invalid allowance selection.');
+      if (allowance.error) return { error: allowance.error };
+      const contractAllowanceId = allowance.id;
 
       return {
         values: {

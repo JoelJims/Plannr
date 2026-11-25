@@ -201,6 +201,45 @@ export function register(app, ctx) {
     'rate_per_sqft_paise', 'measured_area_milli_sqft', 'completion_period_months', 'supervision_rate_pct', 'specified_brands', 'excluded_scope', 'owner_obligations'];
   const COMPANY_MAX = 120; // Part F: optional company/firm name cap
 
+  // The money half of the form: free-form amount, stated total, and the rate x area price.
+  // -> { amount, stated, rate, area, computed } or { error }.
+  function readContractPricing(body) {
+    const amount = parsePriceOptional(body.amountRupees); // optional free-form; blank -> null
+    if (amount.error) return { error: amount.error };
+
+    // The stated total is OPTIONAL: blank -> NULL. A contract with no stated price contributes 0 to
+    // figure A (total contract) and 0 to owed; a contract that HAS one behaves exactly as before.
+    const stated = parsePriceOptional(body.statedAmountRupees);
+    if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
+
+    // Contract Phase A — rate-based pricing. Both halves are OPTIONAL and independently editable at
+    // any time: the rate is fixed at signing, the area is not known until final measurement, so a
+    // contract routinely sits with a rate and no area for months. When BOTH land, the product REPLACES
+    // whatever is in statedAmountRupees; a typed value sent alongside a complete rate price is
+    // ignored, not rejected, so an older client or a stale tab can't 400 on an otherwise valid save.
+    const rate = parsePriceOptional(body.ratePerSqftRupees);
+    if (rate.error) return { error: 'Enter a valid rate per square foot greater than 0 (up to 2 decimals), or leave it blank.' };
+    const area = parseAreaOptional(body.measuredAreaSqft);
+    if (area.error) return { error: area.error };
+    if (rate.paise != null && area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
+      return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
+    }
+    const computed = unitPricePaise(rate.paise, area.milli); // null unless BOTH halves are present
+    return { amount, stated, rate, area, computed };
+  }
+
+  // 0..many payment dates -> { paymentDates } or { error }.
+  function readPaymentDates(body) {
+    const rawDates = Array.isArray(body.paymentDates) ? body.paymentDates : [];
+    const paymentDates = [];
+    for (const d of rawDates) {
+      const p = parseIsoDate(d);
+      if (p.error || !p.date) return { error: 'Each payment date must be a valid date (YYYY-MM-DD).' };
+      paymentDates.push(p.date);
+    }
+    return { paymentDates };
+  }
+
   // Validate + normalise a contract request body -> { values, paymentDates } or { error }.
   // Required: contractorName, areaOfWork, a valid headline ledger, date signed.
   // Optional: stated amount, free-form amount, date ends, and 0..many payment dates.
@@ -213,27 +252,9 @@ export function register(app, ctx) {
     const led = resolveLedger(req.body); // headline category (fixed-or-CUSTOM), shared rules
     if (led.error) return { error: led.error };
 
-    const amount = parsePriceOptional(req.body.amountRupees); // optional free-form; blank -> null
-    if (amount.error) return { error: amount.error };
-
-    // The stated total is OPTIONAL: blank -> NULL. A contract with no stated price contributes 0 to
-    // figure A (total contract) and 0 to owed; a contract that HAS one behaves exactly as before.
-    const stated = parsePriceOptional(req.body.statedAmountRupees);
-    if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
-
-    // Contract Phase A — rate-based pricing. Both halves are OPTIONAL and independently editable at
-    // any time: the rate is fixed at signing, the area is not known until final measurement, so a
-    // contract routinely sits with a rate and no area for months. When BOTH land, the product REPLACES
-    // whatever is in statedAmountRupees; a typed value sent alongside a complete rate price is
-    // ignored, not rejected, so an older client or a stale tab can't 400 on an otherwise valid save.
-    const rate = parsePriceOptional(req.body.ratePerSqftRupees);
-    if (rate.error) return { error: 'Enter a valid rate per square foot greater than 0 (up to 2 decimals), or leave it blank.' };
-    const area = parseAreaOptional(req.body.measuredAreaSqft);
-    if (area.error) return { error: area.error };
-    if (rate.paise != null && area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
-      return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
-    }
-    const computed = unitPricePaise(rate.paise, area.milli); // null unless BOTH halves are present
+    const pricing = readContractPricing(req.body);
+    if (pricing.error) return { error: pricing.error };
+    const { amount, stated, rate, area, computed } = pricing;
 
     // Contract Phase A — the signing date is OPTIONAL now (it was required). Every field on this form
     // is optional except the contractor, the area of work and the headline ledger. A malformed date
@@ -257,13 +278,9 @@ export function register(app, ctx) {
 
     const company = str(req.body.company).slice(0, COMPANY_MAX); // Part F: optional; blank -> null below
 
-    const rawDates = Array.isArray(req.body.paymentDates) ? req.body.paymentDates : [];
-    const paymentDates = [];
-    for (const d of rawDates) {
-      const p = parseIsoDate(d);
-      if (p.error || !p.date) return { error: 'Each payment date must be a valid date (YYYY-MM-DD).' };
-      paymentDates.push(p.date);
-    }
+    const dates = readPaymentDates(req.body);
+    if (dates.error) return { error: dates.error };
+    const { paymentDates } = dates;
 
     return {
       values: {
