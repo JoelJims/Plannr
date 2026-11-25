@@ -2,7 +2,7 @@
 // temp database (test/helpers.js). docs/share-and-reminder-pdf-plan.md, section 3: where PDFs go
 // (WhatsApp / Email / Ask each time), the email recipient(s) and the subject. Checks: the defaults show,
 // a save is read back after a reload, a bad address is refused with the server's message and changes
-// nothing, and the page throws no errors. Nothing is sent anywhere: this only stores settings.
+// nothing, a failed save request shows a message, and the page throws no errors. Nothing is sent anywhere: this only stores settings.
 const H = require('../test/helpers');
 const { chromium } = require('playwright');
 
@@ -55,6 +55,13 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     check('a bad address is refused with a clear message', /email addresses/.test(await msg.textContent()), await msg.textContent());
     const after = (await H.get('/api/share-settings')).json;
     check('…and nothing changed on the server', JSON.stringify(after.emailTo) === JSON.stringify(['a@example.com', 'b@example.org']), JSON.stringify(after));
+    // A failed request (no answer at all) is caught and said on screen, not left as a silent rejection.
+    await page.route('**/api/share-settings', (route) => (route.request().method() === 'PUT' ? route.abort() : route.continue()));
+    await to.fill('a@example.com');
+    await save.click();
+    await page.waitForFunction(() => /Could not save/.test(document.getElementById('shareMsg').textContent), null, { timeout: 3000 }).catch(() => {});
+    check('a failed save request shows a message', /Could not save/.test(await msg.textContent()) && await msg.evaluate((el) => el.classList.contains('error')), await msg.textContent());
+    await page.unroute('**/api/share-settings');
     check('no page errors', errors.length === 0, errors.join(' | '));
   } catch (e) {
     check('suite ran to the end', false, e.message);

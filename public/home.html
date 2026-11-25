@@ -461,11 +461,17 @@
       shareSettings.dataset.loaded = '1';
     }
     document.getElementById('shareSaveBtn').addEventListener('click', async () => {
-      const res = await fetch('/api/share-settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: shareTargetSelect.value, emailTo: shareEmailTo.value, emailSubject: shareEmailSubject.value }),
-      });
+      let res;
+      try {
+        res = await fetch('/api/share-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: shareTargetSelect.value, emailTo: shareEmailTo.value, emailSubject: shareEmailSubject.value }),
+        });
+      } catch (err) {
+        showShareMsg('Could not save: ' + ((err && err.message) || String(err)) + ' — try again.', 'error');
+        return;
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { showShareMsg(data.error || 'Could not save — try again.', 'error'); return; }
       fillShareSettings(data);
