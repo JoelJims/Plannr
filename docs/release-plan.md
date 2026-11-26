@@ -72,7 +72,8 @@ update those installs.
   `signingConfigs.release` block). `SETUP.md` §2 describes the file's two entries (the store file
   and the alias). The two passwords come from `PLANNR_STORE_PASSWORD` and `PLANNR_KEY_PASSWORD`,
   which `npm run release:android` sets for the Gradle run only, from the environment or a hidden
-  prompt (since 2026-11-25; a file that still has password lines stops the release).
+  prompt (since 2026-11-25; a file that still has password lines stops the release, and the
+  owner decided to keep that stop: section 6).
 - **Where it is now (owner decision, 2026-11-22):** the key is in `D:\Keys\plannr\`, a folder of
   its own outside the project and outside git. `keystore.properties` stays in the project root
   (git-ignored), and its `storeFile` line is the path relative to the project root:
@@ -317,6 +318,13 @@ real-data phone: see the note at the top of section 3.
    until the round is done is the owner's call (also in `SETUP.md` §2). **After the switch round,
    the phone no longer depends on the debug key:** it runs the release build, and only the release
    key matters for it.
+
+3. **Decided: keep the strict stop on password lines in `keystore.properties`** (owner's
+   decision, recorded 2026-11-26). If `keystore.properties` still has a `storePassword` or
+   `keyPassword` line, `npm run release:android` stops before it changes anything and names the
+   lines, never their values. The other way named was only to warn and go on. It was not chosen:
+   a password line left in the file keeps the password on disk, next to the key's path. Remove
+   the two lines (keep `storeFile` and `keyAlias`); the passwords belong in the password manager.
 
 Owner to-do (2026-11-23): make the second offline backup copy of the release key (section 1.3),
 and decide whether to keep a copy of the laptop's debug key until the switch round (above).
