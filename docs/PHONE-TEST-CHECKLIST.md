@@ -1209,6 +1209,22 @@ Same emulator and method as above, with the RC (`1c54c4c8…e1f0`).
 
 **Not automatable on the emulator, so still for a real phone:** 0 (the phone's own details), the real `localStorage` limit in 2, 4 on a real phone's print service, 5 over the build that is on the phone now, 6 with a real Google account, and 9 with your hands on the device. On a real phone, checks 2, 6 and 9 only with test data, never on the phone that holds your real data ("Rules for this round").
 
+### Emulator, 2026-11-26: a release build over a release build, with ledger entries (TEST key)
+
+The owner asked to check that real ledger entries, not only a setting, survive an update from one
+release build to the next. `emulator-5554` (Android 16), test data only. Two release builds of the
+same code (commit `4727674` on `ws3-c-release`), versionCode 1 and 2, both signed with a throwaway
+**TEST key** (not the release key). Driven over adb with taps and key presses, a screenshot after
+every step. Times are the emulator's (`dumpsys package`).
+
+| Step | Result | adb answers / notes |
+|---|---|---|
+| Fresh install of versionCode 1 | Pass | `uninstall`: `Success`; `install`: `Success`; firstInstallTime 15:52:10 |
+| Three entries made in the app | Pass | Cash inflow ₹1,111.00 "TEST-RR-1" and ₹2,222.00 "TEST-RR-2"; cash outflow ₹3,333.00 "TEST-RR-3" (ledger 6.0 Materials — Structural, in the contract: No). Each save answered "Entry added." |
+| Force-stop, open again (versionCode 1) | Pass | All three listed, the same amounts, dates and reasons |
+| `install -r` of versionCode 2 | Pass | `Success`; versionCode 2; firstInstallTime kept (15:52:10), lastUpdateTime 16:02:22: an update, not a new install |
+| Open after the update | Pass | All three listed, the same amounts, dates and reasons |
+
 ### The owner's phone: the APK under test
 
 Not yet run. Step A comes first: both backups made on the phone, copied to the laptop, both
