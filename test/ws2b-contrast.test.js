@@ -151,3 +151,43 @@ test('ratio maths matches known WCAG values', () => {
   assert.strictEqual(ratio([0, 0, 0], [255, 255, 255]).toFixed(2), '21.00');
   assert.strictEqual(ratio([119, 119, 119], [255, 255, 255]).toFixed(2), '4.48');
 });
+
+// The pages' own <style> blocks style some fields too (a textarea, number inputs, selects, a time
+// input). Every resting field border there must meet the same 3:1 as the shared field rules above,
+// against the field's own background, a panel and the Overview card. Read from every page, so a
+// field rule added later is checked as well. A selector counts as a field when it names input,
+// select or textarea, or a class the page puts on one of them. :focus, :hover, :disabled and option
+// rules are not resting borders; checkboxes and radios are not text fields.
+const FIELD_SEL = /(^|[\s>+~(])(input|select|textarea)(?![\w-])/;
+const NOT_RESTING = /:focus|:hover|:active|:disabled|::|\boption\b|type="(checkbox|radio)"/;
+const COLOUR = /var\(--[\w-]+\)|rgba?\([^)]*\)|#[0-9a-f]{3,6}\b/i;
+const fieldClasses = (html) => new Set([...html.matchAll(/<(?:input|select|textarea)\b[^>]*\bclass="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+const lastCompound = (sel) => sel.split(/[\s>+~]+/).pop();
+const PAGE_FIELD_RULES = [];
+for (const page of fs.readdirSync(path.join(__dirname, '..', 'public')).filter((f) => f.endsWith('.html')).sort()) {
+  const html = read(page);
+  const classes = fieldClasses(html);
+  const isField = (s) => FIELD_SEL.test(s) || [...lastCompound(s).matchAll(/\.([\w-]+)/g)].some((m) => classes.has(m[1]));
+  const styles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const [, selText, body] of styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const fieldSels = selText.split(',').map((s) => s.trim()).filter((s) => isField(s) && !NOT_RESTING.test(s));
+    if (!fieldSels.length) continue;
+    for (const [, prop, value] of body.matchAll(/(?:^|;|\s)(border|border-color)\s*:\s*([^;]+)/g)) {
+      const colour = COLOUR.exec(value);
+      if (!colour) continue;
+      const bgDecl = /(?:^|;|\s)background(?:-color)?\s*:\s*(var\(--[\w-]+\)|rgba?\([^)]*\)|#[0-9a-f]{3,6})/i.exec(body);
+      PAGE_FIELD_RULES.push({ page, sel: fieldSels.join(', '), prop, colour: colour[0], own: bgDecl ? c(bgDecl[1]) : PANEL2 });
+    }
+  }
+}
+test('page field rules are found (the scan is not empty)', () => {
+  assert.ok(PAGE_FIELD_RULES.length >= 10, `found ${PAGE_FIELD_RULES.length} page field border rules`);
+});
+for (const { page, sel, prop, colour, own } of PAGE_FIELD_RULES) {
+  for (const [where, surface] of [["the field's own background", own], ['a panel, card or dialog', PANEL], ['the Overview card over the brightest page', OV_CARD]]) {
+    test(`contrast: ${page} "${sel}" resting ${prop} against ${where} >= ${UI}:1`, () => {
+      const r = ratio(over(c(colour), own), surface);
+      assert.ok(r >= UI, `${page} "${sel}" ${prop} ${colour} against ${where}: measured ${r.toFixed(2)}:1, needs ${UI}:1`);
+    });
+  }
+}
