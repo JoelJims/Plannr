@@ -15,7 +15,7 @@
 // Without both plugins (the browser preview, the UI suites, an older APK) nothing here touches any
 // file: chooseStorage() answers "localstorage" at once, and the app runs exactly as before.
 
-import { decideAtStartup } from './core/storage-move.js';
+import { decideAtStartup, moveConfirmed } from './core/storage-move.js';
 import { openCapacitorAdapter, nativePlugins } from './db-adapter-capacitor.js';
 
 export const MARKER_FILE = 'plannr-storage.json';
@@ -93,7 +93,8 @@ export async function makePhoneHost({ plugins, localStorage: ls, backup, source 
       const snaps = await import('./safety-snapshots.js');
       const fsApi = await import('@capacitor/filesystem');
       const filename = `plannr-${kind}-${snaps.stampNow()}.db`;
-      const path = await snaps.saveSnapshot(filename, bytes, fsApi);
+      // Q12: the clean-up after it asks this marker whether the move is confirmed.
+      const path = await snaps.saveSnapshot(filename, bytes, fsApi, { moveConfirmed: async () => moveConfirmed(await host.marker.read()) });
       // Read it back and compare (plan §2.1 step 2), beyond saveSnapshot's own stat check.
       const { data } = await fsApi.Filesystem.readFile({ path, directory: fsApi.Directory.Data });
       const back = await snaps.gunzip(fromBase64(data));
@@ -179,6 +180,18 @@ export async function makePhoneHost({ plugins, localStorage: ls, backup, source 
     async lastEncryptedBackupAt() { return lastEncryptedBackupAt ? lastEncryptedBackupAt() : null; },
   };
   return host;
+}
+
+/**
+ * Q12: has the storage move been confirmed in the app (the marker file says so)? False without both
+ * plugins, without a marker file, or if it cannot be read. safety-snapshots.js asks this before it
+ * lets a clean-up delete a storage-move snapshot. In the UI suites the stand-in plugins are used.
+ */
+export async function moveIsConfirmed({ plugins: override = globalThis.__plannrTestPlugins, localStorage: ls = globalThis.localStorage } = {}) {
+  const plugins = await phonePlugins(override);
+  if (!plugins) return false;
+  const host = await makePhoneHost({ plugins, localStorage: ls });
+  return moveConfirmed(await host.marker.read());
 }
 
 /** The facts decideAtStartup() takes. */
