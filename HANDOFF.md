@@ -493,12 +493,15 @@ There is deliberately **no reset button inside the app**.
   Data Backup → **Move to the new storage**. It has not been run on the owner's real data yet.
 - **The owner still has to make the second offline backup copy of the release key**
   (`docs/release-plan.md` §1.3).
-- **How the owner's phone moves from the debug build to the release build is not decided.**
-  A release APK cannot be installed over a debug build, and that phone holds the real data on a
-  debug build. Until the owner decides, it gets debug builds only, as in
-  `docs/PHONE-TEST-CHECKLIST.md`. The question is in `docs/release-plan.md` §6. While it runs a
-  debug build, only builds signed by the current laptop's debug key install over it; whether to
-  keep a copy of that key is also the owner's call (`SETUP.md` §2).
+- **The owner's phone moves from the debug build to the release build once, by the switch round
+  (decided; not done yet).** A release APK cannot be installed over a debug build, and that phone
+  holds the real data on a debug build. The owner does the round by hand: back up, prove the
+  restore on the emulator, uninstall the debug app, install the release APK, restore, verify
+  (`docs/release-plan.md` §6; check boxes in `docs/PHONE-TEST-CHECKLIST.md`). It is the only
+  uninstall and the only restore on that phone. Until it is done, the phone gets debug builds
+  only, and only builds signed by the current laptop's debug key install over it; whether to keep
+  a copy of that key until then is the owner's call (`SETUP.md` §2). After the round, the phone no
+  longer needs the debug key.
 - **A database made before 2026-08-23 (user_version 1) whose upgrade fails in its last steps
   needs two starts.** The next start shows an error once ("no such column:
   contract_allowance_id"); the start after that finishes the upgrade. Nothing is lost, and the
