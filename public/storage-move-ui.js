@@ -6,6 +6,8 @@
 //   On localStorage:  "Move to the new storage", with the passphrase of the step-1 encrypted backup;
 //                     after an interruption, "Continue" or "Not now".
 //   On the file:      what the check found, and the old copy: "Delete the old copy", "Move data back".
+//                     Q12: until you confirm the move ("Confirm the move"), a note says the safety copy
+//                     from before the move is kept; after that it goes in the normal snapshot rotation.
 // While a move runs, an overlay ("Moving your data…") covers the page and everything behind it is
 // inert: nothing can be edited. After a switch either way the page reloads, so the app opens the copy
 // the marker file names (storage-native.js chooseStorage()).
@@ -14,7 +16,7 @@
 // saveFile() as "Download encrypted backup" (the same proof that the file was written, the same
 // "mark exported"), and confirmed like the Ledger List import's safety backup.
 
-import { moveToFile, moveBack, deleteOldCopy, MoveError, sha256Hex, MB, MARKER_NATIVE, MARKER_LOCAL } from './core/storage-move.js';
+import { moveToFile, moveBack, deleteOldCopy, confirmMove, moveConfirmed, MoveError, sha256Hex, MB, MARKER_NATIVE, MARKER_LOCAL } from './core/storage-move.js';
 import { summaryText } from './core/storage-check.js';
 import { makePhoneHost, phonePlugins, PROGRESS_KEY } from './storage-native.js';
 import { dbAdapter } from './db.js';
@@ -121,6 +123,39 @@ async function hostFor(storage, backup) {
   });
 }
 
+// ---- Q12: the confirm step (built here; the page's own markup is not changed) --------------------------
+
+// A note and a "Confirm the move" button, under what the check found.
+function confirmPanel() {
+  if ($('moveConfirm')) return;
+  const box = document.createElement('div');
+  box.id = 'moveConfirm';
+  const note = document.createElement('p');
+  note.id = 'moveConfirmText';
+  note.tabIndex = -1; // the focus goes here once the button is gone
+  const actions = document.createElement('div');
+  actions.id = 'moveConfirmActions';
+  actions.className = 'mv-actions';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'moveConfirmBtn';
+  btn.className = 'btn primary';
+  btn.textContent = 'Confirm the move';
+  actions.append(btn);
+  box.append(note, actions);
+  $('moveDoneText').after(box);
+}
+
+function confirmText(marker) {
+  if (moveConfirmed(marker)) {
+    return `Move confirmed on ${dayText(marker.safetyCopy.confirmedAt)}. The safety copy from before the move now goes in the normal rotation of safety copies: Plannr keeps the newest 3.`;
+  }
+  const c = marker.check;
+  const what = c && Number.isFinite(Number(c.tables)) && Number.isFinite(Number(c.rows))
+    ? `your data (${c.tables} tables, ${Number(c.rows).toLocaleString('en-IN')} rows)` : 'your data';
+  return `Not confirmed yet. On ${dayText(marker.movedAt)} ${what} was moved into its own file on this phone. A safety copy from before the move is kept on this phone until you confirm the move. Check that your entries look right, then confirm.`;
+}
+
 /** Step 1 needs a new backup unless an interrupted move already saved one of exactly this data. */
 async function backupNeeded() {
   const p = readJson(PROGRESS_KEY);
@@ -216,6 +251,7 @@ export async function initMovePanel(deps) {
   if (storage.use !== 'native') return;
   $('moveTag').textContent = 'New storage';
   show($('oldCopyPanel'), true);
+  confirmPanel();
   const host = await hostFor(storage, null);
   const render = async () => {
     const marker = (await host.marker.read()) || storage.marker || {};
@@ -226,8 +262,40 @@ export async function initMovePanel(deps) {
       ? `Old copy kept (from ${dayText((marker.oldCopy && marker.oldCopy.since) || marker.movedAt)}${marker.oldCopy && marker.oldCopy.bytes ? ', ' + mbText(marker.oldCopy.bytes) : ''}). Nothing deletes it unless you do.`
       : `The old copy was deleted${marker.oldCopy && marker.oldCopy.deletedAt ? ' on ' + dayText(marker.oldCopy.deletedAt) : ''}.`;
     show($('deleteOldCopyBtn'), kept);
+    $('moveConfirmText').textContent = confirmText(marker);
+    // .mv-actions sets display: flex, which would override the hidden attribute: hide it by style.
+    $('moveConfirmActions').style.display = moveConfirmed(marker) ? 'none' : '';
   };
   await render();
+
+  // Q12: "Confirm the move". Asks first; then the safety copy goes in the normal rotation.
+  $('moveConfirmBtn').addEventListener('click', async () => {
+    msg.clear();
+    const btn = $('moveConfirmBtn');
+    btn.disabled = true;
+    let confirmedNow = false;
+    try {
+      try {
+        await confirmMove(host, { confirmed: false });
+        confirmedNow = true; // it was already confirmed
+        msg.show('The move is already confirmed.', 'info');
+      } catch (err) {
+        if (!(err instanceof MoveError) || err.step !== 'confirm') throw err;
+        const ok = await confirmModal({ title: 'Confirm the move?', message: err.message, confirmLabel: 'Confirm the move' });
+        if (!ok) { msg.show('Not confirmed. The safety copy from before the move is kept.', 'info'); return; }
+        await confirmMove(host, { confirmed: true });
+        confirmedNow = true;
+        msg.show('The move is confirmed. The safety copy from before the move now goes in the normal rotation.', 'success');
+      }
+    } catch (err) {
+      msg.show(err instanceof MoveError ? err.message : `The move could not be confirmed: ${errText(err)}`, 'error');
+    } finally {
+      btn.disabled = false;
+      await render();
+      // Once confirmed the button is gone, so the focus goes to the note; otherwise back to the button.
+      (confirmedNow ? $('moveConfirmText') : btn).focus();
+    }
+  });
 
   $('deleteOldCopyBtn').addEventListener('click', async () => {
     msg.clear();
