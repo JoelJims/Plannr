@@ -967,7 +967,7 @@ automated tests). Two things to look at:
 - [ ] **PDF total row.** Add three or four entries, then Overview → export the full PDF. In the
       Transactions table, the **Total (n)** row ends at the same right edge as the rows above it.
       Before this build it had one extra empty cell sticking out on the right.
-- [ ] **Restores still fit.** Restores now have a 20 MB limit (the app's whole storage is about
+- [ ] **Restores still fit.** Restores now have a 32 MB limit (the app's whole storage is about
       10 MB, so a real backup is far below it). In check 3, note the encrypted file's size; the
       encrypted restore must still work.
 
