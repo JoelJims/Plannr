@@ -57,8 +57,9 @@ still open. Not released.
   then rolled back, so nothing was lost).
 - **Safety snapshots (Q12).** A snapshot taken by the storage move no longer cuts the
   regular rotation from three snapshots to two. Move snapshots are kept until the move is confirmed
-  on the Data Backup page (owner's decision, branch `ws3-b-q12`); after that the newest three
-  snapshots in total remain, and the one just written is never deleted.
+  on the Data Backup page (owner's decision, branch `ws3-b-q12`); after that, from the next
+  snapshot written, the newest three snapshots in total remain. The one just written is never
+  deleted, and a move back makes the move unconfirmed again.
 
 ### Safety
 - **A warning about the old storage (Q2).** While the data is still in the WebView's
