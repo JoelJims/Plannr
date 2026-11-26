@@ -58,9 +58,9 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | Q7 | Low | A leftover `kvvfs-local-jrnl` record is counted as data and takes quota | `public/local-api.js:67-76` | **Won't fix** (2026-11-25, owner's decision): the leftover record really takes `localStorage` quota, so the storage page's sizes and the move-back room check (Q4) count it on purpose. A fix, `c6a9a33`, was reverted in `4e87808`: `backupBytes` relies on it (section 11) |
 | Q8 / R3 | Low | `node:sqlite` stores numbers as REAL: `sqlite_sequence.seq` and unchecked TEXT columns from hand-edited backups differ between desktop and phone | `db.js:1001,1101,1337`; `backup-format.js:122-283,328` | Open |
 | Q9 | Low | A backup's `sequences` naming a table without an id gives a 500 instead of a 400 | `backup-format.js:178-184,326` | **Fixed** 2026-11-22 (`d8ef781`, `ws-a-fixes`) |
-| Q10 | Low | No upper limit on amounts; a typo near ₹90 trillion can break the Overview's sums | `core/parsers.js:11-17` | Open |
-| Q11 | Low | Any I/O error is reported as "storage full" on every engine | `db.js:1717-1723` | Open |
-| Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | **Partly fixed** 2026-11-22 (`7b2d695`, `ws-a-fixes`): a move snapshot no longer cuts the rotation. Move snapshots are still never pruned, so they add up: open (prune them, or keep them all; not decided) |
+| Q10 | Low | No upper limit on amounts; a typo near ₹90 trillion can break the Overview's sums | `core/parsers.js:11-17` | **Fixed** 2026-11-26 (`7c6302f`, `ws3-a-fixes`, owner's decision): one amount is at most ₹1,00,00,000 (₹1 crore); a save above it gets a 400 with a plain message. Sums stay exact integer paise (section 12) |
+| Q11 | Low | Any I/O error is reported as "storage full" on every engine | `db.js:1717-1723` | **Fixed** 2026-11-26 (`08b3a69`, `ws3-a-fixes`, owner's decision): only `SQLITE_FULL` or an I/O error the browser's quota caused says "Storage is full"; any other failed save says "Couldn't save – try again." (section 12) |
+| Q12 | Low | Move snapshots go through the regular rotation and cut it by one; they are never pruned | `public/safety-snapshots.js:40,52-57` | **Partly fixed** 2026-11-22 (`7b2d695`, `ws-a-fixes`): a move snapshot no longer cuts the rotation. Move snapshots are still never pruned, so they add up. The rest: fix in `ws3-b-q12` (its own pull request) |
 | Q13 | Low | If planning the upgrade throws, the phone shows a blank page | `public/local-bootstrap.js:54` | **Fixed** 2026-11-22 (`76d4c3d`, `ws-a-fixes`) |
 | Q14 | Low | A ledger entry and its custom-name write are two writes; a failure between them leads to a duplicate on retry | `core/ledger-crud.js:44-66,82-121` | **Fixed** 2026-11-22 (`908b9d4`, `ws-a-fixes`) |
 | Q16 | Low | The phone's API answers every error as 500 and does not decode route params | `public/local-api.js:303-321` | **Fixed** 2026-11-25 (`d184d3b`, `ws2-a-fixes`) |
@@ -70,7 +70,7 @@ Severity is judged for this app: one user, offline, phone app shipped, dev serve
 | F10 | Low | The phone pass picks its test files with a literal regex | `run-tests.js:44` | **Fixed** 2026-11-25 (`055c7c9`, `ws2-a-fixes`) |
 | F12 | Low | No CI, lint or format configuration | no `.github/` | **Fixed**: CI added with `plannr-phase2` (PR #1) |
 | F13 | Low | `reset-db` deletes the `_migrated_*` markers too | `reset-db.js:58` | **Fixed** 2026-11-25 (`8ee6c0b`, `ws2-a-fixes`) |
-| F14 | Low | Encrypted restore body limit 20 MB (base64), so a database over about 15 MB cannot be restored on the phone; export does not warn | `request-rules.js:11,26` | Open |
+| F14 | Low | Encrypted restore body limit 20 MB (base64), so a database over about 15 MB cannot be restored on the phone; export does not warn | `request-rules.js:11,26` | **Fixed** 2026-11-26 (`884d292`, `ws3-a-fixes`, owner's decision): the limit is 32 MB (an encrypted file of up to 24 MB), and the Data Backup page warns at export from 75% of it (section 12) |
 | F15–F18 | Low | Fetch-shim edge cases; row buttons can be double-submitted; unsaved input lost on Back; modal focus | `public/local-api.js:291-292`; `public/data-backup.html:1066-1073`; `public/plannr-ui.js:370-463` | Open (F18 **Fixed** 2026-11-22: `f2f1701`, `ws-c-cleanup`; checked by `npm run test:modal-focus`. F15 **Fixed** 2026-11-25: `832d31d`, then the `Request` case, `ws2-a-fixes`) |
 | F20 | Low | `engines` says Node ≥22.12.0; `node:sqlite` is unflagged from 22.13 (unchecked) | `package.json:41` | Open |
 | E1 | Low | The PDF export gives up after 25 s; a slow emulator reached it | `public/overview.html` (withTimeout), emulator 2026-11-21 | Open; `phone-test.ps1` now waits up to 90 s and reports the PDF time (`46d21ec`): 4.1 to 4.5 s on the emulator 2026-11-22 |
@@ -290,3 +290,16 @@ code before it.
 
 Still open from this list: Q11, Q10, F14, S4, F16, F17 (Q10 and F14 need a limit value from
 the owner). F20 needs `package.json`, which this branch does not change.
+
+## 12. Follow-up, 2026-11-26 (`ws3-a-fixes`)
+
+Fixed on the branch `ws3-a-fixes`, as the owner decided. Each fix has a test (`test/ws3a-*.test.js`)
+that failed on the code before it.
+
+| Finding | What changed | Commit |
+|---|---|---|
+| Q7 | **Won't fix** (2026-11-25, owner's decision). The leftover `kvvfs-local-jrnl` record really takes `localStorage` quota. The storage page's sizes and the move-back room check (Q4) count it on purpose, and `backupBytes` relies on it (the reverted `c6a9a33`). Docs only | `7aa2928` |
+| Q10 | One amount is at most ₹1,00,00,000.00 (₹1 crore): `MAX_AMOUNT_PAISE` in `core/parsers.js`. Cash in, cash out (add, edit, Save All), loans, contractor payments, the budget, the contract's amounts (rate × area too) and its allowances refuse more with a 400: "An amount can be at most ₹1,00,00,000 (₹1 crore)." Amounts were already stored and summed as integer paise. With the cap, a total stays exact for over nine million amounts; a test sums 6,000 amounts at the cap on both passes | `7c6302f` |
+| Q11 | `isStorageFullError` (`db.js`) says "full" only for `SQLITE_FULL`, or for an I/O error the browser's quota caused. kvvfs logs the `QuotaExceededError` through `sqlite3.config.error`, and `watchKvvfsQuota` listens there. Any other failed save answers "Couldn't save – try again." (`SAVE_FAILED` in `request-rules.js`); a failed read still answers "Something went wrong.". `test:storage-limit` still shows "Storage is full" for a real quota error | `08b3a69` |
+| F14 | The restore limit is 32 MB (`request-rules.js`): an encrypted file of up to 24 MB, so every database the storage meter calls healthy can be restored. The Data Backup page shows a note under each export button from 75% of what a restore takes: the size, the limit and what to do | `884d292` |
+| Q12 | The rest (pruning move snapshots): fix in `ws3-b-q12` (its own pull request) | |
