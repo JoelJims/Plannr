@@ -109,14 +109,43 @@ for (const [what, fg, bg, min] of PAIRS) {
   });
 }
 
-// The resting border of a text field is the only thing that marks the field out on a panel
-// (WCAG 1.4.11 asks 3:1). It measures about 1.5:1 today. Raising it brightens every field border
-// in the app, so it is left for the owner to decide; this records the measured ratio.
-test('contrast: resting text-field border against the panel (needs an owner decision)', { todo: 'owner decision: brighter field borders' }, () => {
-  const border = over(c(decl(CSS, 'textarea', 'border') .split(' ').slice(2).join(' ')), PANEL2);
-  const r = ratio(border, PANEL);
-  assert.ok(r >= UI, `field border: measured ${r.toFixed(2)}:1, needs ${UI}:1`);
-});
+// The resting border of a text field is the only thing that marks the field out (WCAG 1.4.11 asks
+// 3:1 against the colours on both sides of it). Owner's decision: a field border colour of its own
+// that meets 3:1; --line-strong (panel and card borders) stays as it is.
+// The border is drawn over the field's own background, so it is laid over that first.
+// Surfaces fields sit on: their own background; a panel, card or dialog (--panel), which is also
+// lighter than the plain --bg page (no field sits on the page itself: every form is in a card);
+// the Overview card, which is translucent, over the brightest point of the page behind it
+// (the amber glow with the grid lines crossing on top); and an edit-table row marked with an error.
+// Every field is checked against every one of them, so a field that moves is still covered.
+const PAGE_BRIGHTEST = [...decl(CSS, 'body', 'background-image').matchAll(/rgba?\([^)]*\)/g)]
+  .map((m) => parseColour(m[0])).reverse().reduce((base, layer) => over(layer, base), BG);
+const OV_CARD = over(c(decl(read('overview.html'), '.ov-card', 'background')), PAGE_BRIGHTEST);
+const ERROR_ROW = c(decl(CSS, '.tx-table tr.tx-err td', 'background'));
+const FIELDS = [
+  ['text field and textarea', 'input[type="text"],\ninput[type="password"],\ntextarea'],
+  ['edit-table field', '.tx-in, .tx-sel'],
+  ['filter-bar field', '.plf-in, .plf-sel'],
+  ['ledger picker search box', '.lb-search'],
+  ['ledger picker button (it stands in for the ledger <select>)', '.lb-trigger'],
+];
+for (const [what, sel] of FIELDS) {
+  const own = c(decl(CSS, sel, 'background'));
+  const surfaces = [
+    ["the field's own background", own],
+    ['a panel, card or dialog', PANEL],
+    ['the Overview card over the brightest page', OV_CARD],
+    ['an error row on a card', over(ERROR_ROW, PANEL)],
+    ['an error row on the Overview card', over(ERROR_ROW, OV_CARD)],
+  ];
+  for (const [where, surface] of surfaces) {
+    test(`contrast: resting ${what} border against ${where} >= ${UI}:1`, () => {
+      const border = over(c(decl(CSS, sel, 'border').split(' ').slice(2).join(' ')), own);
+      const r = ratio(border, surface);
+      assert.ok(r >= UI, `${what} border against ${where}: measured ${r.toFixed(2)}:1, needs ${UI}:1`);
+    });
+  }
+}
 
 test('ratio maths matches known WCAG values', () => {
   assert.strictEqual(ratio([0, 0, 0], [255, 255, 255]).toFixed(2), '21.00');
