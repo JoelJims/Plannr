@@ -155,35 +155,48 @@ test('ratio maths matches known WCAG values', () => {
 // The pages' own <style> blocks style some fields too (a textarea, number inputs, selects, a time
 // input). Every resting field border there must meet the same 3:1 as the shared field rules above,
 // against the field's own background, a panel and the Overview card. Read from every page, so a
-// field rule added later is checked as well. A selector counts as a field when it names input,
-// select or textarea, or a class the page puts on one of them. :focus, :hover, :disabled and option
-// rules are not resting borders; checkboxes and radios are not text fields.
-const FIELD_SEL = /(^|[\s>+~(])(input|select|textarea)(?![\w-])/;
+// field rule added later is checked as well. A selector counts as a field when the element it styles
+// (its last part) is an input, select or textarea, or has a class or id the page puts on one of them.
+// :focus, :hover, :disabled and option rules are not resting borders; checkboxes and radios are not
+// text fields. Every border side counts, and a border whose colour cannot be measured fails (only
+// "none" and a zero width are not borders).
+const FIELD_EL = /^(input|select|textarea)(?![\w-])/;
 const NOT_RESTING = /:focus|:hover|:active|:disabled|::|\boption\b|type="(checkbox|radio)"/;
 const COLOUR = /var\(--[\w-]+\)|rgba?\([^)]*\)|#[0-9a-f]{3,6}\b/i;
+const BORDER_PROP = /(?:^|;|\s)(border(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?(?:-color)?)\s*:\s*([^;]+)/g;
+const NOT_A_BORDER = /^\s*(none|0(px)?)(\s|$)/;
 const fieldClasses = (html) => new Set([...html.matchAll(/<(?:input|select|textarea)\b[^>]*\bclass="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+const fieldIds = (html) => new Set([...html.matchAll(/<(?:input|select|textarea)\b[^>]*\bid="([^"]*)"/g)].map((m) => m[1]));
 const lastCompound = (sel) => sel.split(/[\s>+~]+/).pop();
 const PAGE_FIELD_RULES = [];
 for (const page of fs.readdirSync(path.join(__dirname, '..', 'public')).filter((f) => f.endsWith('.html')).sort()) {
   const html = read(page);
   const classes = fieldClasses(html);
-  const isField = (s) => FIELD_SEL.test(s) || [...lastCompound(s).matchAll(/\.([\w-]+)/g)].some((m) => classes.has(m[1]));
+  const ids = fieldIds(html);
+  const isField = (s) => {
+    const last = lastCompound(s);
+    return FIELD_EL.test(last) || [...last.matchAll(/\.([\w-]+)/g)].some((m) => classes.has(m[1])) || [...last.matchAll(/#([\w-]+)/g)].some((m) => ids.has(m[1]));
+  };
   const styles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
   for (const [, selText, body] of styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const fieldSels = selText.split(',').map((s) => s.trim()).filter((s) => isField(s) && !NOT_RESTING.test(s));
     if (!fieldSels.length) continue;
-    for (const [, prop, value] of body.matchAll(/(?:^|;|\s)(border|border-color)\s*:\s*([^;]+)/g)) {
+    for (const [, prop, value] of body.matchAll(BORDER_PROP)) {
+      if (!prop.endsWith('-color') && NOT_A_BORDER.test(value)) continue;
       const colour = COLOUR.exec(value);
-      if (!colour) continue;
       const bgDecl = /(?:^|;|\s)background(?:-color)?\s*:\s*(var\(--[\w-]+\)|rgba?\([^)]*\)|#[0-9a-f]{3,6})/i.exec(body);
-      PAGE_FIELD_RULES.push({ page, sel: fieldSels.join(', '), prop, colour: colour[0], own: bgDecl ? c(bgDecl[1]) : PANEL2 });
+      PAGE_FIELD_RULES.push({ page, sel: fieldSels.join(', '), prop, value: value.trim(), colour: colour && colour[0], own: bgDecl ? c(bgDecl[1]) : PANEL2 });
     }
   }
 }
 test('page field rules are found (the scan is not empty)', () => {
   assert.ok(PAGE_FIELD_RULES.length >= 10, `found ${PAGE_FIELD_RULES.length} page field border rules`);
 });
-for (const { page, sel, prop, colour, own } of PAGE_FIELD_RULES) {
+for (const { page, sel, prop, value, colour, own } of PAGE_FIELD_RULES) {
+  test(`${page} "${sel}" ${prop} has a colour this test can measure`, () => {
+    assert.ok(colour, `${page} "${sel}" ${prop}: "${value}" names no colour this test can measure (use a var(), rgb(a) or #hex colour)`);
+  });
+  if (!colour) continue;
   for (const [where, surface] of [["the field's own background", own], ['a panel, card or dialog', PANEL], ['the Overview card over the brightest page', OV_CARD]]) {
     test(`contrast: ${page} "${sel}" resting ${prop} against ${where} >= ${UI}:1`, () => {
       const r = ratio(over(c(colour), own), surface);
