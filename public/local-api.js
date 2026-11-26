@@ -320,7 +320,7 @@ export function installFetchShim(repo) {
         await r.handler(req, res); // handlers may be sync or async (Phase 7's encrypted backup routes are async)
       } catch (e) {
         // As server.js's error handler (Q16): an error that carries a status keeps it, and only a
-        // server error (5xx) is logged and answered "Something went wrong.".
+        // server error (5xx) is logged and given the generic message (request-rules.js serverError).
         const status = Number((e && (e.statusCode || e.status)) || 500);
         if (status < 500) {
           res.status(status).json(requestRules.invalidRequest());
@@ -328,7 +328,8 @@ export function installFetchShim(repo) {
           console.error('local-api handler error:', e);
           // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
           // hits the storage limit lands here. Say so, instead of the generic message.
-          res.status(status).json({ error: isStorageFullError(e) ? storageFull('this change was not saved.') : 'Something went wrong.' });
+          // Q11: any other failed save says "Couldn't save – try again."; a failed read "Something went wrong.".
+          res.status(status).json(isStorageFullError(e) ? { error: storageFull('this change was not saved.') } : requestRules.serverError(method));
         }
       }
       return toResponse(res);

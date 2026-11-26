@@ -27,6 +27,10 @@ const TOO_LARGE = {
 };
 export const tooLarge = (kind) => ({ error: TOO_LARGE[kind] || TOO_LARGE.normal });
 export const invalidRequest = () => ({ error: 'Invalid request.' });
+// Q11 (the owner's decision): a save that failed for any reason except a full storage (that answer is
+// each platform's own "Storage is full — ..." text). A failed read keeps "Something went wrong.".
+export const SAVE_FAILED = "Couldn't save – try again.";
+export const serverError = (method) => ({ error: method === 'GET' || method === 'HEAD' ? 'Something went wrong.' : SAVE_FAILED });
 export const notFound = (method, path) => ({ error: `Not found: ${method} ${path}` });
 
 // UTF-8 size of a string, which is what the desktop's limit counts. Cheap answers first: every

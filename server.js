@@ -483,7 +483,7 @@ app.use((req, res, next) => {
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   // Respect a status the error already carries (e.g. body-parser sets 400 for
   // malformed JSON). Only genuine server errors (5xx) are logged and get the
-  // generic 'Something went wrong.' message; client errors report their status.
+  // generic message (request-rules.js serverError); client errors report their status.
   const status = (err && (err.statusCode || err.status)) || 500;
   if (status >= 500) console.error('Unhandled error:', err);
   // Phase 4a (WASM SQLite port prep): a write that hit the kvvfs storage ceiling surfaces as a clean
@@ -500,7 +500,8 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     return res.status(413).json(requestRules.tooLarge(requestRules.bodyKind(req.method, req.path)));
   }
   if (err && err.type === 'entity.parse.failed') return res.status(400).json(requestRules.invalidRequest());
-  const body = { error: status >= 500 ? 'Something went wrong.' : 'Invalid request.' };
+  // Q11: any other failed save answers "Couldn't save – try again."; a failed read "Something went wrong.".
+  const body = status >= 500 ? requestRules.serverError(req.method) : requestRules.invalidRequest();
   if (!IS_PROD && err && err.message) body.detail = err.message; // dev aid only
   res.status(status).json(body);
 });
