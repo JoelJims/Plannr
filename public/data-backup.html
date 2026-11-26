@@ -273,6 +273,7 @@
           </div>
         </details>
         <div id="jsonMsg" class="msg" role="status" aria-live="polite"></div>
+        <div id="jsonSizeNote" class="msg" role="status" aria-live="polite"></div>
         <button type="button" id="downloadJsonBtn" class="btn primary">Download JSON backup</button>
       </section>
 
@@ -300,6 +301,7 @@
           </div>
         </details>
         <div id="encExportMsg" class="msg" role="status" aria-live="polite"></div>
+        <div id="encExportSizeNote" class="msg" role="status" aria-live="polite"></div>
         <label for="encExportPass">Passphrase</label>
         <input type="password" id="encExportPass" autocomplete="new-password" minlength="10" placeholder="At least 10 characters">
         <label for="encExportPass2">Type the passphrase again</label>
@@ -642,17 +644,33 @@
         .then((m) => m.initMovePanel({ makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText }))
         .catch((err) => console.error('[data-backup] the storage move panel could not start:', err));
 
+      // F14: a backup at 75% or more of what a restore takes gets a note under its export button: how
+      // big it is, the limit, and what to do. The rule and its text are request-rules.js's
+      // backupSizeNote, asked through the API for this file's size. Advice only: the file is saved anyway.
+      async function showSizeNote(kind, bytes, note) {
+        note.clear();
+        try {
+          const r = await fetch(`/api/backup/size-note?kind=${kind}&bytes=${bytes}`);
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.note) note.show(d.note, 'error');
+        } catch { /* no note: the backup itself is unaffected */ }
+      }
+
       // ---- 1. Download JSON backup ------------------------------------------
       const downloadJsonBtn = document.getElementById('downloadJsonBtn');
+      const jsonSizeNote = makeMsg(document.getElementById('jsonSizeNote'));
       downloadJsonBtn.addEventListener('click', async () => {
         jsonMsg.clear();
+        jsonSizeNote.clear();
         downloadJsonBtn.disabled = true;
         try {
           const includeContacts = document.getElementById('includeContactsChk').checked;
           const res = await fetch('/api/backup/export' + (includeContacts ? '?includeContacts=1' : ''));
           if (!res.ok) { jsonMsg.show('Could not build the backup. Please try again.', 'error'); return; }
           const data = await res.json();
-          await saveFile(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `plannr-backup-${today()}.json`, 'Save backup', jsonMsg);
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          await showSizeNote('json', blob.size, jsonSizeNote);
+          await saveFile(blob, `plannr-backup-${today()}.json`, 'Save backup', jsonMsg);
         } catch (err) {
           if (!err.alreadyShown) jsonMsg.show('Could not save the backup: ' + errText(err), 'error');
         } finally {
@@ -722,8 +740,10 @@
       const encExportPass = document.getElementById('encExportPass');
       const encExportPass2 = document.getElementById('encExportPass2');
       const encExportBtn = document.getElementById('encExportBtn');
+      const encExportSizeNote = makeMsg(document.getElementById('encExportSizeNote'));
       encExportBtn.addEventListener('click', async () => {
         encExportMsg.clear();
+        encExportSizeNote.clear();
         const passphrase = encExportPass.value;
         const problem = newPassphraseProblem(passphrase, encExportPass2.value);
         if (problem) { encExportMsg.show(problem, 'error'); return; }
@@ -740,6 +760,7 @@
             return;
           }
           const blob = await res.blob();
+          await showSizeNote('encrypted', blob.size, encExportSizeNote);
           await saveFile(blob, `plannr-backup-${today()}.db.enc`, 'Save encrypted backup', encExportMsg);
           encExportPass.value = '';
           encExportPass2.value = '';

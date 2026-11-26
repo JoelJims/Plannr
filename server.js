@@ -140,7 +140,7 @@ const { createRequestQueue, queuedRoutes, createStartJobs } = require('./core/re
 // JSON body parsing, one size limit per kind of route. The limits, which route gets which, and the
 // "too large" / "Invalid request." answers live in request-rules.js, shared with the phone
 // (public/local-api.js applies the same rules). 32 KB for every normal route; 256 KB for Save All
-// batches (the batch route ALSO caps the row count: BATCH_MAX_ROWS in core/ledger-crud.js); 20 MB for restoring a backup.
+// batches (the batch route ALSO caps the row count: BATCH_MAX_ROWS in core/ledger-crud.js); 32 MB for restoring a backup (F14).
 // Errors are answered by the global error handler at the end of this file.
 const JSON_PARSERS = Object.fromEntries(Object.entries(requestRules.BODY_LIMITS)
   .map(([kind, limit]) => [kind, express.json({ limit })]));
