@@ -3,7 +3,7 @@
 // The only copy: server.js and public/local-api.js both call register(app, ctx) and get back
 // getBudgetPaise. See core/routes/people.js for what `app` and `ctx` are. It reads and writes through
 // ctx.adapter, the async database interface (step 1.4 B14), so getBudgetPaise() answers with a Promise.
-import { parsePaise } from '../parsers.js';
+import { parseAmountToSave } from '../parsers.js';
 
 export function register(app, ctx) {
   const { adapter, auth } = ctx;
@@ -27,8 +27,9 @@ export function register(app, ctx) {
       await adapter.run("INSERT INTO settings (key, value) VALUES ('budget_paise', NULL) ON CONFLICT(key) DO UPDATE SET value = NULL");
       return res.json({ budgetPaise: null });
     }
-    const paise = parsePaise(raw);
-    if (paise === null) return res.status(400).json({ error: 'Enter a valid budget greater than 0 (up to 2 decimals).' });
+    const amount = parseAmountToSave(raw, 'Enter a valid budget greater than 0 (up to 2 decimals).'); // Q10: at most the cap
+    if (amount.error) return res.status(400).json({ error: amount.error });
+    const { paise } = amount;
     await adapter.run("INSERT INTO settings (key, value) VALUES ('budget_paise', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [String(paise)]);
     res.json({ budgetPaise: paise });
   });

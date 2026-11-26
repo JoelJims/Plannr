@@ -16,6 +16,23 @@ export function parsePaise(v) {
   return Number.isSafeInteger(paise) && paise > 0 ? paise : null;
 }
 
+// Q10 (review 2026-11-21), the owner's decision: one amount may be at most ₹1,00,00,000.00 (₹1 crore).
+// Every route that saves a typed amount checks it with parseAmountToSave. It also keeps totals exact:
+// amounts are integer paise, so a total of fewer than Number.MAX_SAFE_INTEGER / MAX_AMOUNT_PAISE
+// (over nine million) amounts is still an exact integer in a JavaScript number.
+export const MAX_AMOUNT_PAISE = 1000000000;
+export const AMOUNT_CAP_MESSAGE = 'An amount can be at most ₹1,00,00,000 (₹1 crore).';
+
+// A typed amount that is about to be saved -> { paise } or { error }. The error is
+// AMOUNT_CAP_MESSAGE for an amount over the cap (also one too large to hold exactly), otherwise
+// invalidMessage (not an amount greater than 0 with up to 2 decimals).
+export function parseAmountToSave(v, invalidMessage) {
+  const paise = parsePaise(v);
+  if (paise !== null) return paise > MAX_AMOUNT_PAISE ? { error: AMOUNT_CAP_MESSAGE } : { paise };
+  const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+  return { error: /^\d+(\.\d{1,2})?$/.test(s) && Number(s) > 0 ? AMOUNT_CAP_MESSAGE : invalidMessage };
+}
+
 // Optional ISO 'YYYY-MM-DD' date. Empty -> null. Rejects malformed or impossible dates (e.g.
 // 2026-13-40). -> { date: string|null } or { error }.
 export function parseIsoDate(v) {
