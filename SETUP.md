@@ -27,16 +27,19 @@ it uses `server.js` only when the page carries `server.js`'s `X-Plannr-Dev-Serve
 
 Why that matters in practice:
 
-- `server.js` and `public/local-api.js` are two separate pieces of code that answer the
-  same requests. A change to one is not a change to the other. **Fixing a bug in
-  `server.js` alone fixes nothing on the device.**
-- `server.js` is the easier of the two to read, so it is the one to read when you want to
-  understand how something behaves — but when the two disagree, **the Android path is the
-  one that is true**, because it is the one users run.
-- `repo.js` is the single deliberate exception: one shared file used by both, copied into
-  `public/` by `sync-public-modules.js`. Edit it at the project root, never in `public/`.
-- A green `npm test` proves the desktop version works. It does **not** prove the APK
-  works. `npm run test:static-hosting` is the closest automated stand-in for the device.
+- The route code lives **once**, in `core/` (`core/routes/` and its helpers), and both
+  `server.js` and `public/local-api.js` run it. So do the shared files at the project root
+  (`db.js`, `repo.js`, `ledgers.js`, `backup-format.js`, `request-rules.js`).
+  `sync-public-modules.js` copies all of them, and the phone's database engine
+  `db-engine.js`, into `public/`. Edit them at the project root or in `core/`, never in
+  `public/`.
+- `server.js` and `public/local-api.js` themselves are thin hosts, and each keeps what has
+  to differ by platform (for example the PDF renderer). **A fix in `server.js` alone fixes
+  nothing on the device.** When the two disagree, **the Android path is the one that is
+  true**, because it is the one users run.
+- A green `npm test` runs the HTTP tests twice: against `server.js`, and against the phone's
+  `public/local-api.js` loaded in Node. It still does **not** prove the APK works.
+  `npm run test:static-hosting` is the closest automated stand-in for the device.
 
 ---
 
@@ -63,37 +66,94 @@ which means the very first build needs an internet connection.
 ## 2. Files that do not come from the repository
 
 These are deliberately kept out of version control. `git clone` will not give you them;
-they have to be copied across by hand into the **project root**, next to `package.json`:
+they have to be copied across by hand. The key lives **outside the project**, in a folder of
+its own; only its properties file goes into the **project root**, next to `package.json`:
 
 | File | What it is | Where it goes |
 |---|---|---|
-| `plannr-release.keystore` | The signing key for release builds. | project root |
-| `keystore.properties` | Its passwords and alias. Four entries: `storeFile` (= `plannr-release.keystore`, relative to the project root), `storePassword`, `keyAlias`, `keyPassword`. | project root |
+| `plannr-release.keystore` | The signing key for release builds. | `D:\Keys\plannr\` — outside the project folder and outside git, on the same drive as the project (on a PC with only `C:`, use `C:\Keys\plannr\`) |
+| `keystore.properties` | Where the key is, its alias and its two passwords. Four entries: `storeFile`, the store password line, `keyAlias`, and the key password line. | project root (git-ignored) |
+
+**The `storeFile` line must be a path relative to the project root.** For a checkout at
+`D:\Projects\Plannr` it reads `storeFile=../../Keys/plannr/plannr-release.keystore` (two folders
+up from the project root is `D:\`). `android/app/build.gradle` joins this value to the project
+root (`new File(projectRootDir, storeFile)`), so an absolute path such as `D:\Keys\...` does
+**not** work.
+
+**So the key folder must be on the same drive as the project.** A relative path cannot change
+drive: from a checkout on `C:` no relative path reaches `D:\Keys\plannr\`. On a PC with only
+`C:` (a typical laptop), put the key in `C:\Keys\plannr\` and the project under `C:\`, for
+example `C:\Projects\Plannr`. Then the line stays exactly the same,
+`storeFile=../../Keys/plannr/plannr-release.keystore`, because the key is again two folders up
+from the project root. If the project is somewhere else on that drive, change the number of
+`../` so the path still reaches `Keys\plannr\plannr-release.keystore` on that drive.
+
+**Save `keystore.properties` as UTF-8 without a byte-order mark (BOM), or as plain ASCII.**
+Gradle reads this file as Latin-1, so a BOM at the start becomes part of the first entry's name
+and Gradle cannot read that entry. Windows PowerShell 5.1 adds a BOM when it writes "UTF-8"
+(`Set-Content -Encoding utf8`, `Out-File -Encoding utf8`), and its plain `Out-File` and `>` write
+UTF-16, which Gradle cannot read at all. In Notepad, choose Save as, Encoding "UTF-8" (not
+"UTF-8 with BOM" and not a "UTF-16" one).
+
+`npm run release:android` checks both files before it changes anything. It reads only the
+`storeFile` line and resolves it against the project root. It stops (naming the path it expected)
+if no key file is there, and it also stops if the line is an absolute path or starts with a drive
+letter, or if the file starts with a BOM or is saved as UTF-16. Its "Signing:" line shows the
+key's path only when the release can go ahead; otherwise it says "NOT ready" (or "NOT found" when
+there is no `keystore.properties`) and the reason follows.
+
+`.gitignore` still blocks key files even though the key no longer lives in the project:
+`*.keystore`, `*.jks`, `*.p12`, `*.pem` and `keystore.properties`. A copy dropped into the
+project by mistake still cannot be committed. `test/release-guards.test.js` fails if those
+lines go or if such a file is ever tracked.
 
 > ### A missing keystore fails *silently*
 >
 > The build reads `keystore.properties` only if it is there — deliberately, so a fresh
 > checkout with no key can still produce debug builds. If the file is absent,
 > `assembleRelease` **does not fail**. It produces an **unsigned** release APK and says
-> nothing about it. You find out when the phone refuses the install.
+> nothing about it. You find out when the phone refuses the install. (If the file is there
+> but the key is not where `storeFile` says, Gradle does fail. `npm run release:android`
+> catches both cases before it builds anything.)
 >
-> So check, rather than assume, after your first release build:
+> So check, rather than assume, after your first release build. `apksigner` is in the
+> Android SDK's `build-tools\<version>\` folder (on Windows usually
+> `%LOCALAPPDATA%\Android\Sdk\build-tools\<version>\apksigner.bat`):
 >
 > ```sh
-> keytool -printcert -jarfile android/app/build/outputs/apk/release/Plannr.apk
+> apksigner verify --print-certs android/app/build/outputs/apk/release/Plannr.apk
 > ```
 >
-> That must print a certificate. An error, or empty output, means `keystore.properties`
-> is missing or wrong.
+> That must print the signer's certificate, with a "certificate SHA-256 digest" line. Note
+> that SHA-256 the first time (`docs/release-plan.md` §1.3); every later release must show
+> the same one. "DOES NOT VERIFY", or another error, means the APK is not signed:
+> `keystore.properties` is missing or wrong. Do not check with `keytool -printcert -jarfile`:
+> it reads only the old v1 signature, which this APK may not have (`minSdkVersion` 24), so
+> it can say "Not a signed jar file" even for a correctly signed APK.
 
 > ### Never lose or replace this key
 >
 > Android refuses to upgrade an installed app with an APK signed by a different key
 > (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). The only way past it is to uninstall first —
 > **which destroys the database on the phone**, because Plannr's storage belongs to the
-> app itself. There is no copy of it anywhere else. Back the keystore up somewhere you
-> will still have it in five years, and take an encrypted backup from inside the app
+> app itself. There is no copy of it anywhere else. The copy in `D:\Keys\plannr\` is the
+> working copy, not a backup. Keep **two offline backup copies** of the keystore (for
+> example two USB sticks kept in different places; make the second one if only one
+> exists), and keep **both passwords and the alias in a password manager**: a key without
+> its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
+
+**The debug key matters too, for the owner's phone.** That phone runs a debug build. As long as it does (today, until any move in
+`docs/release-plan.md` §6 is carried out, and for good if it stays on debug builds), it can only
+be updated with debug builds signed by the same Android debug key as the app on it. The last build
+made for it (`9d7fd97`) was signed with the debug key of the owner's current laptop (certificate
+`fd12f081…b95629`; Android's default debug keystore in the user profile, which the Android build
+tools made for the first debug build); the checklist confirms the phone's own copy before any
+install. A debug build made on another PC, or on that laptop after its debug keystore is lost,
+will not install over the phone's Plannr (the checklist says stop). On a new machine, check a
+debug APK built there as the checklist's "Check the APK on the laptop" says before any phone
+step: its certificate must be `fd12f081…b95629`. Whether and how to keep a copy of that debug key
+is the owner's call.
 
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
 financial records.
@@ -147,12 +207,15 @@ npm run android:sync        # = sync-public-modules.js  +  npx cap sync android
 repository, and this is the command that creates them:
 
 - `public/db.js`, `public/repo.js`, `public/db-engine.js`, `public/ledgers.js`,
+  `public/backup-format.js`, `public/request-rules.js`,
   `public/node-builtins-browser-stub.js` — copies of the files at the project root
+- `public/core/` — a copy of `core/`, the route code both backends run
 - `public/node_modules/` — the packages the app's import maps refer to
 - `android/app/src/main/assets/`, `android/app/src/main/res/xml/config.xml`,
   `android/capacitor-cordova-android-plugins/` — Capacitor's own output
 
-**Never hand-edit any of those.** Edit the copy at the project root and re-run the sync.
+**Never hand-edit any of those.** Edit the copy at the project root (or in `core/`) and
+re-run the sync.
 Re-run it after every change to `public/` or to a root file, and before every build:
 whatever is in `public/` at sync time is exactly what ships.
 
@@ -175,8 +238,14 @@ From `android/`, or via Studio's Run button for debug builds:
 ```sh
 ./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/Plannr-debug.apk
 ./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/Plannr.apk  (signed)
-adb install -r android/app/build/outputs/apk/release/Plannr.apk
+adb -s emulator-5554 install -r android/app/build/outputs/apk/debug/Plannr-debug.apk   # the emulator
 ```
+
+Always tell adb which device: `-s emulator-5554` for the emulator, `-d` for the phone on USB,
+straight after `adb`. With both connected, a command without them can reach the wrong device.
+**A phone that holds real data** gets an APK only as `docs/PHONE-TEST-CHECKLIST.md` says: both
+backups proven on the emulator first, then `adb -d install -r`, never uninstall. A release APK
+cannot be installed over a debug build (`docs/RELEASE.md`).
 
 App id `com.plannr.app`. For a real release use `npm run release:android`: it runs every test,
 raises `versionCode`/`versionName` in `android/app/build.gradle`, syncs and builds the signed APK.
@@ -203,11 +272,14 @@ What you will usually see, in order (wording varies by Android version and manuf
 
 Notes:
 
-- `adb install -r ...` skips the installer screens entirely, so it is the fastest route
-  during development. Play Protect can still warn on first launch.
+- `adb -d install -r ...` (or `adb -s emulator-5554 install -r ...` for the emulator) skips
+  the installer screens entirely, so it is the fastest route during development. Play Protect
+  can still warn on first launch. On a phone with real data, follow
+  `docs/PHONE-TEST-CHECKLIST.md` instead.
 - **Do not turn off signing, or switch to debug signing, to make the warning go away.**
   The warning is about how the app was distributed, not about the signature being invalid,
-  and unsigned or debug-signed builds break upgrades over an existing install (see section 2).
+  and unsigned or debug-signed builds break upgrades over an existing release install (see
+  section 2; the owner's phone, which runs a debug build, is the exception described there).
 - If you are handing the APK to someone else, warn them about this dialog first. Without
   warning, "Unsafe app blocked" reads as a virus alert and most people will cancel.
 
@@ -256,24 +328,32 @@ live-database rule in section 3.2 first).
   every test that can run in a browser — but browsers always report themselves as
   non-native, so the Android-specific branch is not covered. Try it on real hardware
   before putting real data in.
-- **`server.js` is one very large file** (~142 KB). It works and it is tested, but it is
-  the main thing that needs tidying.
+- **`server.js` is a thin host** (about 600 lines). The route code is in `core/routes/`,
+  shared with the phone, so that is where most changes go (section 0).
 
 ---
 
 ## 8. Quick reference — a fresh machine, start to finish
 
 ```sh
-git clone <repo> && cd Plannr
-# copy plannr-release.keystore + keystore.properties into this directory by hand
+git clone <repo> && cd Plannr               # e.g. in D:\Projects\ (C:\Projects\ on a C:-only PC)
+# by hand, from your offline backup (section 2):
+#   plannr-release.keystore -> D:\Keys\plannr\   (outside the project; create the folder;
+#                              same drive as the project, so C:\Keys\plannr\ on a C:-only PC)
+#   keystore.properties     -> this directory    (storeFile = the key's path relative to here,
+#                              ../../Keys/plannr/plannr-release.keystore for <drive>:\Projects\Plannr)
 npm ci
 npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs
 npm run android:sync                      # regenerate public/ copies + the native project
 # open the android/ directory in Android Studio, let it sync
-cd android && ./gradlew assembleRelease
-keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk   # must print a cert
-adb install -r app/build/outputs/apk/release/app-release.apk
+cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/Plannr.apk
+# apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
+# SHA-256 you noted for this key (section 2)
+apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk
+# install on the emulator (-s emulator-5554); for a test phone on USB, use -d instead. Never on
+# a phone with real data: that one goes through docs/PHONE-TEST-CHECKLIST.md (see section 3.5)
+adb -s emulator-5554 install -r app/build/outputs/apk/release/Plannr.apk
 # expect a Play Protect warning on the device — More details -> Install anyway
 ```
 

@@ -365,20 +365,50 @@ export function backupTooNew(userVersion) {
 }
 
 /**
+ * A restore is all or nothing (S3/Q6, review 2026-11-21). Call this when something fails AFTER the
+ * backup's data is in (bringing an older backup up to this version, the foreign-key check), with
+ * `putBack` putting the data from just before the restore back. It always rejects:
+ *   - code RESTORE_UNDONE: the data is back as it was; `cause` is why the backup could not be used;
+ *   - code RESTORE_UNDO_FAILED: putting it back failed too; the data from before the restore is then
+ *     only in the safety copy the caller wrote first (core/routes/backup.js).
+ */
+export async function undoFailedRestore(cause, putBack) {
+  try {
+    await putBack();
+  } catch (undoErr) {
+    const err = new Error(`The restore failed (${cause && cause.message}), and putting the data back failed too (${undoErr && undoErr.message}).`);
+    err.code = 'RESTORE_UNDO_FAILED';
+    err.cause = cause;
+    err.undoError = undoErr;
+    throw err;
+  }
+  const err = new Error(`The backup could not be restored, so the data from before the restore was put back. Reason: ${cause && cause.message}`);
+  err.code = 'RESTORE_UNDONE';
+  err.cause = cause;
+  throw err;
+}
+
+/**
  * Replace the whole database with a decrypted backup, through db.js's adapter: the phone's database
  * file (since step 1.4 C9) and the desktop's (since D1). A backup from a newer Plannr is refused
  * before anything changes; the adapter checks the bytes (integrity) before it replaces anything; an
- * older backup is then brought up to this version; foreign keys are checked last. The caller saves
- * a safety copy first (core/routes/backup.js).
+ * older backup is then brought up to this version; foreign keys are checked last. All or nothing: if
+ * either of the last two fails, the database as it was just before is put back (undoFailedRestore).
+ * The caller saves a safety copy first (core/routes/backup.js).
  */
 export async function restoreFromBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length < 100) throw new Error('restoreSnapshotBytes: not a valid SQLite image.');
   if (imageUserVersion(bytes) > SCHEMA_VERSION) throw backupTooNew(imageUserVersion(bytes));
   const live = dbAdapter();
-  await live.replaceWith(bytes);
-  await init({ snapshot: false });
-  const fkViol = await live.all('PRAGMA foreign_key_check');
-  if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
+  const before = await live.exportBytes(); // the data as it is now, put back if anything below fails
+  await live.replaceWith(bytes); // checked first: if it refuses, the old file is still in place
+  try {
+    await init({ snapshot: false });
+    const fkViol = await live.all('PRAGMA foreign_key_check');
+    if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
+  } catch (e) {
+    await undoFailedRestore(e, () => live.replaceWith(before));
+  }
 }
 
 // ---- legacyInit()'s database calls (step 1.4 B5–B9) ---------------------------------------------------

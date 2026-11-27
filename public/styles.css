@@ -660,8 +660,6 @@ input:-webkit-autofill {
    Part D — auth-detection surfaces (Home "last login" + Data-page sign-in
    activity). Amber only; classes only (no inline style=, per the CSP).
    ───────────────────────────────────────────────────────────────────────── */
-.home-lastlogin { margin: 10px 0 0; font-size: 13px; color: var(--text-faint); }
-.home-fail { color: #ffb020; font-weight: 600; }
 .av-summary { margin: 4px 0 14px; font-size: 13.5px; color: var(--text-dim); }
 .av-sub { font-family: var(--font-head); font-weight: 600; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim); margin: 14px 0 8px; }
 .av-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }

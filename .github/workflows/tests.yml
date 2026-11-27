@@ -8,7 +8,7 @@ on:
   push:
     branches: [main, plannr-phase2]
   pull_request:
-    branches: [main]
+    branches: [main, plannr-phase3]
   workflow_dispatch:
 
 permissions:

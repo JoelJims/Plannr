@@ -119,6 +119,11 @@ const ov = {
   paymentsAll: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL`),
   paymentsRange: S(`SELECT ${OV_PAY_COLS} FROM contractor_payments WHERE deleted_at IS NULL AND pay_date >= ? AND pay_date <= ?`),
   loansSum: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM loans WHERE deleted_at IS NULL'),
+  // F4 (b): the whole project's spend, for the budget block while a date range is set. One SUM per
+  // table, so no row is sent back for it: live rows only, with no date bound, so an undated (legacy)
+  // cash_out row still counts. contractor_payments.pay_date is NOT NULL, so every payment has a date.
+  outsSumAll: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL'),
+  paymentsSumAll: S('SELECT COALESCE(SUM(amount_paise), 0) AS s FROM contractor_payments WHERE deleted_at IS NULL'),
   // Part B — cash_out logged (created) since the last report's boundary timestamp (created_at is UTC ISO).
   outsSince: S("SELECT COUNT(*) AS c, COALESCE(SUM(amount_paise), 0) AS s FROM cash_out WHERE deleted_at IS NULL AND created_at > ?"),
 };
@@ -131,6 +136,8 @@ const overview = {
   paymentsAll: () => ov.paymentsAll.all(),
   paymentsRange: (lo, hi) => ov.paymentsRange.all(lo, hi),
   loansSum: () => ov.loansSum.get(),
+  outsSumAll: () => ov.outsSumAll.get(),         // F4 (b) — { s }
+  paymentsSumAll: () => ov.paymentsSumAll.get(), // F4 (b) — { s }
   outsSince: (sinceIso) => ov.outsSince.get(sinceIso), // Part B — { c, s }
 };
 
@@ -143,8 +150,6 @@ const cStmt = {
   deletedAt: S('SELECT deleted_at FROM contract WHERE id = ?'),
   softDelete: S("UPDATE contract SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL"),
   payDatesFor: S('SELECT pay_date FROM contract_payment_dates WHERE contract_id = ? ORDER BY pay_date ASC, id ASC'),
-  delPayDates: S('DELETE FROM contract_payment_dates WHERE contract_id = ?'),
-  insPayDate: S('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?, ?)'),
   servicesFor: S('SELECT id, name FROM contract_services WHERE contract_id = ? AND deleted_at IS NULL ORDER BY id ASC'),
   serviceLive: S('SELECT * FROM contract_services WHERE id = ? AND deleted_at IS NULL'),
   serviceForContract: S('SELECT * FROM contract_services WHERE id = ? AND contract_id = ? AND deleted_at IS NULL'),
@@ -202,8 +207,13 @@ const cStmt = {
     'SELECT COUNT(*) AS n FROM cash_out WHERE contract_allowance_id IN (SELECT id FROM contract_allowances WHERE contract_id = ?)'
   ),
 };
-// Every function returns a Promise (step 1.4 B11). writePayDates is two or more statements and, as
-// before, not one transaction: the request queue keeps any other request from running in between.
+// Every function returns a Promise (step 1.4 B11). A contract and its payment dates are saved in ONE
+// transaction (review finding Q3): insertWithPayDates / updateWithPayDates. Any error rolls the whole
+// save back, so the old dates are never left deleted and a contract is never left without its dates.
+const writePayDatesOn = async (tx, cid, dates) => {
+  await tx.run('DELETE FROM contract_payment_dates WHERE contract_id = ?', [cid]);
+  for (const d of dates) await tx.run('INSERT INTO contract_payment_dates (contract_id, pay_date) VALUES (?, ?)', [cid, d]);
+};
 const contract = {
   list: () => cStmt.list.all(),
   getLive: async (id) => (await cStmt.getLive.get(id)) || null,
@@ -211,10 +221,16 @@ const contract = {
   liveCount: async () => (await cStmt.liveCount.get()).n,
   deletedAt: (id) => cStmt.deletedAt.get(id),
   softDelete: (id) => cStmt.softDelete.run(id),
-  insert: (cols, vals) => S(insertSqlFor('contract', cols)).run(...vals),
-  update: (id, cols, vals) => S(updateSqlFor('contract', cols)).run(...vals, id),
+  insertWithPayDates: (cols, vals, dates) => transaction(async (tx) => {
+    const info = await tx.run(insertSqlFor('contract', cols), vals);
+    await writePayDatesOn(tx, info.lastInsertRowid, dates);
+    return info;
+  }),
+  updateWithPayDates: (id, cols, vals, dates) => transaction(async (tx) => {
+    await tx.run(updateSqlFor('contract', cols), [...vals, id]);
+    await writePayDatesOn(tx, id, dates);
+  }),
   payDatesFor: async (cid) => (await cStmt.payDatesFor.all(cid)).map((r) => r.pay_date),
-  writePayDates: async (cid, dates) => { await cStmt.delPayDates.run(cid); for (const d of dates) await cStmt.insPayDate.run(cid, d); },
   servicesFor: (cid) => cStmt.servicesFor.all(cid),
   serviceLive: async (id) => (await cStmt.serviceLive.get(id)) || null,
   serviceForContract: async (cid, sid) => (await cStmt.serviceForContract.get(sid, cid)) || null,

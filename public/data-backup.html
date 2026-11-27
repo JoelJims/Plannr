@@ -216,6 +216,9 @@
         <p id="storageText">Checking…</p>
         <div class="st-bar" id="storageBar" role="meter" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="st-fill" id="storageFill"></div></div>
         <div id="storageMsg" class="msg" role="status" aria-live="polite"></div>
+        <!-- Q2: on localStorage the WebView writes saves to disk a few seconds late (measured on the
+             emulator), so a sudden kill can lose them. Shown only while the data is in localStorage. -->
+        <p class="bk-note" id="storageKillNote" hidden>In this storage, Android writes your saves to the phone a few seconds late. If Plannr is force-stopped or crashes right after you save, the last few seconds of saves can be lost. Wait a few seconds after saving before you swipe Plannr away, and keep saving encrypted backups.</p>
       </section>
 
       <!-- Step 1.4 C10: the move to the phone's own database file (docs/step-1.4-storage-plan.md §2).
@@ -230,7 +233,7 @@
           </div>
         </div>
         <div id="moveStart" hidden>
-          <p id="moveStateText">Plannr keeps your data inside the app's web storage, which is full at about 2.8 MB. The new storage is a database file of its own on this phone, with room for years of entries.</p>
+          <p id="moveStateText">Plannr keeps your data inside the app's web storage, which is full at about 2.8 MB. The new storage is a database file of its own on this phone, with room for years of entries, and it writes each save to the phone straight away.</p>
           <details class="wt">
             <summary>What happens</summary>
             <div class="wt-body">
@@ -441,6 +444,7 @@
         }
         const pct = Math.min(100, Math.round(s.fraction * 100));
         text.textContent = `Used ${mb(s.usedBytes)} MB of about ${mb(s.limitBytes)} MB (${pct}%).`;
+        document.getElementById('storageKillNote').hidden = false; // Q2: the data is in localStorage
         bar.setAttribute('aria-valuenow', String(pct));
         bar.setAttribute('aria-valuetext', `${pct}% used`);
         fill.style.width = pct + '%';
@@ -527,6 +531,13 @@
       // failed recording must never fail an otherwise-successful backup.
       const markBackupExported = () => fetch('/api/backup/mark-exported', { method: 'POST' }).catch(() => {});
       async function saveFile(blob, fname, dialogTitle, msg) {
+        return saveFiles([{ blob, fname }], dialogTitle, msg);
+      }
+      // F2 (review 2026-11-21): several files at once (the CSV export's six) go through ONE share
+      // sheet on the phone, every file written and checked first. A burst of <a download> clicks does
+      // nothing in Android's WebView, so the CSV button used to say "Downloading 6 CSV files" while no
+      // file was saved. In a browser the files still download one after another, 350 ms apart.
+      async function saveFiles(items, dialogTitle, msg) {
         const steps = [];
         const report = (type) => msg.show(steps.join('\n'), type);
         const ok = (s) => { steps.push('✓ ' + s); report('info'); };
@@ -538,7 +549,9 @@
           throw e;
         };
 
-        ok('starting save: ' + fname);
+        const names = items.map((it) => it.fname);
+        const isBackup = names.some((n) => n.endsWith('.db.enc'));
+        ok('starting save: ' + names.join(', '));
 
         let Capacitor;
         try { ({ Capacitor } = await import('@capacitor/core')); }
@@ -549,10 +562,14 @@
         ok((native ? 'native platform detected: ' : 'not a native platform (browser fallback): ') + Capacitor.getPlatform());
 
         if (!native) {
-          try { download(blob, fname); }
-          catch (err) { bail('browser download() threw', err); }
-          ok('browser download() triggered — cannot verify a file actually landed from in-page JS');
-          if (fname.endsWith('.db.enc')) await markBackupExported();
+          for (const [i, { blob, fname }] of items.entries()) {
+            if (i) await new Promise((r) => setTimeout(r, 350));
+            try { download(blob, fname); }
+            catch (err) { bail('browser download() threw for ' + fname, err); }
+          }
+          ok((items.length > 1 ? `browser download() triggered for ${items.length} files (your browser may ask to allow multiple downloads)` : 'browser download() triggered')
+            + ' — cannot verify a file actually landed from in-page JS');
+          if (isBackup) await markBackupExported();
           report('success');
           return;
         }
@@ -565,33 +582,40 @@
         catch (err) { bail('could not load @capacitor/share', err); }
         ok('@capacitor/share loaded');
 
-        let base64Data;
-        try { base64Data = await blobToBase64(blob); }
-        catch (err) { bail('base64 conversion failed', err); }
-        ok(`file converted to base64 (${base64Data.length} chars)`);
+        const uris = [];
+        for (const { blob, fname } of items) {
+          let base64Data;
+          try { base64Data = await blobToBase64(blob); }
+          catch (err) { bail('base64 conversion failed for ' + fname, err); }
+          ok(`${fname} converted to base64 (${base64Data.length} chars)`);
 
-        let written;
-        try { written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the file'); }
-        catch (err) { bail('Filesystem.writeFile threw', err); }
-        if (!written || !written.uri) bail('Filesystem.writeFile returned no uri (got ' + JSON.stringify(written) + ')');
-        ok('writeFile returned uri: ' + written.uri);
+          let written;
+          try { written = await withTimeout(Filesystem.writeFile({ path: fname, data: base64Data, directory: Directory.Cache }), 20000, 'Writing the file'); }
+          catch (err) { bail('Filesystem.writeFile threw for ' + fname, err); }
+          if (!written || !written.uri) bail('Filesystem.writeFile returned no uri for ' + fname + ' (got ' + JSON.stringify(written) + ')');
+          ok('writeFile returned uri: ' + written.uri);
 
-        // Proof, not trust: writeFile resolving is not proof the file exists. Independently stat it.
-        let info;
-        try { info = await withTimeout(Filesystem.stat({ path: fname, directory: Directory.Cache }), 10000, 'Verifying the saved file'); }
-        catch (err) { bail('could not verify the file exists after writing (Filesystem.stat failed)', err); }
-        if (!info || typeof info.size !== 'number') bail('Filesystem.stat returned no usable size (got ' + JSON.stringify(info) + ')');
-        ok(`file verified on disk: ${info.size} bytes`);
+          // Proof, not trust: writeFile resolving is not proof the file exists. Independently stat it.
+          let info;
+          try { info = await withTimeout(Filesystem.stat({ path: fname, directory: Directory.Cache }), 10000, 'Verifying the saved file'); }
+          catch (err) { bail('could not verify ' + fname + ' exists after writing (Filesystem.stat failed)', err); }
+          if (!info || typeof info.size !== 'number') bail('Filesystem.stat returned no usable size for ' + fname + ' (got ' + JSON.stringify(info) + ')');
+          ok(`${fname} verified on disk: ${info.size} bytes`);
+          uris.push(written.uri);
+        }
 
         // No timeout on Share.share(): it resolves only when the user has picked where the file goes,
         // and choosing can take longer than any limit (a 20 s timeout used to report "timed out" while
         // the sheet was still open — seen on the emulator, Phase 2 Step 9). Closing the sheet without
         // choosing is the user's call, not an error: say so plainly, and still don't count it as saved.
+        // One file keeps `url` as before; several go as `files` only (one ACTION_SEND_MULTIPLE sheet).
+        const shareOptions = { files: uris, title: 'Plannr', dialogTitle: dialogTitle || (uris.length > 1 ? 'Save these files' : 'Save this file') };
+        if (uris.length === 1) shareOptions.url = uris[0];
         const stillWaiting = setTimeout(() => ok('waiting for you to choose where to save it (if no share sheet is on screen, go back and tap the button again)'), 20000);
-        try { await Share.share({ url: written.uri, files: [written.uri], title: 'Plannr', dialogTitle: dialogTitle || 'Save this file' }); }
+        try { await Share.share(shareOptions); }
         catch (err) {
           if (/cancel/i.test(errText(err))) {
-            steps.push('– Not saved: the share sheet was closed without choosing where to keep the file. Tap the button again to save it.');
+            steps.push(`– Not saved: the share sheet was closed without choosing where to keep the ${uris.length > 1 ? 'files' : 'file'}. Tap the button again to save ${uris.length > 1 ? 'them' : 'it'}.`);
             report('info');
             const e = new Error('share cancelled');
             e.alreadyShown = true;
@@ -600,8 +624,8 @@
           }
           bail('Share.share threw', err);
         } finally { clearTimeout(stillWaiting); }
-        ok('share sheet invoked');
-        if (fname.endsWith('.db.enc')) await markBackupExported();
+        ok(uris.length > 1 ? `share sheet invoked with ${uris.length} files` : 'share sheet invoked');
+        if (isBackup) await markBackupExported();
 
         report('success');
       }
@@ -787,6 +811,7 @@
       downloadCsvBtn.addEventListener('click', async () => {
         csvMsg.clear();
         downloadCsvBtn.disabled = true;
+        let built = null;
         try {
           // A failed fetch here must abort the whole export, not silently produce a CSV with a
           // missing/empty section that looks complete — check res.ok before trusting the body.
@@ -870,15 +895,15 @@
             paymentsList.map((p, i) => [i + 1, p.contractorName || '', fmtDate(p.payDate), rupees(p.amountPaise), p.ledger, p.remarks]),
           )]);
 
-          // Trigger the downloads one after another (browsers ask once to allow
-          // multiple files; no zip dependency needed).
-          files.forEach(([name, content], i) => {
-            setTimeout(() => download(new Blob([content], { type: 'text/csv;charset=utf-8' }), name), i * 350);
-          });
-          csvMsg.show('Downloading ' + files.length + ' CSV files (your browser may ask to allow multiple downloads).', 'success');
+          built = files.map(([fname, content]) => ({ blob: new Blob([content], { type: 'text/csv;charset=utf-8' }), fname }));
         } catch {
           csvMsg.show('Could not build the CSV files. Please try again.', 'error');
-        } finally {
+        }
+        // One share sheet with every file on the phone; one download after another in a browser (no
+        // zip dependency needed). saveFiles reports each step, and a closed share sheet, in csvMsg.
+        try { if (built) await saveFiles(built, 'Save CSV files', csvMsg); }
+        catch (err) { if (!err.alreadyShown) csvMsg.show('Could not save the CSV files: ' + errText(err), 'error'); }
+        finally {
           downloadCsvBtn.disabled = false;
         }
       });

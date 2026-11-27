@@ -33,7 +33,12 @@ export const BACKUP_TABLES = [
 // The tables v2 added. A v1 file does not carry them, so a v1 restore leaves this install's own copies alone.
 export const V2_TABLES = ['users', 'ledger_mains', 'ledger_subs', 'ledger_customs'];
 // Tables older v1 files may lack (they predate those features); absent reads as empty.
-const OPTIONAL_V1_TABLES = ['contract_payment_dates', 'contractor_payments', 'contract_services', 'contract_allowances'];
+// Review finding F1 (2026-11-21): a backup's category codes must have the shapes Plannr makes itself
+// (ledgers.js, and the Ledger List CSV's rule in repo.js): a category "N.0", a sub-category "N.M"
+// under category "N.0". Every built-in code since the first taxonomy has these shapes.
+const MAIN_CODE_RE = /^\d+\.0$/;
+const SUB_CODE_RE = /^(\d+)\.(\d+)$/;
+const OPTIONAL_V1_TABLES =['contract_payment_dates', 'contractor_payments', 'contract_services', 'contract_allowances'];
 
 // TABLES THE IMPORT OWNS (clears during teardown), CHILDREN-FIRST so a DELETE never trips a foreign key
 // and never leans on an implicit ON DELETE CASCADE. settings is never cleared (it is UPSERTed: keys the
@@ -159,6 +164,7 @@ export function validateBackup(data, ctx) {
     const mains = new Map();
     for (const r of T.ledger_mains) {
       if (!nonEmpty(r.code)) return { error: 'ledger_mains: code must be a non-empty string.' };
+      if (!MAIN_CODE_RE.test(r.code)) return { error: `ledger_mains: code ${JSON.stringify(r.code)} is not a category code (a category's code is "N.0", like "22.0").` };
       if (mains.has(r.code)) return { error: `ledger_mains: code ${JSON.stringify(r.code)} appears twice.` };
       if (!nonEmpty(r.name)) return { error: `ledger_mains: category ${JSON.stringify(r.code)} needs a name.` };
       if (!isInt(r.sort_order)) return { error: 'ledger_mains: sort_order must be an integer.' };
@@ -167,8 +173,11 @@ export function validateBackup(data, ctx) {
     const subCodes = new Set();
     for (const r of T.ledger_subs) {
       if (!nonEmpty(r.code)) return { error: 'ledger_subs: code must be a non-empty string.' };
+      const shape = SUB_CODE_RE.exec(r.code);
+      if (!shape) return { error: `ledger_subs: code ${JSON.stringify(r.code)} is not a sub-category code (a sub-category's code is "N.M", like "22.5").` };
       if (subCodes.has(r.code)) return { error: `ledger_subs: code ${JSON.stringify(r.code)} appears twice.` };
       if (!mains.has(r.main_code)) return { error: `ledger_subs: ${JSON.stringify(r.code)} belongs to category ${JSON.stringify(r.main_code)}, which is not in the backup.` };
+      if (r.main_code !== `${shape[1]}.0`) return { error: `ledger_subs: sub-category ${JSON.stringify(r.code)} is listed under category ${JSON.stringify(r.main_code)}, but its code says "${shape[1]}.0".` };
       if (!nonEmpty(r.name)) return { error: `ledger_subs: sub-category ${JSON.stringify(r.code)} needs a name.` };
       if (!isInt(r.sort_order)) return { error: 'ledger_subs: sort_order must be an integer.' };
       subCodes.add(r.code);
@@ -182,6 +191,8 @@ export function validateBackup(data, ctx) {
       if (!data.sequences || typeof data.sequences !== 'object' || Array.isArray(data.sequences)) return { error: 'Backup has an invalid "sequences" section.' };
       for (const [name, seq] of Object.entries(data.sequences)) {
         if (!BACKUP_TABLES.includes(name)) return { error: `sequences: unknown table ${JSON.stringify(name)}.` };
+        // Q9: only a table with an id column has an AUTOINCREMENT sequence (the restore reads MAX(id)).
+        if (!BACKUP_COLS[name] || !BACKUP_COLS[name].includes('id')) return { error: `sequences: ${name} has no id column, so it cannot have a sequence.` };
         if (!isInt(seq) || seq < 0) return { error: `sequences: ${name} must be a non-negative integer.` };
       }
     }

@@ -550,18 +550,12 @@
     await import('/local-bootstrap.js');
     window.LEDGERS = (await fetch('/api/ledgers').then((r) => r.json())).ledgers;
     const $ = (id) => document.getElementById(id);
-    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, createLedgerPicker, createDatePicker } = window.PlannrUI;
+    const { formatPaise: fmtPaise, paiseToInput, parsePaise, escapeHtml: esc, formatDate: fmtDate, makeMsg, createLedgerPicker, createDatePicker } = window.PlannrUI;
 
     const contractMsg = makeMsg($('contractMsg'));
 
     // ---- shared parse helpers (mirror the server) ----
-    function parsePaise(v) {
-      const s = String(v == null ? '' : v).trim().replace(/,/g, '');
-      if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
-      const [ip, dp = ''] = s.split('.');
-      const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
-      return Number.isSafeInteger(p) && p > 0 ? p : null;
-    }
+    // parsePaise: PlannrUI.parsePaise (public/plannr-ui.js), taken from window.PlannrUI above.
     // Contract Phase A — areas are INTEGER thousandths of a square foot, same reasoning as paise:
     // rate × area must be exact integer arithmetic. Mirrors parseAreaOptional() on the server.
     const MILLI_PER_SQFT = 1000;

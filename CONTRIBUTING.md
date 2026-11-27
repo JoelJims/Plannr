@@ -71,8 +71,9 @@ forward. There is no server to fix it later.
    process). `test/migration-equivalence.test.js` and `test/migration-faults.test.js` also run every
    step on a database from every past schema (`test/fixtures/schema-history/`), with a failure at
    each step and the starts after it; they pick up a new step without changes.
-4. Run everything: `npm test` and every `npm run test:*` UI suite. Then try it on a phone: install
-   the new build over the old one and check the data is still there (`docs/RELEASE.md`).
+4. Run everything: `npm test` and every `npm run test:*` UI suite. Then try it on the emulator or a
+   test phone with test data: install the new build over the old one and check the data is still
+   there (`docs/RELEASE.md`). A phone with real data follows `docs/PHONE-TEST-CHECKLIST.md`.
 
 ## Offline first
 

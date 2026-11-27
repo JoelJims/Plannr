@@ -144,19 +144,37 @@ const closed = (page) => page.waitForSelector('.lb-backdrop', { state: 'hidden',
 
   check('no console or page errors throughout', errors.length === 0, errors.slice(0, 3).join(' | '));
 
-  // Review finding F1: a JSON backup is checked for non-empty ledger codes only, so a crafted one can
-  // carry markup in a code. Every place the code goes into HTML must escape it: the option values of
-  // the ledger selects and the picker's data-code attributes. Restore such a backup, open the three
-  // pages, open the picker: nothing runs, and the option holds the code as text.
-  console.log('\n── a ledger code with markup, from a restored backup ─────────────────────────');
+  // Review finding F1: a ledger code with markup. The import refuses a code that is not "N.0" /
+  // "N.M" (backup-format.js); behind that, every place a code goes into HTML still escapes it (the
+  // option values of the ledger selects and the picker's data-code attributes). So: the crafted
+  // backup is refused; then the same codes are put straight into the database (as a damaged or
+  // hand-edited database could hold them), the three pages opened, the picker opened: nothing
+  // runs, and the option holds the code as text.
+  console.log('\n── a ledger code with markup ─────────────────────────────────────────────────');
   const PROBE = '77.0"><img src=x onerror="window.__plannrXss=1">';
+  const PROBE_SUB = '77.1"><img src=x onerror="window.__plannrXss=2">';
   const backup = await page.evaluate(() => fetch('/api/backup/export?includeContacts=1').then((r) => r.json()));
   const main = { ...backup.tables.ledger_mains[0], code: PROBE, name: 'Markup probe', sort_order: 9999 };
   backup.tables.ledger_mains.push(main);
   const sub0 = backup.tables.ledger_subs.find((s) => s.main_code === backup.tables.ledger_mains[0].code);
-  if (sub0) backup.tables.ledger_subs.push({ ...sub0, code: '77.1"><img src=x onerror="window.__plannrXss=2">', main_code: PROBE, name: 'Markup probe sub', sort_order: 9999 });
-  const imported = await page.evaluate((b) => fetch('/api/backup/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.status), backup);
-  check('the crafted backup is accepted by the import (codes are only checked for being non-empty)', imported === 200, String(imported));
+  backup.tables.ledger_subs.push({ ...sub0, code: PROBE_SUB, main_code: PROBE, name: 'Markup probe sub', sort_order: 9999 });
+  const imported = await page.evaluate((b) => fetch('/api/backup/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then(async (r) => ({ status: r.status, error: (await r.json()).error })), backup);
+  check('the crafted backup is refused by the import (400: not a category code)', imported.status === 400 && /is not a category code/.test(imported.error || ''), JSON.stringify(imported));
+  H.db.prepare('INSERT INTO ledger_mains (code, name, sort_order) VALUES (?, ?, ?)').run(PROBE, 'Markup probe', 9999);
+  H.db.prepare('INSERT INTO ledger_subs (code, main_code, name, sort_order) VALUES (?, ?, ?, ?)').run(PROBE_SUB, PROBE, 'Markup probe sub', 9999);
+  // An encrypted backup of this database brings them back in (a whole-database restore has no JSON
+  // checks to pass) and refreshes the server's category list, as a restore on the phone would.
+  const reloaded = await page.evaluate(async () => {
+    const pp = 'markup-probe-passphrase';
+    const r = await fetch('/api/backup/export-encrypted', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pp }) });
+    const buf = new Uint8Array(await (await r.blob()).arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    const back = await fetch('/api/backup/import-encrypted', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pp, dataBase64: btoa(bin) }) });
+    return back.status;
+  });
+  const listed = (await H.get('/api/ledgers')).json.ledgers.some((l) => l.code === PROBE);
+  check('the markup codes are in the server\'s category list (through an encrypted restore)', reloaded === 200 && listed, `restore ${reloaded}, listed ${listed}`);
   for (const [path, trig, sel] of [['/cash-outflow', '#ledgerTrigger', '#ledgerSelect'], ['/contract-details', '#cLedgerTrigger', '#cLedgerSelect'], ['/contractor-payments', '#cpLedgerTrigger', '#cpLedgerSelect']]) {
     await page.goto(base + path, { waitUntil: 'networkidle' });
     await page.waitForTimeout(400);

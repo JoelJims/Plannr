@@ -259,7 +259,7 @@
     await import('/local-bootstrap.js');
     window.LEDGERS = (await fetch('/api/ledgers').then((r) => r.json())).ledgers;
     const $ = (id) => document.getElementById(id);
-    const { formatPaise: fmtPaise, paiseToInput, escapeHtml: esc, formatDate: fmtDate, makeMsg, createLedgerPicker, createDatePicker } = window.PlannrUI;
+    const { formatPaise: fmtPaise, paiseToInput, parsePaise, escapeHtml: esc, formatDate: fmtDate, makeMsg, createLedgerPicker, createDatePicker } = window.PlannrUI;
 
     const msg = makeMsg($('cpMsg'));
 
@@ -283,14 +283,6 @@
     let contracts = [];
     let payments = [];
     let editingId = null;
-
-    function parsePaise(v) {
-      const s = String(v == null ? '' : v).trim().replace(/,/g, '');
-      if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
-      const [ip, dp = ''] = s.split('.');
-      const p = Number(ip) * 100 + Number((dp + '00').slice(0, 2));
-      return Number.isSafeInteger(p) && p > 0 ? p : null;
-    }
 
     function buildContractOptions() {
       // Phase 5G — single-contract invariant: there is exactly one contract (or none). Auto-select

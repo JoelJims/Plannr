@@ -8,29 +8,47 @@
 //
 // Run: node test-ui/contract-phase-a.js
 const H = require('../test/helpers');
-const { chromium } = require('playwright');
+const { chromium, errors: { TimeoutError } } = require('playwright');
+
+// No fixed pauses (review finding F8/F9). This suite used to sleep for a set time (120 to 700 ms)
+// and then read the page. On a busy PC that is a guess that can lose: 600 ms after 'networkidle'
+// the Contract Details page had not drawn its allowance rows yet, and the suite crashed reading
+// them. 'networkidle' only means the network went quiet, not that the page has finished with what
+// came back. So every wait below is for the thing the next step reads, with a long timeout so a
+// slow machine still passes. Where the timeout is swallowed (.catch(onlyTimeout)), the check after
+// it still runs and fails with its own message: a real bug costs up to WAIT_MS of extra time,
+// never a pass.
+const WAIT_MS = 15000;
+// Swallow Playwright's TimeoutError and nothing else. Any other error is thrown again and stops
+// the suite with its own message: a wait whose test throws (it reads an element that is gone), a
+// malformed selector, or a closed page. Swallowing those too would hide a broken wait.
+const onlyTimeout = (e) => { if (!(e instanceof TimeoutError)) throw e; };
+const waitUntil = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: WAIT_MS }).catch(onlyTimeout);
 
 // The main ledger is chosen through the searchable browser now, not a <select>. Search for the code,
 // then click the result — which is what a user does, and what a selectOption() call stopped testing
 // the moment the picker changed.
 async function pickLedger(page, triggerSel, code) {
   await page.click(triggerSel);
-  await page.waitForSelector('.lb-backdrop:not([hidden]) .lb-search', { timeout: 5000 });
+  await page.waitForSelector('.lb-backdrop:not([hidden]) .lb-search', { timeout: WAIT_MS });
   await page.fill('.lb-search', code);
-  await page.waitForTimeout(120);
+  // The search result row itself (search results are drawn as flat rows).
+  await page.waitForSelector(`.lb-row-flat[data-act="main"][data-code="${code}"]`, { timeout: WAIT_MS });
   await page.click(`.lb-row[data-act="main"][data-code="${code}"]`);
-  await page.waitForSelector('.lb-backdrop', { state: 'hidden', timeout: 5000 });
+  await page.waitForSelector('.lb-backdrop', { state: 'hidden', timeout: WAIT_MS });
 }
 
 
 // Every allowance is now entered by hand - the ten-row default set lifted from one agreement is
 // gone, so the suite drives the same add form an owner uses.
 async function addAllowance(page, { name, kind, cap }) {
+  const rowsBefore = (await page.$$('.cd-alw-row')).length;
   await page.fill('#alwName', name);
   await page.selectOption('#alwKind', kind);
   await page.fill('#alwCap', cap);
   await page.click('#alwAddBtn');
-  await page.waitForTimeout(600);
+  // Saved and redrawn: one row more than before (the checks after this read the rows).
+  await waitUntil(page, (n) => document.querySelectorAll('.cd-alw-row').length > n, rowsBefore);
 }
 
 let failures = 0;
@@ -51,6 +69,9 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
 
   // ---- create a rate-priced contract -------------------------------------------------------------
   await page.goto(base + '/contract-details', { waitUntil: 'networkidle' });
+  // The page sets Sl.No to 1 once its first load of the contract is done. Typing before that is
+  // wiped by the form reset that load ends with.
+  await waitUntil(page, () => document.querySelector('#cSlno').value === '1');
   await page.fill('#cContractor', 'ACME Builders');
   await page.fill('#cArea', 'Structural & RCC');
   await pickLedger(page, '#cLedgerTrigger', '5.0');
@@ -70,7 +91,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   // optional metadata, including the derived expected completion date. Phase C moved all of this
   // behind a collapsed <details> — open it first, exactly as a user would.
   await page.click('#cdOptional > summary');
-  await page.waitForTimeout(150);
+  await page.waitForSelector('#cdOptional[open]', { state: 'attached', timeout: WAIT_MS }).catch(onlyTimeout);
   await page.check('#hasSignedDate');
   // Month and year FIRST: attachDatePicker builds the day list for the currently selected month, so
   // picking the 31st before switching to January only works in a 31-day month. Written in August,
@@ -87,7 +108,8 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.fill('#cObligations', 'Water at site');
 
   await page.click('#contractSaveBtn');
-  await page.waitForTimeout(600);
+  // "Contract added." appears only after the save AND the reload into edit mode are both done.
+  await waitUntil(page, () => document.querySelector('#contractMsg').textContent.includes('Contract added.'));
   const saved = (await page.evaluate(() => fetch('/api/contracts').then((r) => r.json()))).contracts[0];
   check('the contract saved with the DERIVED total in the stated column', saved.statedAmountPaise === 229492500, String(saved.statedAmountPaise));
   check('pricingMode reports how the total was arrived at', saved.pricingMode === 'rate', saved.pricingMode);
@@ -100,21 +122,25 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   // ---- the typed total must survive a trip through rate pricing -----------------------------------
   // Filling in a rate and an area takes over the total box. Clearing either one has to hand the box
   // back with what the OWNER typed, not with the computed figure left sitting there looking typed.
+  // Each wait is for the box to change hands (enabled = handed back, disabled = taken over); the
+  // check after it then reads what is in the box.
+  const statedEnabled = () => !document.querySelector('#cStated').disabled;
+  const statedDisabled = () => document.querySelector('#cStated').disabled;
   await page.fill('#cAreaSqft', '');
-  await page.waitForTimeout(150);
+  await waitUntil(page, statedEnabled);
   check('clearing the area hands the total box back, empty (this contract never had a typed total)',
     !(await page.isDisabled('#cStated')) && (await page.inputValue('#cStated')) === '',
     JSON.stringify(await page.inputValue('#cStated')));
   await page.fill('#cStated', '2500000');
   await page.fill('#cAreaSqft', '1240.5');
-  await page.waitForTimeout(150);
+  await waitUntil(page, statedDisabled);
   check('...and a typed total is taken over, not destroyed', (await page.inputValue('#cStated')) === '2294925.00');
   await page.fill('#cRate', '');
-  await page.waitForTimeout(150);
+  await waitUntil(page, statedEnabled);
   check('...it comes back verbatim when the rate price is broken up', (await page.inputValue('#cStated')) === '2500000',
     await page.inputValue('#cStated'));
   await page.fill('#cRate', '1850');
-  await page.waitForTimeout(150);
+  await waitUntil(page, statedDisabled);
 
   // ---- scope list: names only --------------------------------------------------------------------
   check('the scope section appears once a contract exists', await page.isVisible('#scopeSection'));
@@ -124,7 +150,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   await page.fill('#svcName', 'Electrical rough-in');
   await page.click('#svcAddBtn');
   // Wait for the row rather than a fixed 500 ms (that flaked once under load in the full suite).
-  await page.waitForFunction(() => document.querySelectorAll('.cd-svc-row').length >= 1, null, { timeout: 5000 }).catch(() => {});
+  await waitUntil(page, () => document.querySelectorAll('.cd-svc-row').length >= 1);
   check('a scope item can be added', (await page.$$('.cd-svc-row')).length === 1);
 
   // ---- allowances: entered by hand, because there is no seeded set ------------------------------
@@ -132,7 +158,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   check('there is no button that installs a default set of caps', (await page.$('#alwSeedBtn')) === null);
 
   await page.click('#alwAddOneBtn');
-  await page.waitForTimeout(250);
+  await page.waitForSelector('#allowanceForm', { state: 'visible', timeout: WAIT_MS }).catch(onlyTimeout);
   check('the prompt reveals the add form', await page.isVisible('#allowanceForm'));
 
   await addAllowance(page, { name: 'Sanitaryware', kind: 'lump', cap: '40000' });
@@ -148,7 +174,8 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
 
   // ---- draw spend against a cap from the debit form ------------------------------------------------
   await page.goto(base + '/cash-outflow', { waitUntil: 'networkidle' });
-  await page.waitForTimeout(400);
+  // The allowance picker is filled by the page's own start-up load of the contract.
+  await waitUntil(page, () => [...document.querySelectorAll('#allowanceSelect option')].some((o) => o.value));
   check('the allowance picker is hidden on a non-contract debit', !(await page.isVisible('#allowanceWrap')));
   await page.selectOption('#scopeSelect', 'included');
   check('...and appears when the item is in the contract', await page.isVisible('#allowanceWrap'));
@@ -163,14 +190,18 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
   });
   await page.selectOption('#allowanceSelect', capValue);
   await page.click('#saveBtn');
-  await page.waitForTimeout(700);
+  // "Entry added." appears once the save and the page's refresh after it are done. Leaving the page
+  // before that could cut the save off.
+  await waitUntil(page, () => document.querySelector('#coMsg').textContent.includes('Entry added.'));
 
   await page.goto(base + '/contract-details', { waitUntil: 'networkidle' });
-  await page.waitForTimeout(600);
-  const drawnPos = await page.$$eval('.cd-alw-pos', (els) => els.map((e) => e.textContent.trim())).then((all) => all[0]);
+  // The allowance rows are drawn when the page's own load of the contract comes back, which can be
+  // well after 'networkidle' on a busy PC. A fixed 600 ms here once found nothing drawn yet.
+  await page.waitForSelector('.cd-alw-pos', { state: 'attached', timeout: WAIT_MS }).catch(onlyTimeout);
+  const drawnPos = await page.$$eval('.cd-alw-pos', (els) => els.map((e) => e.textContent.trim())).then((all) => all[0] || '');
   check('the draw shows up as an over-cap position on Contract Details',
     drawnPos.includes('₹60,000.00') && drawnPos.includes('₹20,000.00 over'), drawnPos);
-  const overClass = await page.$$eval('.cd-alw-pos', (els) => els.map((e) => e.className)).then((cs) => cs[0]);
+  const overClass = await page.$$eval('.cd-alw-pos', (els) => els.map((e) => e.className)).then((cs) => cs[0] || '');
   check('and is styled as an overrun', overClass.includes('cd-over'), overClass);
 
   // an overrun settles nothing

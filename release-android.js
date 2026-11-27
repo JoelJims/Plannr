@@ -11,11 +11,18 @@
 //      present; the key never leaves the machine and is never printed).
 // If the sync or the build fails, build.gradle is put back as it was.
 //
-// Usage:  npm run release:android                        versionName 1.0 -> 1.1, versionCode +1
-//         npm run release:android -- --version-name 2.0  choose the versionName
-//         npm run release:android -- --dry-run           show what would happen; change nothing
+// Usage:  npm run release:android                          versionCode +1; versionName 1.0 -> 1.0.0
+//                                                          (the first public release), then
+//                                                          1.0.0 -> 1.0.1, 1.0.1 -> 1.0.2, ...
+//         npm run release:android -- --version-name 1.1.0  choose the versionName
+//         npm run release:android -- --dry-run             show what would happen; change nothing
 // Without keystore.properties it stops before doing anything: an unsigned APK cannot be installed
 // over the app on the phone (add --allow-unsigned to build one anyway, e.g. to test the build).
+// The key itself lives outside the project (SETUP.md section 2); keystore.properties' storeFile line
+// points to it with a path relative to the project root, so the key folder must be on the same drive
+// as the project. If no key file is there, it also stops before doing anything. From
+// keystore.properties it reads only that storeFile line (and checks the file is not saved with a
+// UTF-8 byte-order mark or as UTF-16, which Gradle cannot read).
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,9 +38,13 @@ function testCommands(pkg) {
   return [['npm', ['test']], ...ui.map((k) => ['npm', ['run', '-s', k]])];
 }
 
-// "1.0" -> "1.1", "1.2.9" -> "1.2.10"; anything else must be given with --version-name.
+// Version names are MAJOR.MINOR.PATCH (docs/release-plan.md section 2). The first public release is
+// 1.0.0 (owner decision, 2026-11-22), so a two-part name gets its patch number: "1.0" -> "1.0.0".
+// A three-part name bumps the patch number: "1.0.0" -> "1.0.1", "1.2.9" -> "1.2.10".
+// Anything else must be given with --version-name.
 function nextVersionName(name) {
-  const m = /^(.*?)(\d+)$/.exec(name);
+  if (/^\d+\.\d+$/.test(name)) return `${name}.0`;
+  const m = /^(\d+\.\d+\.)(\d+)$/.exec(name);
   if (!m) throw new Error(`cannot bump versionName "${name}" automatically; pass --version-name`);
   return m[1] + (Number(m[2]) + 1);
 }
@@ -56,10 +67,84 @@ function bumpVersions(gradleText, { versionName } = {}) {
   return { text, from: { code, name }, to };
 }
 
-// Why a release must not go ahead, or null. An unsigned release APK cannot update the installed app.
-function signingProblem({ signed, allowUnsigned }) {
-  if (signed || allowUnsigned) return null;
-  return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
+// The storeFile value from the text of keystore.properties, or null if there is none. That file also
+// holds the passwords, so this reads ONLY the storeFile key: no other line or value is returned, kept
+// or printed. It follows Java's Properties rules that this file can use (Gradle reads it with
+// Properties.load): comment lines start with # or !, the key ends at "=", ":" or a space, a
+// backslash escapes the next character, and the last storeFile line wins. Not handled: a value
+// split over several lines with a trailing backslash.
+function readStoreFile(propertiesText) {
+  let value = null;
+  for (const raw of String(propertiesText).split(/\r\n|\r|\n/)) {
+    const line = raw.replace(/^[ \t\f]+/, '');
+    if (line.startsWith('#') || line.startsWith('!')) continue;
+    const m = /^storeFile(?:[ \t\f]*[=:]|[ \t\f])[ \t\f]*(.*)$/.exec(line);
+    if (!m) continue;
+    const unescaped = m[1].replace(/\\u([0-9a-fA-F]{4})|\\(.)/g, (_, hex, c) =>
+      hex ? String.fromCharCode(parseInt(hex, 16)) : ({ t: '\t', n: '\n', r: '\r', f: '\f' }[c] ?? c));
+    value = unescaped.trim() || null;
+  }
+  return value;
+}
+
+// Why a release must not go ahead, or null. The facts are passed in, so this can be tested without
+// the real files:
+//   signed        keystore.properties exists in the project root;
+//   storeFile     its storeFile value (readStoreFile), or null;
+//   keyPath       storeFile resolved against the project root;
+//   keyFound      a file exists at keyPath;
+//   bom           keystore.properties starts with a UTF-8 byte-order mark;
+//   utf16         keystore.properties is saved as UTF-16 (it starts with FF FE or FE FF);
+//   allowUnsigned --allow-unsigned was given.
+// An unsigned release APK cannot update the installed app, and a keystore.properties that points to
+// a missing key makes the Gradle build fail after the version bump.
+function signingProblem({ signed, allowUnsigned, storeFile, keyPath, keyFound, bom, utf16 }) {
+  if (!signed) {
+    if (allowUnsigned) return null;
+    return 'keystore.properties not found in the project root, so the APK would be UNSIGNED and could not be installed over the app on the phone. See SETUP.md section 2. (--allow-unsigned builds one anyway.)';
+  }
+  // From here on keystore.properties exists, so Gradle WILL try to sign: --allow-unsigned cannot help.
+  // Windows PowerShell 5.1's plain > and Out-File write UTF-16. Read as Latin-1 (as Gradle does), every
+  // character comes with a NUL byte, so no entry is found, storeFile included.
+  if (utf16) return 'keystore.properties is saved as UTF-16 (what Windows PowerShell 5.1\'s > and plain Out-File write), so Gradle cannot read it: it reads this file as Latin-1 and finds none of its entries. Save it as UTF-8 without a byte-order mark, or ASCII (in Notepad: Save as, Encoding "UTF-8"). See SETUP.md section 2.';
+  // Gradle reads the file as Latin-1, so a byte-order mark becomes part of the first entry's name and
+  // that entry is lost (a storeFile line at the top then looks missing). The BOM is not stripped
+  // here: Gradle would still fail, so the owner has to save the file without it.
+  if (bom) return 'keystore.properties starts with a UTF-8 byte-order mark (BOM), so Gradle cannot read its first entry: it reads this file as Latin-1 and takes the BOM as part of that entry\'s name. Save it without one (in Notepad: Save as, Encoding "UTF-8", not "UTF-8 with BOM"). See SETUP.md section 2.';
+  if (!storeFile) return 'keystore.properties has no storeFile line, so Gradle cannot find the release key. See SETUP.md section 2.';
+  // A drive letter with no slash after it ("C:Keys\...") is not absolute, but it is not relative to
+  // the project root either, so it is refused too.
+  if (path.win32.isAbsolute(storeFile) || path.posix.isAbsolute(storeFile) || /^[A-Za-z]:/.test(storeFile)) {
+    return 'The storeFile line in keystore.properties must be a path relative to the project root, with no drive letter (android/app/build.gradle joins it to the project root, so an absolute path never reaches the key). A relative path cannot change drive, so the key folder must be on the same drive as the project: on a PC with only C:, keep the key in C:\\Keys\\plannr\\ and the project under C:\\. See SETUP.md section 2.';
+  }
+  if (!keyFound) return `The release key is missing: keystore.properties points to ${keyPath} (its storeFile line, relative to the project root), but there is no file there. Put the key back there or correct the storeFile line. See SETUP.md section 2.`;
+  return null;
+}
+
+// Where keystore.properties says the key is, and whether it is there. Reads only the storeFile line
+// (and whether the file starts with a byte-order mark: UTF-8's, or UTF-16's).
+// root is the project root: storeFile is resolved against it, never against the current folder,
+// because android/app/build.gradle does the same (new File(projectRootDir, storeFile)).
+function signingFacts(root) {
+  const propsFile = path.join(root, 'keystore.properties');
+  const signed = fs.existsSync(propsFile);
+  const bytes = signed ? fs.readFileSync(propsFile) : Buffer.alloc(0);
+  const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf; // the UTF-8 byte-order mark
+  // The UTF-16 byte-order marks: FF FE (little-endian, what Windows PowerShell 5.1 writes) or FE FF.
+  const utf16 = (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff);
+  // latin1: the encoding Java's Properties.load uses for this file.
+  const storeFile = signed ? readStoreFile(bytes.toString('latin1')) : null;
+  const keyPath = storeFile ? path.resolve(root, storeFile) : null;
+  const keyFound = keyPath ? Boolean(fs.statSync(keyPath, { throwIfNoEntry: false })?.isFile()) : false;
+  return { signed, storeFile, keyPath, keyFound, bom, utf16 };
+}
+
+// The "Signing:" line printed before anything runs. problem is signingProblem's answer. The line
+// names the key only when the release can go ahead; otherwise the reason is printed right after it.
+function signingLine({ signed, keyPath }, problem) {
+  if (!signed) return 'Signing: keystore.properties NOT found.';
+  if (problem) return 'Signing: NOT ready. keystore.properties is there, but the release key cannot be used (reason below).';
+  return `Signing: release key at ${keyPath} (keystore.properties found).`;
 }
 
 function run(cmd, args, opts = {}) {
@@ -72,24 +157,32 @@ function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const i = argv.indexOf('--version-name');
   const versionName = i >= 0 ? argv[i + 1] : undefined;
-  if (i >= 0 && !versionName) throw new Error('--version-name needs a value, e.g. --version-name 1.1');
+  if (i >= 0 && !versionName) throw new Error('--version-name needs a value, e.g. --version-name 1.1.0');
 
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const original = fs.readFileSync(GRADLE_FILE, 'utf8');
   const bump = bumpVersions(original, { versionName });
-  const signed = fs.existsSync(path.join(ROOT, 'keystore.properties'));
+  const facts = signingFacts(ROOT);
+  const { signed } = facts;
   const tests = testCommands(pkg);
 
   console.log(`Plannr Android release: versionCode ${bump.from.code} -> ${bump.to.code}, versionName ${bump.from.name} -> ${bump.to.name}`);
-  console.log(signed ? 'Signing: release key (keystore.properties found).' : 'Signing: keystore.properties NOT found.');
-  const problem = signingProblem({ signed, allowUnsigned: argv.includes('--allow-unsigned') });
+  const problem = signingProblem({ ...facts, allowUnsigned: argv.includes('--allow-unsigned') });
+  console.log(signingLine(facts, problem));
+  // A dry run exits 0 either way: it only reports. The real-project dry run in
+  // test/release-script.test.js runs in every checkout, with or without keystore.properties and a key.
   if (dryRun) {
-    if (problem) console.log(`Would stop: ${problem}`);
-    console.log('\nDry run — would run, in order:');
-    for (const [c, a] of tests) console.log(`  ${c} ${a.join(' ')}`);
-    console.log('  (write the new versions to android/app/build.gradle)');
-    console.log('  npm run android:sync');
-    console.log(`  android/${process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'} assembleRelease`);
+    if (problem) {
+      // The real run stops here, so no step after this point is listed.
+      console.log(`Would stop: ${problem}`);
+      console.log('\nDry run: the release would stop here, before the tests. Nothing after this would run: no tests, no version bump, no sync, no build.');
+    } else {
+      console.log('\nDry run — would run, in order:');
+      for (const [c, a] of tests) console.log(`  ${c} ${a.join(' ')}`);
+      console.log('  (write the new versions to android/app/build.gradle)');
+      console.log('  npm run android:sync');
+      console.log(`  android/${process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'} assembleRelease`);
+    }
     console.log('Nothing was changed.');
     return 0;
   }
@@ -117,7 +210,7 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem };
+module.exports = { bumpVersions, nextVersionName, testCommands, signingProblem, readStoreFile, signingFacts };
 if (require.main === module) {
   try { process.exit(main(process.argv.slice(2))); } catch (e) { console.error(`release:android: ${e.message}`); process.exit(1); }
 }

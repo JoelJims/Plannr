@@ -12,11 +12,15 @@
 //      live database has always had one seeded (out of band, long before this migration), so this
 //      never surfaces there; a brand-new local database has none. Phase 8d.
 // This suite clicks through the real nav (not page.goto to a hardcoded path) so a reintroduced clean
-// URL fails exactly the way a tap would, and asserts zero console/page errors on every page.
+// URL fails exactly the way a tap would, and asserts no console/page errors on every page, apart
+// from sqlite-wasm's own two-line fallback note (review finding F7). It also checks that every
+// .wasm file the pages load is served as application/wasm.
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { chromium } = require('playwright');
+// Every console/page error except sqlite-wasm's own two-line fallback note (review finding F7).
+const { attachErrorCollector } = require('./_console-errors');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = 8199;
@@ -36,21 +40,16 @@ function startServer() {
   });
 }
 
-// Load a page (by clicking a nav element, not page.goto — a reintroduced clean URL must fail the
-// way a real tap would) and collect every console/page error seen up to the next call.
-function attachErrorCollector(page) {
-  const errors = [];
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(`[console.error] ${m.text()}`); });
-  page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
-  return errors;
-}
-
 (async () => {
   const server = await startServer();
   const browser = await chromium.launch({ args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
   const ctx = await browser.newContext({ viewport: { width: 1200, height: 1400 } });
   const page = await ctx.newPage();
   const errors = attachErrorCollector(page);
+  // Every .wasm file the pages ask for, by URL. The check near the end of this suite asks
+  // local-server.js for each one again and reads its Content-Type.
+  const wasmUrls = new Set();
+  page.on('request', (r) => { if (new URL(r.url()).pathname.endsWith('.wasm')) wasmUrls.add(r.url()); });
 
   const afterNav = async (label) => {
     await page.waitForTimeout(500);
@@ -348,6 +347,24 @@ function attachErrorCollector(page) {
     check('Backup reminder interval: "3" reloads correctly', selVal === '3', selVal);
     check('home.html: banner still hidden (last export was moments ago, well inside 3 days)', !(await bannerVisible()), await bannerText());
     check('Backup reminder section: no console/page errors', errors.length === 0, errors.join(' | '));
+
+    // ---------------------------------------------------------------------------------------------
+    // The .wasm Content-Type (review finding F7). The browser's fast way to load sqlite3.wasm,
+    // WebAssembly.instantiateStreaming(), only accepts a file served as application/wasm. With any
+    // other type sqlite-wasm logs its two-line fallback note and loads the file a slower way. The
+    // error collector ignores that note (test-ui/_console-errors.js), so the console checks above
+    // can no longer catch a wrong type. This checks the header itself, for every .wasm file the
+    // pages asked for during this suite.
+    // ---------------------------------------------------------------------------------------------
+    const wasmList = [...wasmUrls].sort();
+    check('the pages asked for sqlite3.wasm', wasmList.some((u) => new URL(u).pathname.endsWith('/sqlite3.wasm')), wasmList.join(', '));
+    for (const url of wasmList) {
+      const res = await page.request.get(url);
+      const type = res.headers()['content-type'] || '';
+      check(`${new URL(url).pathname}: served with Content-Type application/wasm`,
+        res.status() === 200 && type.split(';')[0].trim().toLowerCase() === 'application/wasm',
+        `status ${res.status()}, Content-Type ${JSON.stringify(type)}`);
+    }
   } finally {
     await browser.close();
     server.kill();

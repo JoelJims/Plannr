@@ -25,7 +25,7 @@
 // Step 1.4 C9: once the data is in its own file (db.js useAdapter()), both go through that adapter:
 // exportBytes() (VACUUM INTO), and replaceWith() (the image checked, then renamed over the file).
 
-import { db, init, SCHEMA_VERSION, dbAdapter, usingOwnHandle, restoreFromBytes, imageUserVersion, backupTooNew } from './db.js';
+import { db, init, SCHEMA_VERSION, dbAdapter, usingOwnHandle, restoreFromBytes, undoFailedRestore, imageUserVersion, backupTooNew } from './db.js';
 import { getSqlite3 } from './db-engine.js';
 
 /** The whole database as a SQLite file image. Await it: on the file it is async. */
@@ -40,8 +40,27 @@ export function exportSnapshotBytes() {
 export { imageUserVersion };
 const tooNew = backupTooNew;
 
+// All or nothing (S3/Q6, review 2026-11-21): the data as it is now is kept in memory, the backup is
+// copied in (one transaction: a failure there undoes itself), and if bringing it up to this version
+// or the foreign-key check then fails, the kept data is copied back in the same way.
 export async function restoreSnapshotBytes(bytes) {
   if (!usingOwnHandle()) return restoreFromBytes(bytes); // the phone's database file (db.js, shared with the desktop)
+  const before = await exportSnapshotBytes();
+  await copyImageIn(bytes);
+  try {
+    // Outside copyImageIn's transaction: init() manages its own transactions for whichever
+    // migrations it decides to run, and SQLite does not support nesting a second BEGIN inside one.
+    await init({ snapshot: false });
+    const fkViol = await dbAdapter().all('PRAGMA foreign_key_check');
+    if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
+  } catch (e) {
+    await undoFailedRestore(e, () => copyImageIn(before));
+  }
+}
+
+// Replace every table of the live (kvvfs) database with the image's, and its user_version, in one
+// transaction. A backup from a newer Plannr is refused before anything is touched.
+async function copyImageIn(bytes) {
   const sqlite3 = getSqlite3();
   const tempDb = new sqlite3.oo1.DB(':memory:', 'c');
   const p = sqlite3.wasm.allocFromTypedArray(bytes);
@@ -101,13 +120,6 @@ export async function restoreSnapshotBytes(bytes) {
     } finally {
       await live.exec('PRAGMA foreign_keys = ON');
     }
-
-    // Outside the transaction above — init() manages its own transactions for whichever
-    // migrations it decides to run, and SQLite does not support nesting a second BEGIN inside one.
-    await init({ snapshot: false });
-
-    const fkViol = await live.all('PRAGMA foreign_key_check');
-    if (fkViol.length) throw new Error('restoreSnapshotBytes: foreign_key_check failed after restore: ' + JSON.stringify(fkViol));
   } finally {
     tempDb.close();
   }

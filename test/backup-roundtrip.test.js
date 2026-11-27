@@ -64,7 +64,7 @@ test('JSON backup (v2): back up -> wipe -> restore gives back every table exactl
 
 test('JSON backup (v2): the restored categories are live straight away (no restart needed)', async () => {
   const ledgers = await H.get('/api/ledgers');
-  const garden = (ledgers.json.ledgers || ledgers.json).find((l) => l.code === '90');
+  const garden = (ledgers.json.ledgers || ledgers.json).find((l) => l.code === '90.0');
   assert.ok(garden, 'category 90 from the backup is listed');
   assert.deepStrictEqual(garden.subLedgers.map((s) => s.code), ['90.1', '90.2']);
 });
@@ -88,7 +88,7 @@ test('an old v1 JSON backup still restores, and leaves this install\'s categorie
   // on a fresh install) only category codes that every install has.
   const v1 = { app: 'plannr', kind: 'plannr-backup', schemaVersion: 1, exportedAt: v2.exportedAt, tables: {} };
   for (const [t, rows] of Object.entries(v2.tables)) if (!['users', 'ledger_mains', 'ledger_subs', 'ledger_customs'].includes(t)) v1.tables[t] = rows;
-  v1.tables.cash_out = v1.tables.cash_out.map((r) => (r.ledger_code === '90' ? { ...r, ledger_code: '22.0', subledger_code: null } : r));
+  v1.tables.cash_out = v1.tables.cash_out.map((r) => (r.ledger_code === '90.0' ? { ...r, ledger_code: '22.0', subledger_code: null } : r));
 
   await wipeToFreshInstall();
   const freshCategories = F.dumpAll(H.db).tables.ledger_mains;
@@ -113,7 +113,7 @@ test('a v1 backup that uses a category this install lacks is refused cleanly, da
   const before = F.dumpAll(H.db);
   const r = await importJson(v1);
   assert.strictEqual(r.status, 400);
-  assert.match(r.json.error, /unknown ledger_code "90"/);
+  assert.match(r.json.error, /unknown ledger_code "90\.0"/);
   assert.deepStrictEqual(F.dumpAll(H.db), before);
 });
 

@@ -333,8 +333,9 @@
       <!-- Phase 10G — discreet reconciliation warning: shown only when reconciliation.ok is false. -->
       <div class="ov-recon" id="ovRecon" role="status" hidden></div>
 
-      <!-- 0. Date range — scopes the spending figures (B, C, D), the budget bar, and the
-           Spending by Ledger pie. Default = all transactions. A / E / F stay cumulative. -->
+      <!-- 0. Date range — scopes the spending figures (B, C, D) and the Spending by Ledger pie.
+           Default = all transactions. A / E / F stay cumulative, and so does the whole budget block
+           (bar, "Spent … in total", "left of total budget"), F4 option (b). -->
       <div class="ov-section">
         <p class="ov-section-title">Date range</p>
         <!-- Collapsed (default): Edit + the current span text, mirroring the Outflow
@@ -372,13 +373,13 @@
            balance Owed to Contractors (F), shown on-screen using the SAME value the PDF prints. -->
       <div class="ov-section">
         <div class="ov-figs6">
-          <div class="ov-fig"><div class="ov-fig-label">Spent by self (C)</div><div class="ov-fig-val" id="figC">₹0.00</div><div class="ov-fig-note">Σ all cash outflow</div></div>
-          <div class="ov-fig"><div class="ov-fig-label">Paid to contractors (B)</div><div class="ov-fig-val" id="figB">₹0.00</div><div class="ov-fig-note">Σ contractor payments</div></div>
-          <div class="ov-fig"><div class="ov-fig-label">Total money paid</div><div class="ov-fig-val" id="figD">₹0.00</div><div class="ov-fig-note">B + C</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Spent by self (C)</div><div class="ov-fig-val" id="figC">…</div><div class="ov-fig-note">Σ all cash outflow</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Paid to contractors (B)</div><div class="ov-fig-val" id="figB">…</div><div class="ov-fig-note">Σ contractor payments</div></div>
+          <div class="ov-fig"><div class="ov-fig-label">Total money paid</div><div class="ov-fig-val" id="figD">…</div><div class="ov-fig-note">B + C</div></div>
         </div>
         <div class="ov-owed" id="ovOwed" hidden>
           <div class="ov-fig-label">Owed to contractors (F)</div>
-          <div class="ov-fig-val" id="figF">₹0.00</div>
+          <div class="ov-fig-val" id="figF">…</div>
           <div class="ov-owed-note">Total contract value − payments paid, cumulative. Same figure as the PDF.</div>
         </div>
       </div>
@@ -399,7 +400,7 @@
           <div class="ov-bar-marker" id="ovBarMarker" hidden></div>
         </div>
         <div class="ov-bar-labels">
-          <span id="ovBarSpent">Spent ₹0.00</span>
+          <span id="ovBarSpent">Spent …</span>
           <span id="ovBarBudget">No budget set</span>
         </div>
       </div>
@@ -539,8 +540,8 @@
 
     let data = null;
 
-    // ---- Date range: scopes the spending figures (B/C/D), budget bar, and pie.
-    // Default = all (both bounds null). A/E/F are cumulative server-side. ----
+    // ---- Date range: scopes the spending figures (B/C/D) and the pie.
+    // Default = all (both bounds null). A/E/F and the budget bar are cumulative (F4 option (b)). ----
     const startPicker = createDatePicker({ day: $('ovStartDay'), month: $('ovStartMonth'), year: $('ovStartYear') });
     const endPicker = createDatePicker({ day: $('ovEndDay'), month: $('ovEndMonth'), year: $('ovEndYear') });
     let range = { start: null, end: null };
@@ -616,10 +617,33 @@
       if (!txTable.isEditing()) await loadOutflows();
     });
 
+    // F3 (review 2026-11-21): a failed load showed ₹0.00 everywhere with no message, which reads as
+    // "nothing spent". Now the figures say "…" while loading, "—" if the first load fails, and the
+    // message says what happened. A failed refresh after an edit keeps the last figures and says
+    // they may be out of date.
+    async function fetchOverview() {
+      let r;
+      try { r = await fetch(overviewUrl()); }
+      catch (err) { return { error: (err && err.message) || String(err) }; }
+      if (r.status === 401) { location.href = '/login.html'; return { redirected: true }; }
+      const body = await r.json().catch(() => null);
+      if (!r.ok || !body || !body.money) return { error: (body && body.error) || `the app answered ${r.status}` };
+      return { data: body };
+    }
+    function showNoFigures() {
+      for (const id of ['figC', 'figB', 'figD', 'figF']) $(id).textContent = '—';
+      $('ovBarSpent').textContent = 'Spent —';
+    }
+
     async function load() {
-      const r = await fetch(overviewUrl());
-      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
-      data = await r.json();
+      const got = await fetchOverview();
+      if (got.redirected) return;
+      if (got.error) {
+        showNoFigures();
+        ovMsg.show('The Overview could not be loaded, so no figures are shown. Reload the page to try again. (' + got.error + ')', 'error');
+        return;
+      }
+      data = got.data;
       $('budgetInput').value = data.budgetPaise != null ? (Math.floor(data.budgetPaise / 100) + '.' + String(data.budgetPaise % 100).padStart(2, '0')) : '';
       renderAll();
       // Editable-table setup: give the shared table the session user (fallback) AND the full
@@ -634,9 +658,13 @@
     // Re-read the SERVER's computed summary after an edit (ONE source of truth — no
     // client-side recompute) and re-render the whole analytics section.
     async function refreshOverview() {
-      const r = await fetch(overviewUrl());
-      if (!r.ok) { if (r.status === 401) location.href = '/login.html'; return; }
-      data = await r.json();
+      const got = await fetchOverview();
+      if (got.redirected) return;
+      if (got.error) {
+        ovMsg.show('The figures could not be updated, so they may be out of date. Reload the page to see the latest. (' + got.error + ')', 'error');
+        return;
+      }
+      data = got.data;
       renderAll();
     }
 
@@ -687,22 +715,29 @@
       $('ovOwed').hidden = !(m.totalContractPaise > 0);
     }
 
-    // ---- 3. Total-spent bar (spent = D, total money out = self + contractor payments) ----
+    // ---- 3. Total-spent bar: the WHOLE project's spend against the budget (self + contractor payments).
+    // F4 option (b), decided by the owner 2026-11-22: the budget is for the whole project, so the whole
+    // block uses the whole project's spend, even when a date range is set: the fill, the amber "over"
+    // colour, the budget marker, the "Spent" caption and the "left / over total budget" label. Then the
+    // bar and the label cannot disagree. With a range set the caption says "in total", because the
+    // range's own figures (B, C, D) are in the cards above. With no range the whole spend IS D.
+    // Same rule as the PDF's budget line (core/overview-pdf.js, budgetBlock).
     function renderTotalBar() {
-      const spent = data.money.totalSpentPaise, budget = data.budgetPaise;
-      const scale = Math.max(spent, budget || 0, 1);
-      const over = budget != null && spent > budget;
+      const whole = data.money.wholeProjectSpentPaise, budget = data.budgetPaise;
+      const scale = Math.max(whole, budget || 0, 1);
+      const over = budget != null && whole > budget;
       const fill = $('ovBarFill');
-      fill.style.width = (spent / scale * 100).toFixed(2) + '%';
+      fill.style.width = (whole / scale * 100).toFixed(2) + '%';
       fill.className = 'ov-bar-fill' + (over ? ' over' : '');
       const marker = $('ovBarMarker');
       if (budget != null) { marker.hidden = false; marker.style.left = (budget / scale * 100).toFixed(2) + '%'; }
       else { marker.hidden = true; }
-      $('ovBarSpent').textContent = 'Spent ' + fmtPaise(spent);
+      const rangeSet = !!(range.start || range.end);
+      $('ovBarSpent').textContent = 'Spent ' + fmtPaise(whole) + (rangeSet ? ' in total' : '');
       const bl = $('ovBarBudget');
       if (budget == null) { bl.textContent = 'No budget set'; bl.className = ''; }
-      else if (over) { bl.textContent = 'Over budget by ' + fmtPaise(spent - budget); bl.className = 'over'; }
-      else { bl.textContent = fmtPaise(budget - spent) + ' left · Budget ' + fmtPaise(budget); bl.className = ''; }
+      else if (over) { bl.textContent = fmtPaise(whole - budget) + ' over total budget · Budget ' + fmtPaise(budget); bl.className = 'over'; }
+      else { bl.textContent = fmtPaise(budget - whole) + ' left of total budget · Budget ' + fmtPaise(budget); bl.className = ''; }
     }
 
     // ---- 4. Pie: one slice per MAIN ledger of ALL spending — cash outflow AND
