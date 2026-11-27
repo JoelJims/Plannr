@@ -125,6 +125,7 @@ export async function makePhoneHost({ plugins, localStorage: ls, backup, source 
       },
     },
     marker: {
+      async exists() { return exists(paths.marker); },
       async read() {
         if (!(await exists(paths.marker))) return null;
         try {
@@ -182,8 +183,11 @@ export async function makePhoneHost({ plugins, localStorage: ls, backup, source 
 
 /** The facts decideAtStartup() takes. */
 export async function startupFacts(host) {
+  const markerFile = await host.marker.read();
   return {
-    marker: (await host.marker.read()) || (await host.markerKey.read()),
+    marker: markerFile || (await host.markerKey.read()),
+    // Q5: the file is there but read() could not parse it (null): startup must not delete the database.
+    markerUnreadable: !markerFile && !!(host.marker.exists && (await host.marker.exists())),
     candidate: await host.candidate.exists(),
     main: await host.main.exists(),
     mainOk: () => host.main.quickCheckOk(),
