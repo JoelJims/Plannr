@@ -62,6 +62,15 @@ when the key is ready to use; otherwise it says "NOT ready" (or "NOT found" when
 `keystore.properties`) and the reason follows. Keep two offline backup copies of the key and both
 passwords in a password manager (`SETUP.md` §2).
 
+**Passwords (from 2026-11-25):** `keystore.properties` holds only `storeFile` and `keyAlias`. The
+store and key passwords are never in a file: the script takes them from `PLANNR_STORE_PASSWORD`
+and `PLANNR_KEY_PASSWORD` if they are set, and otherwise asks for them in the terminal without
+showing what you type. It passes them to Gradle only through Gradle's environment (never on the
+command line, never written to disk, never printed). With no terminal and no variables it stops
+before anything changes. **If your `keystore.properties` still has the two password lines, the
+release stops** (the dry run says "Would stop") and names them, never their values: delete those
+two lines first. The dry run's "Passwords:" line says where the passwords will come from.
+
 ```sh
 npm run release:android -- --dry-run   # shows the version bump and the steps (or why it would stop); changes nothing
 npm run release:android                # or: npm run release:android -- --version-name 1.1.0
