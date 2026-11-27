@@ -76,3 +76,27 @@ test('other keys, .env variants and exported data files are git-ignored', () => 
   const keep = spawnSync('git', ['check-ignore', '--no-index', '.env.example'], { cwd: ROOT, encoding: 'utf8' });
   assert.strictEqual(keep.status, 1, '.env.example stays committable');
 });
+
+// Key BACKUPS and copies are as secret as the key itself (a zipped or renamed keystore still signs
+// updates): git ignores them too, while ordinary .zip/.bak files the repo might need stay committable.
+const KEY_BACKUP_SAMPLES = ['plannr-release.keystore.bak', 'plannr-release.keystore.zip', 'plannr-release.keystore.old',
+  'key-backup.zip', 'plannr-key-backup.7z', 'release-key-backup', 'plannr-keystore-backup.zip', 'plannr-release-keystore.zip',
+  'keystore.properties.bak', 'keystore - Copy.properties', 'upload.jks.bak', 'cert.p12.zip', 'key.pem.old', 'upload.pfx',
+  'keys/plannr-release.keystore.bak'];
+const KEY_BACKUP_NAME = /(\.keystore\.|\.jks\.|\.p12\.|\.pem\.|\.pfx$|key-backup|keystore-backup|keystore[^/]*\.(zip|7z)$|(^|\/)keystore[^/]*\.properties|keystore\.properties\.)/i;
+
+test('key backups and copies are git-ignored, and no tracked file is a key or a key backup', () => {
+  for (const name of KEY_BACKUP_SAMPLES) assert.match(name, KEY_BACKUP_NAME, `the name check covers ${name}`);
+  const git = spawnSync('git', ['check-ignore', '--no-index', ...KEY_BACKUP_SAMPLES], { cwd: ROOT, encoding: 'utf8' });
+  if (git.status !== 0 && git.status !== 1) return; // not a git checkout: nothing can be committed
+  assert.deepStrictEqual(git.stdout.split(/\r?\n/).filter(Boolean).sort(), [...KEY_BACKUP_SAMPLES].sort(),
+    'git check-ignore must list every key-backup name');
+  // Ordinary archives and backups the repo may need are NOT swept up by the key rules.
+  for (const keep of ['docs/screenshots.zip', 'test/fixtures/sample.zip', 'notes.bak', 'backup-db.js', 'core/backup-crypto.js', 'monkey.zip']) {
+    const one = spawnSync('git', ['check-ignore', '--no-index', keep], { cwd: ROOT, encoding: 'utf8' });
+    assert.strictEqual(one.status, 1, `${keep} stays committable`);
+  }
+  const tracked = spawnSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+  const keyish = tracked.filter((f) => KEY_BACKUP_NAME.test(f) || /(\.keystore|\.jks|\.p12|\.pem|\.pfx|keystore\.properties)$/i.test(f));
+  assert.deepStrictEqual(keyish, [], 'no tracked file is a key or a key backup');
+});

@@ -12,10 +12,12 @@ app. Uninstalling first deletes it. Follow these steps in order, every time.
 > `Success`.
 >
 > **The owner's phone runs a debug build.** A release APK cannot be installed over it: Android
-> answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Installing it over that app means uninstalling
-> first, which is never done on that phone. The other ways are listed in `docs/release-plan.md`
-> §6, and none is chosen: how that phone moves to the release key is an open decision for the
-> owner. Until then it gets debug builds only, installed with the checklist.
+> answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The owner decided to move that phone to the
+> release build once, by the **debug to release switch round** (`docs/release-plan.md` §6; check
+> boxes in `docs/PHONE-TEST-CHECKLIST.md`): back up, prove the restore on the emulator, uninstall
+> the debug app, install the release APK, restore, verify. That round is the only uninstall and
+> the only restore on that phone. Until it is done, the phone gets debug builds only, installed
+> with the checklist. After it, it gets release builds, installed over the app as below.
 
 ## What keeps the data through an update
 
@@ -31,7 +33,7 @@ phone that has the release build cannot take a debug build over it, and the othe
 Always update a phone with the same kind of build it already has. So the first release APK
 cannot go over a debug build: Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. For other
 people's phones the one-time move is in `docs/release-plan.md` §3; for the owner's phone it is the
-open decision above.
+switch round above.
 
 ## 1. Back up the phone first
 
@@ -115,7 +117,7 @@ If the install fails, **do not uninstall to get past it**:
 
 | Message | Meaning | What to do |
 |---|---|---|
-| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not installed as package conflicts" | Signed with a different key (for example a release build over a debug build, or the other way round) | Stop. If the phone has a debug build: on the owner's phone this is the open decision at the top of this page; for anyone else, `docs/release-plan.md` §3. Otherwise check the APK's certificate with `apksigner` (section 2). |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not installed as package conflicts" | Signed with a different key (for example a release build over a debug build, or the other way round) | Stop. If the phone has a debug build: on the owner's phone, only the switch round at the top of this page (never an uninstall on the spot); for anyone else, `docs/release-plan.md` §3. Otherwise check the APK's certificate with `apksigner` (section 2). |
 | `INSTALL_FAILED_VERSION_DOWNGRADE` | `versionCode` is not higher than the installed one | Build again with `npm run release:android`. |
 | Play Protect warning | Normal for an app not from the Play Store (`SETUP.md` §4) | Continue. |
 
@@ -145,4 +147,5 @@ the same page.
 
 On the owner's phone, do not restore anything on the phone: stop and ask, as
 `docs/PHONE-TEST-CHECKLIST.md` says (its "Rules for this round" and C1). The backups, and the copy
-on the emulator until D, are the fallback.
+on the emulator until D, are the fallback. The one exception is step 5 of the debug to release
+switch round (top of this page): the restore into the newly installed release app.

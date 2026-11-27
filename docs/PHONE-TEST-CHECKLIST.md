@@ -13,7 +13,9 @@ cd android && ./gradlew assembleDebug     # -> android/app/build/outputs/apk/deb
 > a backup.
 >
 > A debug build and the release build are signed with different keys and cannot be installed over
-> each other (`docs/RELEASE.md`). `adb shell run-as` works only with the debug build.
+> each other (`docs/RELEASE.md`). `adb shell run-as` works only with the debug build. The owner's
+> phone moves from the debug build to the release build once, in "The debug to release switch
+> round" below.
 >
 > **Which device.** Every adb command for your phone has `-d` ("the phone on USB"), and every adb
 > command for the emulator has `-s emulator-5554`. Both go straight after `adb`, before the command
@@ -176,7 +178,8 @@ Get-FileHash D:\Backups\plannr\phone-current.apk -Algorithm SHA256
 
 ### Rules for this round
 
-- **Never uninstall Plannr from the phone.** Uninstalling deletes its data.
+- **Never uninstall Plannr from the phone.** Uninstalling deletes its data. The one exception is
+  step 3 of "The debug to release switch round" below, and only after its emulator proof.
 - **From A1 until C1 passes, do not add, edit or delete anything in Plannr on the phone**: no
   entries, people, categories, reminder times or settings. Opening and reading pages is fine. If you
   have to change something, start again at A1 (new backups, then A2 and A3 again with the new files)
@@ -188,7 +191,8 @@ Get-FileHash D:\Backups\plannr\phone-current.apk -Algorithm SHA256
   a timeout, and a cable that came out during the install.
 - On the phone, while it holds your real data, do not restore any backup and do not tap **Move to
   the new storage**. Your backups are restored on the emulator only (A3). Test backups and the move
-  are tried with test data (C7, C8, C11 and check 9).
+  are tried with test data (C7, C8, C11 and check 9). The one restore on the phone is step 5 of
+  "The debug to release switch round" below, into the newly installed release app.
 - The test-data checks (2, 3, 6, 9, C7, C8, C11) never run on the phone while it holds your real
   data.
   This rule wins over the older "still needs the real phone" lists under Results.
@@ -725,6 +729,66 @@ the problem is settled.
 After step 1, Plannr stays installed on the emulator and opens as a fresh install. Add test data
 again before the test checks.
 
+## The debug to release switch round (the owner's phone, once)
+
+The owner's decision (`docs/release-plan.md` §6, which explains each step): the owner's phone
+moves from the debug build to the release build once, by this round. The owner does every step by
+hand; nothing is automated. This round is the **only** time Plannr is uninstalled on that phone
+(step 3), and step 5 is the only restore on that phone. Outside this round, every rule above
+stays: never uninstall, and no restore on the phone.
+
+Before you start: the release APK is built (`npm run release:android`, `docs/RELEASE.md`), and
+you have the release certificate SHA-256 you wrote down (`docs/release-plan.md` §1.3). Use that
+one APK file on the emulator and on the phone.
+
+**Stop rules.** Any mismatch, error or missing item in step 2 means **stop: do not uninstall
+anything on the phone**. Keep both backups and ask. Any adb answer other than `Success` means
+stop and ask. From step 1 until step 6 passes, change nothing in Plannr on the phone.
+
+1. **Back up, and copy both files off the phone.**
+   - [ ] Data Backup → **Download encrypted backup** (the passphrase is in your password manager).
+   - [ ] Tick **Include Daily Report contacts**, then **Download JSON backup**.
+   - [ ] Both files copied off the phone to two places (for example `D:\Backups\plannr\` and a USB
+         stick). No file is 0 bytes.
+   - [ ] Figures written down: ledgers, people, categories, one ledger's entry count and total,
+         the newest three entries (date, amount, reason), the budget on Overview, the storage
+         figure on Data Backup.
+2. **Prove the restore on the emulator** (the release APK, `emulator-5554` only; start it with
+   `-no-snapshot-save`, as A3 says).
+   - [ ] `adb -s emulator-5554 uninstall com.plannr.app`, then
+         `adb -s emulator-5554 install <release APK>`: `Success`.
+   - [ ] Both files pushed to the emulator's Download folder (A3 step 2).
+   - [ ] Encrypted backup restored: every figure from step 1 and the newest entries match the
+         phone.
+   - [ ] `adb -s emulator-5554 shell pm clear com.plannr.app`, then the JSON backup restored:
+         every figure and the newest entries match again.
+   - [ ] Everything matched. If not: **stop here**, do not uninstall on the phone, and ask.
+3. **Uninstall the debug app on the phone.**
+   - [ ] Android Settings → Apps → Plannr → Uninstall. This erases the phone's copy of the data:
+         from now on, the two backup copies are the only copy.
+4. **Install the release APK.**
+   - [ ] `apksigner verify --print-certs <release APK>` prints the release certificate SHA-256
+         you wrote down, not `fd12f081…b95629` (the debug key).
+   - [ ] `adb -d install <release APK>`: `Success`.
+5. **Restore.**
+   - [ ] Data Backup → **Restore from encrypted backup**, the file from step 1: "Restored ✓". If
+         it fails, **Import / Restore** with the JSON backup. If both fail: stop and ask; do not
+         uninstall again.
+6. **Verify on the phone.**
+   - [ ] The counts and the ledger's total match step 1.
+   - [ ] The newest three entries are there.
+   - [ ] The budget on Overview is the same.
+   - [ ] Overview → **Download PDF** makes a PDF that opens.
+   - [ ] A new test entry: added, still there after closing Plannr fully and opening it again,
+         then deleted.
+   - [ ] Home shows the **Backup reminder**.
+   - [ ] Your data cleared from the emulator, as D above.
+
+After the round, the phone runs the release build. Its updates are release APKs installed with
+`adb -d install -r` (`docs/RELEASE.md`), never with an uninstall. Debug builds no longer install
+on it, and the laptop's debug key is no longer needed for it. In later rounds, the APK under test
+is a release APK, and its certificate must be the release one, not `fd12f081…b95629`.
+
 ## Running these on an emulator (no phone needed)
 
 The results table at the end was first filled in on an emulator. To do the same:
@@ -903,8 +967,8 @@ Turn on airplane mode (Wi-Fi and mobile data off), force-stop Plannr, open it.
       appears in `files/safety-snapshots/`.
 - [ ] For a real release, repeat with the signed release APK, following `docs/RELEASE.md`. A
       release APK cannot be installed over a debug build (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
-      For the owner's real-data phone, which has a debug build, how it moves to the release key
-      is an open decision (`docs/release-plan.md` §6): do not uninstall it to get past this.
+      The owner's real-data phone, which has a debug build, moves to the release key only by
+      "The debug to release switch round" above: never uninstall it to get past this error.
 
 ## 6. Android Auto Backup ⚠ (uninstalls the app)
 
@@ -1144,6 +1208,22 @@ Same emulator and method as above, with the RC (`1c54c4c8…e1f0`).
 | `phone-test.ps1` | The owner's script, run against the emulator (`-Serial emulator-5554`, test data) | S, 1, 2, 3 pass; 4 and 8 fail | After `986ac78` (a tap waits until the element stops moving; longer waits). On the data E1 left (moved: the database file, 1,229 rows in 14 tables, old copy kept). 1: data location and sizes. S: storage in use. 2: the meter ("Your data file is 0.4 MB…"). 3: the JSON backup opens the share sheet and BACK closes it. "4 Home opens offline" was marked FAIL, but its screenshot shows Home open in airplane mode with no error text, still filling ("WELCOME, …"), so most likely the script read the screen too early on the slow emulator; the real phone's check 4 decides (decision 47 in the session report). **The PDF checks (4, 8) fail:** the app's own 25 s PDF limit ran out ("the native print adapter did not respond"), also when driven through Playwright. The PDF path is unchanged since `5736195`, where both passed; the emulator was slow that day (the Data Backup page took 13–15 s to fill on both builds), so this is recorded as finding E1 (measure the PDF time on the real phone), not an RC fault. |
 
 **Not automatable on the emulator, so still for a real phone:** 0 (the phone's own details), the real `localStorage` limit in 2, 4 on a real phone's print service, 5 over the build that is on the phone now, 6 with a real Google account, and 9 with your hands on the device. On a real phone, checks 2, 6 and 9 only with test data, never on the phone that holds your real data ("Rules for this round").
+
+### Emulator, 2026-11-26: a release build over a release build, with ledger entries (TEST key)
+
+The owner asked to check that real ledger entries, not only a setting, survive an update from one
+release build to the next. `emulator-5554` (Android 16), test data only. Two release builds of the
+same code (commit `4727674` on `ws3-c-release`), versionCode 1 and 2, both signed with a throwaway
+**TEST key** (not the release key). Driven over adb with taps and key presses, a screenshot after
+every step. Times are the emulator's (`dumpsys package`).
+
+| Step | Result | adb answers / notes |
+|---|---|---|
+| Fresh install of versionCode 1 | Pass | `uninstall`: `Success`; `install`: `Success`; firstInstallTime 15:52:10 |
+| Three entries made in the app | Pass | Cash inflow ₹1,111.00 "TEST-RR-1" and ₹2,222.00 "TEST-RR-2"; cash outflow ₹3,333.00 "TEST-RR-3" (ledger 6.0 Materials — Structural, in the contract: No). Each save answered "Entry added." |
+| Force-stop, open again (versionCode 1) | Pass | All three listed, the same amounts, dates and reasons |
+| `install -r` of versionCode 2 | Pass | `Success`; versionCode 2; firstInstallTime kept (15:52:10), lastUpdateTime 16:02:22: an update, not a new install |
+| Open after the update | Pass | All three listed, the same amounts, dates and reasons |
 
 ### The owner's phone: the APK under test
 

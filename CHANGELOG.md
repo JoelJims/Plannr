@@ -15,6 +15,24 @@ next versionCode, when the owner builds the release. User notes: `docs/release-n
   environment. A `keystore.properties` that still has password lines stops the release
   (`SETUP.md` §2).
 
+## In review — release docs and key backups (branch `ws3-c-release`)
+
+### Changed
+- **`.gitignore`: key backups and copies.** Names such as `plannr-release.keystore.bak`,
+  `key-backup.zip` and `keystore.properties.bak` are now ignored, like the key itself: a zipped or
+  renamed key still signs updates. Ordinary `.zip` and `.bak` files are not ignored.
+  `test/release-guards.test.js` checks each name, and that no tracked file is a key.
+
+### Docs
+- **The owner's debug to release switch round** (owner's decision): `docs/release-plan.md` §6
+  gives the steps (back up twice, prove the restore on the emulator with the release APK, then
+  uninstall the debug app, install the release APK, restore, verify), with check boxes and stop
+  rules in `docs/PHONE-TEST-CHECKLIST.md`. It is the one exception to "never uninstall" and "no
+  restore on the owner's phone"; `README.md`, `docs/RELEASE.md`, `SETUP.md`, `HANDOFF.md` and
+  `docs/DEVELOPERS.md` say so. After the round the phone no longer needs the laptop's debug key.
+- **The strict stop on password lines in `keystore.properties` stays** (owner's decision),
+  recorded in `docs/release-plan.md` §6.
+
 ## In review — Phase 3 (branch `plannr-phase3`, pull request #3 into `main`, open)
 
 Fixes from the security and quality review of 2026-11-21
