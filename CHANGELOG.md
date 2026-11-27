@@ -55,9 +55,11 @@ still open. Not released.
 - **Move data back (Q4).** The room check also counts the old copy, its rollback journal and the
   other `localStorage` keys. Before, a move back that "fit" could still run out of room (it was
   then rolled back, so nothing was lost).
-- **Safety snapshots (Q12, partly).** A snapshot taken by the storage move no longer cuts the
-  regular rotation from three snapshots to two. Move snapshots themselves are still never pruned,
-  so they add up; whether to prune them is open.
+- **Safety snapshots (Q12).** A snapshot taken by the storage move no longer cuts the
+  regular rotation from three snapshots to two. Move snapshots are kept until the move is confirmed
+  on the Data Backup page (owner's decision, branch `ws3-b-q12`); after that, from the next
+  snapshot written, the newest three snapshots in total remain. The one just written is never
+  deleted, and a move back makes the move unconfirmed again.
 
 ### Safety
 - **A warning about the old storage (Q2).** While the data is still in the WebView's

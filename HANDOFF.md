@@ -340,8 +340,8 @@ going over an allowance is a normal thing to happen, not an error.
   `safety-snapshots/plannr-upgrade-pending.json`. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
   no screen to restore one: they are for recovery with `adb` on a debug build. They are not in
   Android's Auto Backup; they stay on the phone. The storage move's own snapshots
-  (`plannr-pre-move-*`, `plannr-old-copy-*`, `plannr-pre-move-back-*`) are outside the rotation
-  of 3 and are never deleted (finding Q12 in `docs/security-quality-review-2026-11-21.md`).
+  (`plannr-pre-move-*`, `plannr-old-copy-*`, `plannr-pre-move-back-*`) are never deleted and do not
+  count until the move is confirmed on the Data Backup page; after that, from the next snapshot written, the newest 3 snapshots in total remain. The one just written is never deleted, and a move back makes the move unconfirmed again (finding Q12 in `docs/security-quality-review-2026-11-21.md`).
 - **Android Auto Backup** is on, limited to the database file (`plannrSQLite.db` and its
   journal), the marker that says which storage is in use (`plannr-storage.json`), and the
   WebView's localStorage (the data before the move, or the old copy while it is kept)

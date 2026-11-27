@@ -19,6 +19,12 @@
 // completed. While the record names a snapshot that is there, no clean-up deletes it (it counts as
 // one of the 3). If the record cannot be read, the clean-up deletes nothing.
 //
+// The storage move (Q12): its snapshots (plannr-pre-move-*, -old-copy-*, -pre-move-back-*) are kept
+// until you confirm the move in the app (the marker file says so; core/storage-move.js confirmMove()).
+// Until then no clean-up deletes one, and none takes one of the 3 places. Once the move is confirmed
+// they join the rotation: every snapshot counts, and the newest 3 in total remain. A move back resets
+// the confirmation. If the marker cannot be read, the move counts as not confirmed.
+//
 // Compression (Phase 2, Step 5): snapshots are gzip-compressed (.json.gz / .db.gz) with the
 // browser's built-in CompressionStream. Android Auto Backup copies this folder and skips the WHOLE
 // backup if the app's data passes 25 MB; measured with storage full (≈13,400 entries) one JSON
@@ -38,6 +44,9 @@ export const KEEP_SNAPSHOTS = 3;
 export const PENDING_UPGRADE = 'plannr-upgrade-pending.json';
 // Matches compressed and (older, Step 2-4) uncompressed snapshots, so old ones are pruned too.
 export const SNAPSHOT_NAME = /^plannr-(safety-snapshot|pre-restore|pre-migration)-.+\.(json|db)(\.gz)?$/;
+// Q12: the storage move's snapshots (storage-native.js host.snapshot(): before the move, and the two
+// a move back writes). Not in the rotation until the move is confirmed in the app (below).
+export const MOVE_SNAPSHOT_NAME = /^plannr-(pre-move|old-copy|pre-move-back)-.+\.db(\.gz)?$/;
 
 async function isNative() {
   const { Capacitor } = await import('@capacitor/core');
@@ -49,15 +58,31 @@ const loadFs = () => import('@capacitor/filesystem');
 // `entries` are Filesystem.readdir() results ({ name, mtime }); files that are not Plannr snapshots
 // are never touched. Newest first by modification time (then by name, which carries a timestamp).
 // `pinned`: the snapshot an unfinished upgrade started from; never deleted, and it counts as one.
-export function snapshotsToDelete(entries, justWritten, keep = KEEP_SNAPSHOTS, pinned = null) {
+// `moveConfirmed`: the storage move is confirmed (Q12), so its snapshots are in the rotation too.
+export function snapshotsToDelete(entries, justWritten, keep = KEEP_SNAPSHOTS, pinned = null, moveConfirmed = false) {
+  const inRotation = (name) => SNAPSHOT_NAME.test(name) || (moveConfirmed === true && MOVE_SNAPSHOT_NAME.test(name));
   const isPinned = !!pinned && pinned !== justWritten && entries.some((e) => e && e.name === pinned);
   const others = entries
-    .filter((e) => e && e.type !== 'directory' && SNAPSHOT_NAME.test(e.name) && e.name !== justWritten && e.name !== pinned)
+    .filter((e) => e && e.type !== 'directory' && inRotation(e.name) && e.name !== justWritten && e.name !== pinned)
     .sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0) || (b.name < a.name ? -1 : b.name > a.name ? 1 : 0));
-  // Q12: a storage-move snapshot (plannr-pre-move-*, -old-copy-*, -pre-move-back-*) is not one of the
-  // rotation's snapshots, so it does not take one of the `keep` places.
-  const counts = SNAPSHOT_NAME.test(justWritten) ? 1 : 0;
+  // Q12: until the move is confirmed, a storage-move snapshot is not one of the rotation's snapshots,
+  // so it is never deleted and does not take one of the `keep` places.
+  const counts = inRotation(justWritten) ? 1 : 0;
   return others.slice(Math.max(0, keep - counts - (isPinned ? 1 : 0))).map((e) => e.name);
+}
+
+// Q12: is the storage move confirmed? Asked only when a move snapshot is there. `ask` is the caller's
+// (storage-native.js passes its own marker reader; tests pass theirs); by default the marker file is
+// read through storage-native.js. No answer (no plugins, no marker, an error) means not confirmed.
+async function moveConfirmedNow(ask) {
+  try {
+    if (typeof ask === 'function') return (await ask()) === true;
+    const { moveIsConfirmed } = await import('./storage-native.js');
+    return (await moveIsConfirmed()) === true;
+  } catch (e) {
+    console.warn('[safety-snapshots] could not read whether the storage move is confirmed; its snapshots are kept:', e);
+    return false;
+  }
 }
 
 // The snapshot an unfinished upgrade started from (a name in `names`), or null if there is none.
@@ -70,7 +95,8 @@ async function pinnedSnapshot(names, { Filesystem, Directory, Encoding }) {
   return names.has(p.snapshot) ? p.snapshot : null;
 }
 
-export async function pruneSnapshots(justWritten, fsApi, keep = KEEP_SNAPSHOTS) {
+// `opts.moveConfirmed`: optional, async, answers whether the storage move is confirmed (Q12).
+export async function pruneSnapshots(justWritten, fsApi, keep = KEEP_SNAPSHOTS, opts = {}) {
   const { Filesystem, Directory, Encoding } = fsApi || await loadFs();
   const deleted = [];
   try {
@@ -78,7 +104,9 @@ export async function pruneSnapshots(justWritten, fsApi, keep = KEEP_SNAPSHOTS) 
     const names = new Set(files.map((f) => f.name));
     if (!names.has(justWritten)) throw new Error(`the new snapshot ${justWritten} is not in ${DIR}/; nothing deleted`);
     const pinned = await pinnedSnapshot(names, { Filesystem, Directory, Encoding });
-    for (const name of snapshotsToDelete(files, justWritten, keep, pinned)) {
+    const anyMove = [...names].some((n) => MOVE_SNAPSHOT_NAME.test(n));
+    const moveConfirmed = anyMove && (await moveConfirmedNow(opts && opts.moveConfirmed));
+    for (const name of snapshotsToDelete(files, justWritten, keep, pinned, moveConfirmed)) {
       await Filesystem.deleteFile({ path: `${DIR}/${name}`, directory: Directory.Data });
       deleted.push(name);
     }
@@ -95,8 +123,8 @@ const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i
 
 // Compress `bytes`, check the compressed copy decompresses back to exactly `bytes`, write it as
 // `<filename>.gz`, confirm with stat that it landed in full, then remove snapshots beyond the
-// newest KEEP_SNAPSHOTS. Returns the path written.
-export async function saveSnapshot(filename, bytes, fsApi) {
+// newest KEEP_SNAPSHOTS. Returns the path written. `opts` goes to pruneSnapshots().
+export async function saveSnapshot(filename, bytes, fsApi, opts = {}) {
   const { Filesystem, Directory, Encoding } = fsApi || await loadFs();
   const packed = await gzip(bytes);
   if (!sameBytes(await gunzip(packed), bytes)) throw new Error('safety snapshot compression check failed');
@@ -107,7 +135,7 @@ export async function saveSnapshot(filename, bytes, fsApi) {
   if (!info || typeof info.size !== 'number' || info.size < packed.length) {
     throw new Error(`safety snapshot not verified after writing (stat: ${JSON.stringify(info)})`);
   }
-  await pruneSnapshots(name, { Filesystem, Directory, Encoding });
+  await pruneSnapshots(name, { Filesystem, Directory, Encoding }, KEEP_SNAPSHOTS, opts);
   return path;
 }
 
