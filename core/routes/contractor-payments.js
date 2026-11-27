@@ -66,7 +66,7 @@ export function register(app, ctx) {
       const d = parseIsoDate(req.body.payDate);
       if (d.error) return { error: d.error };
       if (!d.date) return { error: 'Select a date of payment.' };
-      const amount = parseAmountToSave(req.body.amountRupees, 'Enter a valid amount greater than 0 (up to 2 decimals).'); // Q10: at most the cap
+      const amount = parseAmountToSave(req.body.amountRupees, 'Enter a valid amount greater than 0 (up to 2 decimals).'); // Q10: a single entry, at most the ₹1 crore cap
       if (amount.error) return { error: amount.error };
       const amountPaise = amount.paise;
       // Ledger tag OPTIONAL.

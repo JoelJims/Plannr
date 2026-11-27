@@ -3,7 +3,7 @@
 // copy: server.js and public/local-api.js both call register(app, ctx) and get back the helpers
 // their remaining routes still use. See core/routes/people.js for what `app` and `ctx` are;
 // ledgerLabel and resolveLedger come from core/routes/cash-and-loans.js.
-import { str, parseAmountToSave, MAX_AMOUNT_PAISE, AMOUNT_CAP_MESSAGE, fmtRs, parseIsoDate } from '../parsers.js';
+import { str, parseTotalToSave, MAX_TOTAL_PAISE, TOTAL_LIMIT_MESSAGE, fmtRs, parseIsoDate } from '../parsers.js';
 
 export function register(app, ctx) {
   const { auth, repo, ledgerLabel, resolveLedger } = ctx;
@@ -17,13 +17,14 @@ export function register(app, ctx) {
   // ---------------------------------------------------------------------------
   const CONTRACTOR_MAX = 100;
 
-  // Optional manually-typed total price. Empty -> null; otherwise a valid positive paise amount of at
-  // most MAX_AMOUNT_PAISE (Q10). -> { paise: number|null } or { error }: invalidMessage, or the cap
-  // message for an amount over the cap.
+  // Optional typed price: the contract's reference amount, total and rate, an allowance's cap and
+  // rate. Empty -> null; otherwise a valid positive paise amount. Each is a total (Q10), so it may be
+  // at most MAX_TOTAL_PAISE (₹1,000 crore), not the ₹1 crore entry cap. -> { paise: number|null } or
+  // { error }: invalidMessage, or TOTAL_LIMIT_MESSAGE for an amount over the limit.
   function parsePriceOptional(v, invalidMessage) {
     const s = str(v);
     if (s === '') return { paise: null };
-    return parseAmountToSave(s, invalidMessage);
+    return parseTotalToSave(s, invalidMessage);
   }
 
   const AREA_MAX = 200;
@@ -224,9 +225,9 @@ export function register(app, ctx) {
       return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
     }
     const computed = unitPricePaise(rate.paise, area.milli); // null unless BOTH halves are present
-    // Q10: the price rate x area gives is saved as the contract's total, so it has the same cap.
-    if (computed != null && computed > MAX_AMOUNT_PAISE) {
-      return { error: `${AMOUNT_CAP_MESSAGE} The rate times the area comes to ${fmtRs(computed)}. Check both figures.` };
+    // Q10: the price rate x area gives is saved as the contract's total, so it has the totals limit.
+    if (computed != null && computed > MAX_TOTAL_PAISE) {
+      return { error: `${TOTAL_LIMIT_MESSAGE} The rate times the area comes to ${fmtRs(computed)}. Check both figures.` };
     }
     return { amount, stated, rate, area, computed };
   }

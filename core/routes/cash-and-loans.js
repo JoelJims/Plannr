@@ -3,9 +3,10 @@
 // from core/ledger-crud.js). The only copy: server.js and public/local-api.js both call
 // register(app, ctx) and get back the helpers their remaining routes still use (contracts, the
 // Recycle Bin, the overview and the PDF). See core/routes/people.js for what `app` and `ctx` are.
-import { str, parseAmountToSave, parseIsoDate, fmtRs } from '../parsers.js';
+import { str, parseAmountToSave, parseTotalToSave, parseIsoDate, fmtRs } from '../parsers.js';
 
-// Every amount on these three tables is at most MAX_AMOUNT_PAISE (Q10, core/parsers.js).
+// Q10 (core/parsers.js): a cash in or cash out amount is a single entry, at most MAX_AMOUNT_PAISE
+// (₹1 crore). A loan is a total, at most MAX_TOTAL_PAISE (₹1,000 crore), so loan sums stay exact.
 const AMOUNT_INVALID = 'Enter a valid amount greater than 0 (up to 2 decimals).';
 
 export function register(app, ctx) {
@@ -123,7 +124,7 @@ export function register(app, ctx) {
   // Validate the shared loan fields from a request body.
   // -> { amountPaise, bankName, rate, tenure } or { error }.
   function readLoanBody(body) {
-    const amount = parseAmountToSave(body.amountRupees, AMOUNT_INVALID);
+    const amount = parseTotalToSave(body.amountRupees, AMOUNT_INVALID); // Q10: a total, not an entry
     if (amount.error) return { error: amount.error };
     const amountPaise = amount.paise;
     const bankName = str(body.bankName);
