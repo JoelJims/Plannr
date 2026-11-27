@@ -109,16 +109,98 @@ for (const [what, fg, bg, min] of PAIRS) {
   });
 }
 
-// The resting border of a text field is the only thing that marks the field out on a panel
-// (WCAG 1.4.11 asks 3:1). It measures about 1.5:1 today. Raising it brightens every field border
-// in the app, so it is left for the owner to decide; this records the measured ratio.
-test('contrast: resting text-field border against the panel (needs an owner decision)', { todo: 'owner decision: brighter field borders' }, () => {
-  const border = over(c(decl(CSS, 'textarea', 'border') .split(' ').slice(2).join(' ')), PANEL2);
-  const r = ratio(border, PANEL);
-  assert.ok(r >= UI, `field border: measured ${r.toFixed(2)}:1, needs ${UI}:1`);
-});
+// The resting border of a text field is the only thing that marks the field out (WCAG 1.4.11 asks
+// 3:1 against the colours on both sides of it). Owner's decision: a field border colour of its own
+// that meets 3:1; --line-strong (panel and card borders) stays as it is.
+// The border is drawn over the field's own background, so it is laid over that first.
+// Surfaces fields sit on: their own background; a panel, card or dialog (--panel), which is also
+// lighter than the plain --bg page (no field sits on the page itself: every form is in a card);
+// the Overview card, which is translucent, over the brightest point of the page behind it
+// (the amber glow with the grid lines crossing on top); and an edit-table row marked with an error.
+// Every field is checked against every one of them, so a field that moves is still covered.
+const PAGE_BRIGHTEST = [...decl(CSS, 'body', 'background-image').matchAll(/rgba?\([^)]*\)/g)]
+  .map((m) => parseColour(m[0])).reverse().reduce((base, layer) => over(layer, base), BG);
+const OV_CARD = over(c(decl(read('overview.html'), '.ov-card', 'background')), PAGE_BRIGHTEST);
+const ERROR_ROW = c(decl(CSS, '.tx-table tr.tx-err td', 'background'));
+const FIELDS = [
+  ['text field and textarea', 'input[type="text"],\ninput[type="password"],\ntextarea'],
+  ['edit-table field', '.tx-in, .tx-sel'],
+  ['filter-bar field', '.plf-in, .plf-sel'],
+  ['ledger picker search box', '.lb-search'],
+  ['ledger picker button (it stands in for the ledger <select>)', '.lb-trigger'],
+];
+for (const [what, sel] of FIELDS) {
+  const own = c(decl(CSS, sel, 'background'));
+  const surfaces = [
+    ["the field's own background", own],
+    ['a panel, card or dialog', PANEL],
+    ['the Overview card over the brightest page', OV_CARD],
+    ['an error row on a card', over(ERROR_ROW, PANEL)],
+    ['an error row on the Overview card', over(ERROR_ROW, OV_CARD)],
+  ];
+  for (const [where, surface] of surfaces) {
+    test(`contrast: resting ${what} border against ${where} >= ${UI}:1`, () => {
+      const border = over(c(decl(CSS, sel, 'border').split(' ').slice(2).join(' ')), own);
+      const r = ratio(border, surface);
+      assert.ok(r >= UI, `${what} border against ${where}: measured ${r.toFixed(2)}:1, needs ${UI}:1`);
+    });
+  }
+}
 
 test('ratio maths matches known WCAG values', () => {
   assert.strictEqual(ratio([0, 0, 0], [255, 255, 255]).toFixed(2), '21.00');
   assert.strictEqual(ratio([119, 119, 119], [255, 255, 255]).toFixed(2), '4.48');
 });
+
+// The pages' own <style> blocks style some fields too (a textarea, number inputs, selects, a time
+// input). Every resting field border there must meet the same 3:1 as the shared field rules above,
+// against the field's own background, a panel and the Overview card. Read from every page, so a
+// field rule added later is checked as well. A selector counts as a field when the element it styles
+// (its last part) is an input, select or textarea, or has a class or id the page puts on one of them.
+// :focus, :hover, :disabled and option rules are not resting borders; checkboxes and radios are not
+// text fields. Every border side counts, and a border whose colour cannot be measured fails (only
+// "none" and a zero width are not borders).
+const FIELD_EL = /^(input|select|textarea)(?![\w-])/;
+const NOT_RESTING = /:focus|:hover|:active|:disabled|::|\boption\b|type="(checkbox|radio)"/;
+const COLOUR = /var\(--[\w-]+\)|rgba?\([^)]*\)|#[0-9a-f]{3,6}\b/i;
+const BORDER_PROP = /(?:^|;|\s)(border(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?(?:-color)?)\s*:\s*([^;]+)/g;
+const NOT_A_BORDER = /^\s*(none|0(px)?)(\s|$)/;
+const fieldClasses = (html) => new Set([...html.matchAll(/<(?:input|select|textarea)\b[^>]*\bclass="([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)));
+const fieldIds = (html) => new Set([...html.matchAll(/<(?:input|select|textarea)\b[^>]*\bid="([^"]*)"/g)].map((m) => m[1]));
+const lastCompound = (sel) => sel.split(/[\s>+~]+/).pop();
+const PAGE_FIELD_RULES = [];
+for (const page of fs.readdirSync(path.join(__dirname, '..', 'public')).filter((f) => f.endsWith('.html')).sort()) {
+  const html = read(page);
+  const classes = fieldClasses(html);
+  const ids = fieldIds(html);
+  const isField = (s) => {
+    const last = lastCompound(s);
+    return FIELD_EL.test(last) || [...last.matchAll(/\.([\w-]+)/g)].some((m) => classes.has(m[1])) || [...last.matchAll(/#([\w-]+)/g)].some((m) => ids.has(m[1]));
+  };
+  const styles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const [, selText, body] of styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const fieldSels = selText.split(',').map((s) => s.trim()).filter((s) => isField(s) && !NOT_RESTING.test(s));
+    if (!fieldSels.length) continue;
+    for (const [, prop, value] of body.matchAll(BORDER_PROP)) {
+      if (!prop.endsWith('-color') && NOT_A_BORDER.test(value)) continue;
+      const colour = COLOUR.exec(value);
+      const bgDecl = /(?:^|;|\s)background(?:-color)?\s*:\s*(var\(--[\w-]+\)|rgba?\([^)]*\)|#[0-9a-f]{3,6})/i.exec(body);
+      PAGE_FIELD_RULES.push({ page, sel: fieldSels.join(', '), prop, value: value.trim(), colour: colour && colour[0], own: bgDecl ? c(bgDecl[1]) : PANEL2 });
+    }
+  }
+}
+test('page field rules are found (the scan is not empty)', () => {
+  assert.ok(PAGE_FIELD_RULES.length >= 10, `found ${PAGE_FIELD_RULES.length} page field border rules`);
+});
+for (const { page, sel, prop, value, colour, own } of PAGE_FIELD_RULES) {
+  test(`${page} "${sel}" ${prop} has a colour this test can measure`, () => {
+    assert.ok(colour, `${page} "${sel}" ${prop}: "${value}" names no colour this test can measure (use a var(), rgb(a) or #hex colour)`);
+  });
+  if (!colour) continue;
+  for (const [where, surface] of [["the field's own background", own], ['a panel, card or dialog', PANEL], ['the Overview card over the brightest page', OV_CARD]]) {
+    test(`contrast: ${page} "${sel}" resting ${prop} against ${where} >= ${UI}:1`, () => {
+      const r = ratio(over(c(colour), own), surface);
+      assert.ok(r >= UI, `${page} "${sel}" ${prop} ${colour} against ${where}: measured ${r.toFixed(2)}:1, needs ${UI}:1`);
+    });
+  }
+}
