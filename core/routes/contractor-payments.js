@@ -3,7 +3,7 @@
 // server.js and public/local-api.js both call register(app, ctx) and get back what the Recycle Bin
 // still uses. See core/routes/people.js for what `app` and `ctx` are; ledgerLabel, resolveLedger
 // and REASON_MAX come from core/routes/cash-and-loans.js.
-import { str, parsePaise, parseIsoDate } from '../parsers.js';
+import { str, parseAmountToSave, parseIsoDate } from '../parsers.js';
 
 export function register(app, ctx) {
   const { repo, makeLedgerCrud, ledgerLabel, resolveLedger, REASON_MAX } = ctx;
@@ -66,8 +66,9 @@ export function register(app, ctx) {
       const d = parseIsoDate(req.body.payDate);
       if (d.error) return { error: d.error };
       if (!d.date) return { error: 'Select a date of payment.' };
-      const amountPaise = parsePaise(req.body.amountRupees);
-      if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
+      const amount = parseAmountToSave(req.body.amountRupees, 'Enter a valid amount greater than 0 (up to 2 decimals).'); // Q10: a single entry, at most the ₹1 crore cap
+      if (amount.error) return { error: amount.error };
+      const amountPaise = amount.paise;
       // Ledger tag OPTIONAL.
       const led = resolveLedgerOptional(req.body);
       if (led.error) return { error: led.error };

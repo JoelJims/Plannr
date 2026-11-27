@@ -3,7 +3,11 @@
 // from core/ledger-crud.js). The only copy: server.js and public/local-api.js both call
 // register(app, ctx) and get back the helpers their remaining routes still use (contracts, the
 // Recycle Bin, the overview and the PDF). See core/routes/people.js for what `app` and `ctx` are.
-import { str, parsePaise, parseIsoDate, fmtRs } from '../parsers.js';
+import { str, parseAmountToSave, parseTotalToSave, parseIsoDate, fmtRs } from '../parsers.js';
+
+// Q10 (core/parsers.js): a cash in or cash out amount is a single entry, at most MAX_AMOUNT_PAISE
+// (₹1 crore). A loan is a total, at most MAX_TOTAL_PAISE (₹1,000 crore), so loan sums stay exact.
+const AMOUNT_INVALID = 'Enter a valid amount greater than 0 (up to 2 decimals).';
 
 export function register(app, ctx) {
   const { repo, userExists, ledgerIndex, makeLedgerCrud } = ctx;
@@ -70,8 +74,9 @@ export function register(app, ctx) {
     shape: cashInRow,
     columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'reason'],
     validate: async (req, existingByUserId) => {
-      const amountPaise = parsePaise(req.body.amountRupees);
-      if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
+      const amount = parseAmountToSave(req.body.amountRupees, AMOUNT_INVALID);
+      if (amount.error) return { error: amount.error };
+      const amountPaise = amount.paise;
       // Phase 4C — inflow date REQUIRED on new writes (ISO 'YYYY-MM-DD'), same rule as cash_out.tx_date.
       const txd = parseIsoDate(req.body.txDate);
       if (txd.error || !txd.date) return { error: 'Enter a valid date (YYYY-MM-DD).' };
@@ -119,8 +124,9 @@ export function register(app, ctx) {
   // Validate the shared loan fields from a request body.
   // -> { amountPaise, bankName, rate, tenure } or { error }.
   function readLoanBody(body) {
-    const amountPaise = parsePaise(body.amountRupees);
-    if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
+    const amount = parseTotalToSave(body.amountRupees, AMOUNT_INVALID); // Q10: a total, not an entry
+    if (amount.error) return { error: amount.error };
+    const amountPaise = amount.paise;
     const bankName = str(body.bankName);
     if (!bankName) return { error: 'Bank name is required.' };
     const rate = parseRate(body.interestRate);
@@ -353,8 +359,9 @@ export function register(app, ctx) {
     // legacy row leaves its stored value untouched (the column is never in the UPDATE ... SET list).
     columns: ['amount_paise', 'tx_date', 'by_type', 'by_user_id', 'by_label', 'ledger_code', 'subledger_code', 'ledger_custom_name', 'subledger_custom_name', 'reason', 'contract_scope', 'contract_service_id', 'contract_allowance_id'],
     validate: async (req, existingByUserId) => {
-      const amountPaise = parsePaise(req.body.amountRupees);
-      if (amountPaise === null) return { error: 'Enter a valid amount greater than 0 (up to 2 decimals).' };
+      const amount = parseAmountToSave(req.body.amountRupees, AMOUNT_INVALID); // also Save All's rows
+      if (amount.error) return { error: amount.error };
+      const amountPaise = amount.paise;
 
       // Phase 1: transaction date is REQUIRED (ISO 'YYYY-MM-DD'). Reuse parseIsoDate
       // (also used for the contract end date). Missing -> 400; malformed -> 400.

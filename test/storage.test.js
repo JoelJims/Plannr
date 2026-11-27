@@ -29,13 +29,15 @@ test('rollbackQuietly: any other rollback failure is still thrown', () => {
 });
 
 test('isStorageFullError: SQLITE_FULL / SQLITE_IOERR codes and messages', () => {
-  assert.ok(isStorageFullError({ errcode: 10 }));          // SQLITE_IOERR (kvvfs quota)
+  // Q11 (the owner's decision): an SQLITE_IOERR alone is no longer "full". It is only when the browser's
+  // quota caused it (test/ws3a-save-errors.test.js); until Q11 these three asserted the opposite.
+  assert.ok(!isStorageFullError({ errcode: 10 }));
   // SQLITE_FULL: a database file on a full disk (the phone after the move, the desktop; step 1.4 C11).
   // Until C11 only localStorage existed, and this asserted the opposite.
   assert.ok(isStorageFullError({ errcode: 13 }));
   assert.ok(isStorageFullError({ errcode: 13 | (1 << 8) }));
-  assert.ok(isStorageFullError({ resultCode: 10 | (3 << 8) }));
-  assert.ok(isStorageFullError(new Error('SQLITE_IOERR: sqlite3 result code 10: disk I/O error')));
+  assert.ok(!isStorageFullError({ resultCode: 10 | (3 << 8) }));
+  assert.ok(!isStorageFullError(new Error('SQLITE_IOERR: sqlite3 result code 10: disk I/O error')));
   assert.ok(isStorageFullError(new Error('Run: database or disk is full (code 13 SQLITE_FULL)')));
   assert.ok(isStorageFullError(new Error('SQLITE_FULL')));
   assert.ok(!isStorageFullError(new Error('UNIQUE constraint failed')));

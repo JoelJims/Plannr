@@ -140,7 +140,7 @@ const { createRequestQueue, queuedRoutes, createStartJobs } = require('./core/re
 // JSON body parsing, one size limit per kind of route. The limits, which route gets which, and the
 // "too large" / "Invalid request." answers live in request-rules.js, shared with the phone
 // (public/local-api.js applies the same rules). 32 KB for every normal route; 256 KB for Save All
-// batches (the batch route ALSO caps the row count: BATCH_MAX_ROWS in core/ledger-crud.js); 20 MB for restoring a backup.
+// batches (the batch route ALSO caps the row count: BATCH_MAX_ROWS in core/ledger-crud.js); 32 MB for restoring a backup (F14).
 // Errors are answered by the global error handler at the end of this file.
 const JSON_PARSERS = Object.fromEntries(Object.entries(requestRules.BODY_LIMITS)
   .map(([kind, limit]) => [kind, express.json({ limit })]));
@@ -483,7 +483,7 @@ app.use((req, res, next) => {
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   // Respect a status the error already carries (e.g. body-parser sets 400 for
   // malformed JSON). Only genuine server errors (5xx) are logged and get the
-  // generic 'Something went wrong.' message; client errors report their status.
+  // generic message (request-rules.js serverError); client errors report their status.
   const status = (err && (err.statusCode || err.status)) || 500;
   if (status >= 500) console.error('Unhandled error:', err);
   // Phase 4a (WASM SQLite port prep): a write that hit the kvvfs storage ceiling surfaces as a clean
@@ -500,7 +500,8 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     return res.status(413).json(requestRules.tooLarge(requestRules.bodyKind(req.method, req.path)));
   }
   if (err && err.type === 'entity.parse.failed') return res.status(400).json(requestRules.invalidRequest());
-  const body = { error: status >= 500 ? 'Something went wrong.' : 'Invalid request.' };
+  // Q11: any other failed save answers "Couldn't save – try again."; a failed read "Something went wrong.".
+  const body = status >= 500 ? requestRules.serverError(req.method) : requestRules.invalidRequest();
   if (!IS_PROD && err && err.message) body.detail = err.message; // dev aid only
   res.status(status).json(body);
 });

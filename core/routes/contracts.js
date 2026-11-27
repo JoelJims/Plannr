@@ -3,7 +3,7 @@
 // copy: server.js and public/local-api.js both call register(app, ctx) and get back the helpers
 // their remaining routes still use. See core/routes/people.js for what `app` and `ctx` are;
 // ledgerLabel and resolveLedger come from core/routes/cash-and-loans.js.
-import { str, parsePaise, parseIsoDate } from '../parsers.js';
+import { str, parseTotalToSave, MAX_TOTAL_PAISE, TOTAL_LIMIT_MESSAGE, fmtRs, parseIsoDate } from '../parsers.js';
 
 export function register(app, ctx) {
   const { auth, repo, ledgerLabel, resolveLedger } = ctx;
@@ -17,14 +17,14 @@ export function register(app, ctx) {
   // ---------------------------------------------------------------------------
   const CONTRACTOR_MAX = 100;
 
-  // Optional manually-typed total price. Empty -> null; otherwise a valid positive
-  // paise amount (reuses parsePaise). -> { paise: number|null } or { error }.
-  function parsePriceOptional(v) {
+  // Optional typed price: the contract's reference amount, total and rate, an allowance's cap and
+  // rate. Empty -> null; otherwise a valid positive paise amount. Each is a total (Q10), so it may be
+  // at most MAX_TOTAL_PAISE (₹1,000 crore), not the ₹1 crore entry cap. -> { paise: number|null } or
+  // { error }: invalidMessage, or TOTAL_LIMIT_MESSAGE for an amount over the limit.
+  function parsePriceOptional(v, invalidMessage) {
     const s = str(v);
     if (s === '') return { paise: null };
-    const paise = parsePaise(s);
-    if (paise === null) return { error: 'Enter a valid price greater than 0 (up to 2 decimals).' };
-    return { paise };
+    return parseTotalToSave(s, invalidMessage);
   }
 
   const AREA_MAX = 200;
@@ -204,27 +204,31 @@ export function register(app, ctx) {
   // The money half of the form: free-form amount, stated total, and the rate x area price.
   // -> { amount, stated, rate, area, computed } or { error }.
   function readContractPricing(body) {
-    const amount = parsePriceOptional(body.amountRupees); // optional free-form; blank -> null
+    const amount = parsePriceOptional(body.amountRupees, 'Enter a valid price greater than 0 (up to 2 decimals).'); // optional free-form; blank -> null
     if (amount.error) return { error: amount.error };
 
     // The stated total is OPTIONAL: blank -> NULL. A contract with no stated price contributes 0 to
     // figure A (total contract) and 0 to owed; a contract that HAS one behaves exactly as before.
-    const stated = parsePriceOptional(body.statedAmountRupees);
-    if (stated.error) return { error: 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.' };
+    const stated = parsePriceOptional(body.statedAmountRupees, 'Enter a valid total contract value greater than 0 (up to 2 decimals), or leave it blank.');
+    if (stated.error) return { error: stated.error };
 
     // Contract Phase A — rate-based pricing. Both halves are OPTIONAL and independently editable at
     // any time: the rate is fixed at signing, the area is not known until final measurement, so a
     // contract routinely sits with a rate and no area for months. When BOTH land, the product REPLACES
     // whatever is in statedAmountRupees; a typed value sent alongside a complete rate price is
     // ignored, not rejected, so an older client or a stale tab can't 400 on an otherwise valid save.
-    const rate = parsePriceOptional(body.ratePerSqftRupees);
-    if (rate.error) return { error: 'Enter a valid rate per square foot greater than 0 (up to 2 decimals), or leave it blank.' };
+    const rate = parsePriceOptional(body.ratePerSqftRupees, 'Enter a valid rate per square foot greater than 0 (up to 2 decimals), or leave it blank.');
+    if (rate.error) return { error: rate.error };
     const area = parseAreaOptional(body.measuredAreaSqft);
     if (area.error) return { error: area.error };
     if (rate.paise != null && area.milli != null && unitPricePaise(rate.paise, area.milli) == null) {
       return { error: 'That rate and area multiply out to a number too large to record. Check both figures.' };
     }
     const computed = unitPricePaise(rate.paise, area.milli); // null unless BOTH halves are present
+    // Q10: the price rate x area gives is saved as the contract's total, so it has the totals limit.
+    if (computed != null && computed > MAX_TOTAL_PAISE) {
+      return { error: `${TOTAL_LIMIT_MESSAGE} The rate times the area comes to ${fmtRs(computed)}. Check both figures.` };
+    }
     return { amount, stated, rate, area, computed };
   }
 
@@ -415,14 +419,14 @@ export function register(app, ctx) {
     if (!ALLOWANCE_KINDS.has(kind)) return { error: 'Choose whether this cap is a rupee amount or a rate per square foot.' };
 
     if (kind === 'lump') {
-      const cap = parsePriceOptional(req.body.capRupees);
-      if (cap.error) return { error: 'Enter a valid cap amount greater than 0 (up to 2 decimals).' };
+      const cap = parsePriceOptional(req.body.capRupees, 'Enter a valid cap amount greater than 0 (up to 2 decimals).');
+      if (cap.error) return { error: cap.error };
       if (cap.paise == null) return { error: 'Enter the cap amount for this allowance.' };
       return { values: { name, cap_kind: 'lump', cap_paise: cap.paise, cap_rate_per_sqft_paise: null, area_milli_sqft: null } };
     }
 
-    const rate = parsePriceOptional(req.body.capRatePerSqftRupees);
-    if (rate.error) return { error: 'Enter a valid ceiling rate per square foot greater than 0 (up to 2 decimals).' };
+    const rate = parsePriceOptional(req.body.capRatePerSqftRupees, 'Enter a valid ceiling rate per square foot greater than 0 (up to 2 decimals).');
+    if (rate.error) return { error: rate.error };
     if (rate.paise == null) return { error: 'Enter the ceiling rate per square foot for this allowance.' };
     const area = parseAreaOptional(req.body.areaSqft); // optional
     if (area.error) return { error: area.error };
