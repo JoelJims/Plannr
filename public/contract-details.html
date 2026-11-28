@@ -111,8 +111,12 @@
     }
     input[type="number"]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
 
-    /* Ledger / sub-ledger / date selects — themed identically to Cash Outflow. */
-    .cd-form select {
+    /* Ledger / sub-ledger / date selects — themed identically to Cash Outflow. The Allowances "Cap
+       type" selects (the add form's and each saved row's) are named here too: the Allowances section
+       sits after the contract form, not inside it, so `.cd-form select` alone never reached them and
+       the browser drew its own small grey control there, without the field border
+       (test-ui/contract-details-layout.js measures every field's border on the rendered page). */
+    .cd-form select, #allowancesSection select {
       width: 100%; min-height: 52px; font-family: var(--font-body); font-size: 16px;
       color: var(--text); background-color: var(--panel-2); border: 1px solid var(--field-border);
       border-radius: 0; padding: 12px 36px 12px 13px; outline: none; cursor: pointer;
@@ -121,9 +125,9 @@
       background-repeat: no-repeat; background-position: right 13px center; background-size: 13px;
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
-    .cd-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
-    .cd-form select:disabled { opacity: 0.5; cursor: default; background-image: none; }
-    .cd-form select option { background: #15161a; color: var(--text); }
+    .cd-form select:focus, #allowancesSection select:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(245,158,11,0.22); }
+    .cd-form select:disabled, #allowancesSection select:disabled { opacity: 0.5; cursor: default; background-image: none; }
+    .cd-form select option, #allowancesSection select option { background: #15161a; color: var(--text); }
 
     /* Day / Month / Year picker — same layout as the /select-date screen. */
     .cd-date-grid { display: grid; grid-template-columns: 0.85fr 1.25fr 1fr; gap: 12px; }

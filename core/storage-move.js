@@ -23,6 +23,7 @@
 // The startup table (plan §2.2) is decideAtStartup(): which copy to use, from the marker and the files.
 
 import { fingerprint, compareFingerprints, summarize } from './storage-check.js';
+import { mbText, capacityText } from './size-text.js';
 
 export const MARKER_NATIVE = 'native-v1';
 export const MARKER_LOCAL = 'localstorage-v1';
@@ -269,7 +270,11 @@ export function moveBackRoomBytes({ limitChars, copyChars = 0, otherChars = 0 })
   return Math.floor(room / KVVFS_CHARS_PER_BYTE);
 }
 
-const mbText = (bytes) => `${(Math.ceil((Number(bytes) / MB) * 10) / 10).toFixed(1)} MB`;
+// The room in the old storage, for the move-back refusal: rounded down (capacityText), so it never
+// reads larger than it is, while your data's size (mbText) is rounded up; so from 0.1 MB up the data
+// reads larger than the room, and it never reads smaller. Below 0.1 MB: "has room for less than
+// 0.1 MB", which is true, where "at most about 0.0 MB" would say there is no room at all.
+const roomText = (bytes) => (bytes < MB / 10 ? `has room for ${capacityText(bytes)}` : `holds at most about ${capacityText(bytes)}`);
 const dayText = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? 'the move' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
@@ -315,7 +320,7 @@ export async function moveBack(host, { confirmed = false, onStep } = {}) {
   const limit = Math.min(moveBackLimitBytes(host.local.limitChars),
     moveBackRoomBytes({ limitChars: host.local.limitChars, copyChars: used.copy, otherChars: used.other }));
   if (!(bytes.length <= limit)) {
-    throw new MoveError('size', `Your data (${mbText(bytes.length)}) is too big to move back: the old storage holds at most about ${mbText(limit)}. It stays in the new storage.`, { bytes: bytes.length, limitBytes: limit });
+    throw new MoveError('size', `Your data (${mbText(bytes.length)}) is too big to move back: the old storage ${roomText(limit)}. It stays in the new storage.`, { bytes: bytes.length, limitBytes: limit });
   }
   const free = Number(await host.freeBytes());
   const need = requiredFreeBytes(bytes.length);

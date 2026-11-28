@@ -8,6 +8,7 @@
 // Run: node test-ui/ledger-picker.js
 const H = require('../test/helpers');
 const { chromium } = require('playwright');
+const { UI_MIN, fieldsOn, borderContrast, usesFieldBorder, parseRgba, sameColour } = require('./_field-contrast');
 
 const PHONE = { width: 390, height: 844 };
 let failures = 0;
@@ -140,6 +141,41 @@ const closed = (page) => page.waitForSelector('.lb-backdrop', { state: 'hidden',
     await page.click('.lb-row[data-act="main"][data-code="1.0"]');
     await closed(page);
     check(`${path}: the picker drives its select`, (await page.inputValue(sel)) === '1.0', await page.inputValue(sel));
+  }
+
+  // The trigger stands in for the ledger <select>, so its resting border is what marks it out as a
+  // field: the shared field border (--field-border), at least 3:1 against the trigger's own background
+  // and the card behind it (WCAG 1.4.11), measured on the rendered page. The keyboard focus style
+  // stays the amber border.
+  console.log('\n── the trigger\'s border ──────────────────────────────────────────');
+  const ACCENT = parseRgba(await page.evaluate(() => {
+    const probe = document.createElement('i');
+    probe.style.color = 'var(--accent)';
+    document.body.appendChild(probe);
+    const c = getComputedStyle(probe).color;
+    probe.remove();
+    return c;
+  }));
+  for (const [path, trig] of [['/cash-outflow', '#ledgerTrigger'], ['/contract-details', '#cLedgerTrigger'], ['/contractor-payments', '#cpLedgerTrigger']]) {
+    await page.goto(base + path, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    // Resting means not hovered (the pointer may still sit where the last click was) and not in the
+    // middle of the border's 0.15s transition, which reports an in-between colour.
+    await page.mouse.move(0, 0);
+    await page.waitForFunction(() => document.getAnimations().length === 0, null, { timeout: 5000 });
+    const [f] = await fieldsOn(page, trig);
+    if (!f) { check(`${path}: the trigger is rendered`, false); continue; }
+    const r = borderContrast(f);
+    check(`${path}: the resting trigger border is >= ${UI_MIN}:1 inside and outside, on every side`, r.min >= UI_MIN, r.detail);
+    check(`${path}: ...and it is the shared field border (--field-border)`, usesFieldBorder(f), `${f.sides[0].color} (--field-border is ${f.fieldBorderToken})`);
+    await page.focus(trig);
+    await page.waitForFunction(() => document.getAnimations().length === 0, null, { timeout: 5000 });
+    const focus = await page.evaluate((s) => {
+      const el = document.querySelector(s);
+      const cs = getComputedStyle(el);
+      return { visible: el.matches(':focus-visible'), colours: ['top', 'right', 'bottom', 'left'].map((d) => cs.getPropertyValue(`border-${d}-color`)) };
+    }, trig);
+    check(`${path}: keyboard focus still turns the trigger border amber`, focus.visible && focus.colours.every((c) => sameColour(parseRgba(c), ACCENT)), JSON.stringify(focus));
   }
 
   check('no console or page errors throughout', errors.length === 0, errors.slice(0, 3).join(' | '));

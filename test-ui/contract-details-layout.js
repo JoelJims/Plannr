@@ -10,6 +10,7 @@
 // Run: node test-ui/contract-details-layout.js
 const H = require('../test/helpers');
 const { chromium } = require('playwright');
+const { UI_MIN, fieldsOn, borderContrast, usesFieldBorder } = require('./_field-contrast');
 
 // The main ledger is chosen through the searchable browser now, not a <select>. Search for the code,
 // then click the result — which is what a user does, and what a selectOption() call stopped testing
@@ -146,6 +147,62 @@ const OPTIONAL = ['#hasSignedDate', '#hasEndDate', '#cMonths', '#cSupervision', 
   check('the allowance grid is multi-column at 1400px', deskCols >= 5, `${deskCols} columns`);
   const deskLabels = await page.$$eval('.cd-alw-row:first-child .cd-alw-fieldlabel', (els) => els.map((e) => getComputedStyle(e).display));
   check('per-field labels are suppressed at desk width', deskLabels.every((d) => d === 'none'));
+
+  // Every field on Contract details needs a resting border that marks it out: at least 3:1 against
+  // the field's own background and against the colour behind it (WCAG 1.4.11), measured on the
+  // rendered page. The Allowances section sits outside the contract form, so `.cd-form select` never
+  // matched its "Cap type" selects and the browser drew its own small grey control there. They must
+  // have the shared field border like the other selects, and appearance: none, so the border measured
+  // here is the border drawn: with appearance: auto the platform draws the control itself, and a
+  // desktop browser and the phone's WebView draw it differently.
+  console.log('\n── field borders, as drawn ───────────────────────────────────────');
+  await page.setViewportSize(PHONE);
+  // Bring out every field the page has: a scope item, both contract dates, a payment-date row, and
+  // the area box the add form shows for a per-sq-ft cap. The scope item comes first: saving it
+  // reloads the contract, which would put back the unsaved date boxes and payment-date rows.
+  await page.fill('#svcName', 'Plastering');
+  await page.click('#svcAddBtn');
+  await page.waitForSelector('.cd-svc-row', { timeout: 5000 });
+  await page.waitForLoadState('networkidle');
+  for (const box of ['#hasSignedDate', '#hasEndDate']) await page.check(box);
+  await page.click('#addPayDateBtn');
+  await page.selectOption('#alwKind', 'per_sqft');
+  // Resting: no pointer over a field, no border transition still running.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.waitForFunction(() => document.getAnimations().length === 0, null, { timeout: 5000 });
+  const fields = (await fieldsOn(page, 'select, input, textarea'))
+    .filter((f) => !['checkbox', 'radio', 'hidden', 'submit', 'button', 'reset', 'file', 'range', 'color'].includes(f.type));
+  const allowanceSelects = await fieldsOn(page, '#allowancesSection select');
+  check('the Allowances section has its two kinds of select on screen (the add form, a saved row)', allowanceSelects.length >= 2, allowanceSelects.map((f) => f.name).join(', '));
+  for (const f of allowanceSelects) {
+    const r = borderContrast(f);
+    check(`Allowances select ${f.name}: drawn by the page's CSS (appearance: none), not the platform`, f.appearance === 'none', `appearance: ${f.appearance}`);
+    check(`Allowances select ${f.name}: the shared field border (--field-border) on every side`, usesFieldBorder(f), `${f.sides.map((s) => `${s.side} ${s.width}px ${s.style} ${s.color}`).join('; ')} (--field-border is ${f.fieldBorderToken})`);
+    check(`Allowances select ${f.name}: border >= ${UI_MIN}:1 inside and outside`, r.min >= UI_MIN, r.detail);
+  }
+  const weak = fields.map((f) => ({ f, r: borderContrast(f) })).filter(({ r }) => !(r.min >= UI_MIN));
+  check(`every field on the page has a border >= ${UI_MIN}:1 inside and outside (${fields.length} measured)`, fields.length >= 25 && weak.length === 0,
+    weak.length ? weak.map(({ r }) => r.detail).join(' | ') : `lowest ${Math.min(...fields.map((f) => borderContrast(f).min)).toFixed(2)}:1 over ${fields.map((f) => f.name).join(', ')}`);
+
+  // The shared select rule brings its padding (36px on the right, for the arrow) into the Allowances
+  // grid, whose "Cap type" column is 130px at desk width. Every choice must still fit, in the font the
+  // select is drawn in, at both widths.
+  for (const [label, size] of [['390px', PHONE], ['1400px', DESK]]) {
+    await page.setViewportSize(size);
+    await page.waitForTimeout(250);
+    await page.evaluate(() => document.fonts.ready);
+    const fit = await page.$$eval('#allowancesSection select', (els) => els.filter((e) => e.getClientRects().length).map((e) => {
+      const cs = getComputedStyle(e);
+      const ctx = document.createElement('canvas').getContext('2d');
+      ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const room = e.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const widest = Math.max(...[...e.options].map((o) => ctx.measureText(o.textContent.trim()).width));
+      return { name: e.id ? '#' + e.id : '.' + e.className, room: Math.round(room), widest: Math.ceil(widest) };
+    }));
+    check(`${label}: every Allowances "Cap type" choice fits inside its select`, fit.length >= 2 && fit.every((x) => x.widest <= x.room),
+      fit.map((x) => `${x.name}: widest choice ${x.widest}px, room ${x.room}px`).join('; '));
+  }
 
   check('no console or page errors throughout', errors.length === 0, errors.slice(0, 3).join(' | '));
 

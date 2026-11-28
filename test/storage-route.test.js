@@ -1,7 +1,8 @@
 // Step 1.4 C11: GET /api/storage, core/routes/storage.js. One answer shape for the three kinds of
 // storage (plan §3.2, §4, decision D5): localStorage against its limit (70% / 90%), the phone's file
 // against Android's 25 MB Google backup limit (20 MB / 23 MB, the old copy counted while it is kept,
-// free space under 100 MB said), and the desktop file (no limit).
+// free space under 100 MB said), and the desktop file (no limit). On the file, oldCopyBytes is the
+// one count of the old copy's size that the Data Backup page shows (test/ws4b-old-copy-size.test.js).
 // The real platforms: test/storage.test.js (the dev server), test-ui/storage-limit.js (localStorage),
 // test-ui/storage-startup.js (the file, with the stand-in plugins).
 const { test } = require('node:test');
@@ -13,7 +14,7 @@ const { pathToFileURL } = require('node:url');
 const ROOT = path.join(__dirname, '..');
 const load = () => import(pathToFileURL(path.join(ROOT, 'core', 'routes', 'storage.js')).href);
 const MB = 1024 * 1024;
-const KEYS = ['mode', 'kind', 'databaseBytes', 'usedBytes', 'limitBytes', 'backupBytes', 'backupLimitBytes', 'freeBytes', 'fraction', 'level', 'freeLow'].sort();
+const KEYS = ['mode', 'kind', 'databaseBytes', 'usedBytes', 'limitBytes', 'backupBytes', 'backupLimitBytes', 'freeBytes', 'oldCopyBytes', 'fraction', 'level', 'freeLow'].sort();
 
 test('localStorage: used against the limit; warning from 70%, strongly from 90%', async () => {
   const { storageAnswer } = await load();
@@ -21,7 +22,7 @@ test('localStorage: used against the limit; warning from 70%, strongly from 90%'
   const at = (f) => storageAnswer({ kind: 'localstorage', usedBytes: Math.round(limit * f), limitBytes: limit, databaseBytes: 1234 });
   const a = at(0.5);
   assert.deepStrictEqual(Object.keys(a).sort(), KEYS);
-  assert.deepStrictEqual(a, { mode: 'phone', kind: 'localstorage', databaseBytes: 1234, usedBytes: limit / 2, limitBytes: limit, backupBytes: null, backupLimitBytes: null, freeBytes: null, fraction: 0.5, level: 'ok', freeLow: false });
+  assert.deepStrictEqual(a, { mode: 'phone', kind: 'localstorage', databaseBytes: 1234, usedBytes: limit / 2, limitBytes: limit, backupBytes: null, backupLimitBytes: null, freeBytes: null, oldCopyBytes: null, fraction: 0.5, level: 'ok', freeLow: false });
   assert.strictEqual(at(0.6999).level, 'ok');
   assert.strictEqual(at(0.7).level, 'warning');
   assert.strictEqual(at(0.8999).level, 'warning');
@@ -35,7 +36,7 @@ test('the file: the Google backup estimate (file + old copy) against 25 MB; warn
   const at = (databaseBytes, oldCopyBytes = 0, freeBytes = 8e9) => storageAnswer({ kind: 'file', databaseBytes, oldCopyBytes, freeBytes });
   const a = at(3 * MB, 2 * MB);
   assert.deepStrictEqual(Object.keys(a).sort(), KEYS);
-  assert.deepStrictEqual(a, { mode: 'phone', kind: 'file', databaseBytes: 3 * MB, usedBytes: null, limitBytes: null, backupBytes: 5 * MB, backupLimitBytes: 25 * MB, freeBytes: 8e9, fraction: 0.2, level: 'ok', freeLow: false });
+  assert.deepStrictEqual(a, { mode: 'phone', kind: 'file', databaseBytes: 3 * MB, usedBytes: null, limitBytes: null, backupBytes: 5 * MB, backupLimitBytes: 25 * MB, freeBytes: 8e9, oldCopyBytes: 2 * MB, fraction: 0.2, level: 'ok', freeLow: false });
   assert.strictEqual(at(20 * MB - 1).level, 'ok');
   assert.strictEqual(at(20 * MB).level, 'warning');
   assert.strictEqual(at(15 * MB, 5 * MB).level, 'warning', 'the old copy counts');
@@ -53,7 +54,7 @@ test('desktop: the file size, no limit', async () => {
   const { storageAnswer } = await load();
   const a = storageAnswer({ kind: 'desktop', databaseBytes: 4096 });
   assert.deepStrictEqual(Object.keys(a).sort(), KEYS);
-  assert.deepStrictEqual(a, { mode: 'desktop', kind: 'desktop', databaseBytes: 4096, usedBytes: null, limitBytes: null, backupBytes: null, backupLimitBytes: null, freeBytes: null, fraction: null, level: 'ok', freeLow: false });
+  assert.deepStrictEqual(a, { mode: 'desktop', kind: 'desktop', databaseBytes: 4096, usedBytes: null, limitBytes: null, backupBytes: null, backupLimitBytes: null, freeBytes: null, oldCopyBytes: null, fraction: null, level: 'ok', freeLow: false });
   assert.strictEqual(storageAnswer({ kind: 'desktop', databaseBytes: null }).databaseBytes, null);
 });
 

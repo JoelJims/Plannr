@@ -16,8 +16,9 @@
 // saveFile() as "Download encrypted backup" (the same proof that the file was written, the same
 // "mark exported"), and confirmed like the Ledger List import's safety backup.
 
-import { moveToFile, moveBack, deleteOldCopy, confirmMove, moveConfirmed, MoveError, sha256Hex, MB, MARKER_NATIVE, MARKER_LOCAL } from './core/storage-move.js';
+import { moveToFile, moveBack, deleteOldCopy, confirmMove, moveConfirmed, MoveError, sha256Hex, MARKER_NATIVE, MARKER_LOCAL } from './core/storage-move.js';
 import { summaryText } from './core/storage-check.js';
+import { mbText } from './core/size-text.js';
 import { makePhoneHost, phonePlugins, PROGRESS_KEY } from './storage-native.js';
 import { dbAdapter } from './db.js';
 import { openKvvfsAdapter } from './db-adapter-kvvfs.js';
@@ -44,7 +45,18 @@ export const BACK_STEP_TEXT = {
 export const NOT_NOW_KEY = 'plannr-move-not-now';
 
 const $ = (id) => document.getElementById(id);
-const mbText = (bytes) => `${(Math.ceil((Number(bytes) / MB) * 10) / 10).toFixed(1)} MB`;
+// The old copy's size: the count the storage meter shows too, GET /api/storage's oldCopyBytes (what
+// the old copy holds in localStorage now), not the database's size on the day of the move that the
+// marker keeps. One count and one formatter (mbText), so the two places on the page agree.
+// null when the answer cannot be had: the size is then left out rather than taken from elsewhere.
+async function oldCopyBytesNow() {
+  try {
+    const r = await fetch('/api/storage');
+    if (!r.ok) return null;
+    const n = Number((await r.json()).oldCopyBytes);
+    return Number.isFinite(n) ? n : null;
+  } catch { return null; }
+}
 const dayText = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? 'an earlier day' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
@@ -164,7 +176,7 @@ async function backupNeeded() {
 }
 
 export async function initMovePanel(deps) {
-  const { makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText } = deps;
+  const { makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText, refreshStorage } = deps;
   const storage = window.__plannrStorage;
   if (!storage || !storage.native) return; // no storage plugins: nothing to move
   const section = $('moveSection');
@@ -258,8 +270,9 @@ export async function initMovePanel(deps) {
     const check = marker.check ? ` ${summaryText(marker.check)}` : '';
     $('moveDoneText').textContent = `Your data is in its own file on this phone since ${dayText(marker.movedAt)}.${check}`;
     const kept = marker.storage === MARKER_NATIVE && !(marker.oldCopy && marker.oldCopy.kept === false) && (await host.local.exists());
+    const bytes = kept ? await oldCopyBytesNow() : null;
     $('oldCopyText').textContent = kept
-      ? `Old copy kept (from ${dayText((marker.oldCopy && marker.oldCopy.since) || marker.movedAt)}${marker.oldCopy && marker.oldCopy.bytes ? ', ' + mbText(marker.oldCopy.bytes) : ''}). Nothing deletes it unless you do.`
+      ? `Old copy kept (from ${dayText((marker.oldCopy && marker.oldCopy.since) || marker.movedAt)}${bytes > 0 ? ', ' + mbText(bytes) : ''}). Nothing deletes it unless you do.`
       : `The old copy was deleted${marker.oldCopy && marker.oldCopy.deletedAt ? ' on ' + dayText(marker.oldCopy.deletedAt) : ''}.`;
     show($('deleteOldCopyBtn'), kept);
     $('moveConfirmText').textContent = confirmText(marker);
@@ -308,14 +321,19 @@ export async function initMovePanel(deps) {
         if (!(err instanceof MoveError) || err.step !== 'confirm') throw err;
         const ok = await confirmModal({ title: 'Delete the old copy?', message: err.message, confirmLabel: 'Delete the old copy' });
         if (!ok) { msg.show('The old copy is kept.', 'info'); return; }
-        const res = await deleteOldCopy(host, { confirmed: true });
-        msg.show(`The old copy was deleted${res.freedBytes ? ` (${mbText(res.freedBytes)} freed)` : ''}.`, 'success');
+        // What it frees is the size this section and the meter show for it, measured the same way
+        // just before it goes.
+        const freed = await oldCopyBytesNow();
+        await deleteOldCopy(host, { confirmed: true });
+        msg.show(`The old copy was deleted${freed > 0 ? ` (${mbText(freed)} freed)` : ''}.`, 'success');
       }
     } catch (err) {
       msg.show(err instanceof MoveError ? err.message : `The old copy could not be deleted: ${errText(err)}`, 'error');
     } finally {
       btn.disabled = false;
       await render();
+      // The storage meter above counts the old copy in the Google backup estimate: redraw it.
+      if (refreshStorage) await refreshStorage();
     }
   });
 

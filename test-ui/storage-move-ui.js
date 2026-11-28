@@ -112,6 +112,22 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     return page.evaluate(async (k) => (await import('/safety-snapshots.js')).saveSnapshot(`plannr-safety-snapshot-ui-${String(k).padStart(2, '0')}.json`, new TextEncoder().encode(`regular ${k}`)), i);
   };
   const confirmReady = (page) => page.waitForFunction(() => { const t = document.getElementById('moveConfirmText'); return !!t && t.textContent.trim() !== ''; });
+  // The old copy's size as the page says it: in the storage meter ("With the old copy (0.3 MB)"), in
+  // the move section ("Old copy kept (from 28 Nov 2026, 0.3 MB)"), and what the one byte count, the
+  // /api/storage answer's oldCopyBytes, reads as through the shared core/size-text.js mbText().
+  // Waits until both texts are drawn: each is filled in after its own request.
+  const SIZE = '((?:under )?\\d+\\.\\d MB)';
+  const oldCopySizes = async (page) => {
+    await page.waitForFunction((size) => new RegExp(`With the old copy \\(${size}\\)`).test(document.getElementById('storageText').textContent)
+      && new RegExp(`^Old copy kept \\(from [^,]+, ${size}\\)`).test(document.getElementById('oldCopyText').textContent), SIZE, { timeout: 10000 }).catch(() => {});
+    return page.evaluate(async (size) => {
+      const meter = new RegExp(`With the old copy \\(${size}\\)`).exec(document.getElementById('storageText').textContent);
+      const panel = new RegExp(`^Old copy kept \\(from [^,]+, ${size}\\)`).exec(document.getElementById('oldCopyText').textContent);
+      const answer = await (await fetch('/api/storage')).json();
+      const { mbText } = await import('/core/size-text.js');
+      return { meter: meter && meter[1], panel: panel && panel[1], bytes: answer.oldCopyBytes, shared: mbText(answer.oldCopyBytes) };
+    }, SIZE);
+  };
   const focusedId = (page) => page.evaluate(() => (document.activeElement && document.activeElement.id) || '');
   // Run the move from the button; answer the step-1 confirmation; resolves once the page has reloaded.
   const runMove = async (page, { button = '#moveBtn', confirmBackup = true } = {}) => {
@@ -190,6 +206,11 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       await page.waitForFunction(() => /All \d+ tables match/.test(document.getElementById('moveDoneText').textContent));
       check('the panel shows the check', /^Your data is in its own file on this phone since \d+ \w+ \d{4}\. All \d+ tables match \([\d,]+ rows\)\.$/.test(await text(page, 'moveDoneText')), await text(page, 'moveDoneText'));
       check('the panel shows the old copy, kept, with its date and size', /^Old copy kept \(from \d+ \w+ \d{4}, \d+\.\d MB\)\./.test(await text(page, 'oldCopyText')), await text(page, 'oldCopyText'));
+      // Owner's decision 2026-11-28: the meter and the move section said 0.2 MB and 0.3 MB for this
+      // same old copy (two byte counts, two roundings). One byte count, one formatter now.
+      const sizes = await oldCopySizes(page);
+      check('the old copy\'s size is the same in the storage meter and in the move section', !!sizes.meter && sizes.meter === sizes.panel, `meter "${sizes.meter}", move section "${sizes.panel}"`);
+      check('...and it is the /api/storage answer\'s oldCopyBytes, written by the shared mbText', sizes.bytes > 0 && sizes.meter === sizes.shared, JSON.stringify(sizes));
       check('the move form is gone', !(await visible(page, 'moveBtn')) && (await visible(page, 'deleteOldCopyBtn')) && (await visible(page, 'moveBackBtn')));
       const kvAfter = await kvvfsRecords(page);
       check('the old copy is kept', (await kvvfsCount(page)) > 0 && kvAfter !== '[]');
@@ -284,11 +305,17 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       check('delete asks first', /Delete the old copy\?/.test(await answerConfirm(page, false)));
       await waitMsg(page, 'moveMsg', /The old copy is kept/);
       check('cancelled: the old copy is still there', (await kvvfsCount(page)) > 0);
+      const before = await oldCopySizes(page);
+      check('the old copy (written again by the move back) has one size on the page', !!before.meter && before.meter === before.panel && before.meter === before.shared, JSON.stringify(before));
       await page.click('#deleteOldCopyBtn');
       await answerConfirm(page, true);
       await waitMsg(page, 'moveMsg', /The old copy was deleted/);
       check('deleted: the localStorage copy is gone, the marker records it', (await kvvfsCount(page)) === 0 && (await marker(page)).oldCopy.kept === false, await text(page, 'moveMsg'));
+      check('what it freed is the size the page showed for it', (await text(page, 'moveMsg')) === `The old copy was deleted (${before.panel} freed).`, `${await text(page, 'moveMsg')} | shown before: ${before.panel}`);
       check('the panel says so, and the delete button is gone', /^The old copy was deleted on \d+ \w+ \d{4}\.$/.test(await text(page, 'oldCopyText')) && !(await visible(page, 'deleteOldCopyBtn')), await text(page, 'oldCopyText'));
+      // The meter above counted the old copy in the Google backup estimate: it is redrawn without it.
+      await page.waitForFunction(() => !/old copy/.test(document.getElementById('storageText').textContent), null, { timeout: 10000 }).catch(() => {});
+      check('the storage meter no longer counts the old copy', /^Your data file is [^.]+\.\d MB\. Android's Google backup of Plannr is about /.test(await text(page, 'storageText')), await text(page, 'storageText'));
       await open(page);
       check('the app still opens on the file with all the data', (await storageOf(page)).use === 'native' && (await reasons(page)).length >= 3);
       check('no page errors', page.errors.length === 0, page.errors.join(' | '));
