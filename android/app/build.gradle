@@ -1,7 +1,9 @@
 apply plugin: 'com.android.application'
 
-// Phase 8e — release signing. Credentials live in keystore.properties at the PROJECT root (a
-// sibling of this android/ directory, NOT checked in — see .gitignore), never here in build.gradle.
+// Phase 8e — release signing. Where the key is (storeFile) and its alias live in
+// keystore.properties at the PROJECT root (a sibling of this android/ directory, NOT checked in —
+// see .gitignore); the two passwords come from the environment (PLANNR_STORE_PASSWORD,
+// PLANNR_KEY_PASSWORD), never from a file and never from build.gradle.
 // Read lazily and guarded: a missing properties file (e.g. a fresh checkout with no keystore yet)
 // must NOT break debug builds, which never consult signingConfigs.release at all, nor should it
 // break `assembleRelease` itself — it just produces an unsigned release APK instead of failing
@@ -33,10 +35,13 @@ android {
     signingConfigs {
         release {
             if (hasReleaseSigning) {
+                // keystore.properties holds only storeFile and keyAlias. The two passwords come
+                // from the environment (npm run release:android sets them for this Gradle run
+                // only, from the environment or a hidden prompt), never from a file.
                 storeFile new File(projectRootDir, keystoreProperties.getProperty('storeFile'))
-                storePassword keystoreProperties.getProperty('storePassword')
+                storePassword System.getenv('PLANNR_STORE_PASSWORD')
                 keyAlias keystoreProperties.getProperty('keyAlias')
-                keyPassword keystoreProperties.getProperty('keyPassword')
+                keyPassword System.getenv('PLANNR_KEY_PASSWORD')
             }
         }
     }

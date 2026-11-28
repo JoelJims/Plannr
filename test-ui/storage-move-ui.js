@@ -11,6 +11,10 @@
 //      data; the old copy is unchanged; the panel shows the check's result and the old copy;
 //      then "Move data back" (too big refused without asking; cancel; confirm) and the move again,
 //      and "Delete the old copy" (refused without a backup since the move; cancel; confirm);
+//      Q12: after the move, the confirm step: the note says what moved and that the safety copy is kept
+//      until you confirm; more snapshots do not remove it; "Confirm the move" asks first (cancel keeps
+//      the focus on the button); confirmed, the note says so and it survives a reload; the next
+//      snapshot then rotates the safety copy out; after a move back and the move again it asks again;
 //   4. a reload in the middle of the move: the "interrupted" prompt; "Continue" finishes without a
 //      second backup; "Not now" keeps the app on the old storage for this session.
 const { chromium } = require('playwright');
@@ -97,6 +101,18 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
     return title;
   };
   const waitMsg = (page, id, re) => page.waitForFunction(([i, src]) => new RegExp(src).test(document.getElementById(i).textContent), [id, re.source], { timeout: 20000 });
+  // Q12: the safety snapshots (the app's Filesystem plugin; in Chromium its web version), and a regular
+  // snapshot written through the app's own saveSnapshot(), clean-up included.
+  const snapshotFiles = (page) => page.evaluate(async () => {
+    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    try { return (await Filesystem.readdir({ path: 'safety-snapshots', directory: Directory.Data })).files.map((f) => f.name).sort(); } catch { return []; }
+  });
+  const regularSnapshot = async (page, i) => {
+    await page.waitForTimeout(20); // a later modification time than the one before
+    return page.evaluate(async (k) => (await import('/safety-snapshots.js')).saveSnapshot(`plannr-safety-snapshot-ui-${String(k).padStart(2, '0')}.json`, new TextEncoder().encode(`regular ${k}`)), i);
+  };
+  const confirmReady = (page) => page.waitForFunction(() => { const t = document.getElementById('moveConfirmText'); return !!t && t.textContent.trim() !== ''; });
+  const focusedId = (page) => page.evaluate(() => (document.activeElement && document.activeElement.id) || '');
   // Run the move from the button; answer the step-1 confirmation; resolves once the page has reloaded.
   const runMove = async (page, { button = '#moveBtn', confirmBackup = true } = {}) => {
     const reloaded = page.waitForEvent('framenavigated', { timeout: 30000 });
@@ -179,6 +195,46 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       check('the old copy is kept', (await kvvfsCount(page)) > 0 && kvAfter !== '[]');
       check('a save goes into the file, not the old copy', (await addCashIn(page, 'B: in the file')).status === 201 && (await kvvfsRecords(page)) === kvAfter);
 
+      // Q12: the confirm step. The move's safety copy is kept until the move is confirmed here.
+      await confirmReady(page);
+      check('Q12: the note says what moved and that the safety copy is kept until you confirm',
+        /^Not confirmed yet\. On \d+ \w+ \d{4} your data \(\d+ tables, [\d,]+ rows\) was moved into its own file on this phone\. A safety copy from before the move is kept on this phone until you confirm the move\./.test(await text(page, 'moveConfirmText')), await text(page, 'moveConfirmText'));
+      check('Q12: "Confirm the move" is a real button, shown', (await visible(page, 'moveConfirmBtn')) && (await page.evaluate(() => { const b = document.getElementById('moveConfirmBtn'); return b.tagName === 'BUTTON' && b.type === 'button' && b.textContent.trim() === 'Confirm the move'; })));
+      const snaps0 = await snapshotFiles(page);
+      const copy = snaps0.find((x) => /^plannr-pre-move-.+\.db\.gz$/.test(x));
+      check('Q12: the move wrote its safety copy; the marker names it, not confirmed', !!copy && mk.safetyCopy && mk.safetyCopy.snapshot === `safety-snapshots/${copy}` && mk.safetyCopy.confirmed === false, JSON.stringify({ snaps0, safetyCopy: mk.safetyCopy }));
+      for (let i = 1; i <= 4; i++) await regularSnapshot(page, i);
+      const snaps4 = await snapshotFiles(page);
+      check('Q12: before confirming, four more snapshots leave the safety copy there (and 3 regular ones)', snaps4.includes(copy) && snaps4.length === 4, JSON.stringify(snaps4));
+      await open(page);
+      await confirmReady(page);
+      check('Q12: after a reload, still not confirmed', (await visible(page, 'moveConfirmBtn')) && /^Not confirmed yet\./.test(await text(page, 'moveConfirmText')), await text(page, 'moveConfirmText'));
+      await page.click('#moveConfirmBtn');
+      await page.waitForSelector('.pl-confirm-backdrop:not([hidden])');
+      const askTitle = await page.textContent('#plcTitle');
+      const askMsg = await page.textContent('#plcMsg');
+      const askOk = await page.textContent('.pl-confirm-backdrop [data-plc="ok"]');
+      check('Q12: the button asks first; the dialog says the safety copy is then removed in the normal rotation',
+        askTitle === 'Confirm the move?' && /safety copy from before the move is removed in the normal rotation/.test(askMsg) && askOk === 'Confirm the move', JSON.stringify([askTitle, askMsg, askOk]));
+      await page.click('.pl-confirm-backdrop [data-plc="cancel"]');
+      await waitMsg(page, 'moveMsg', /Not confirmed/);
+      check('Q12: cancelled: not confirmed, the copy kept, the focus back on the button',
+        (await marker(page)).safetyCopy.confirmed === false && (await visible(page, 'moveConfirmBtn')) && (await focusedId(page)) === 'moveConfirmBtn' && (await snapshotFiles(page)).includes(copy), await focusedId(page));
+      await page.click('#moveConfirmBtn');
+      await answerConfirm(page, true);
+      await waitMsg(page, 'moveMsg', /The move is confirmed/);
+      await page.waitForFunction(() => /^Move confirmed/.test(document.getElementById('moveConfirmText').textContent));
+      check('Q12: confirmed: the note says so, the button is gone, the focus is on the note',
+        /^Move confirmed on \d+ \w+ \d{4}\. The safety copy from before the move now goes in the normal rotation/.test(await text(page, 'moveConfirmText')) && !(await visible(page, 'moveConfirmBtn')) && (await focusedId(page)) === 'moveConfirmText', `${await text(page, 'moveConfirmText')} | focus: ${await focusedId(page)}`);
+      const mkc = await marker(page);
+      check('Q12: the marker records it; confirming deletes nothing by itself', mkc.storage === 'native-v1' && mkc.safetyCopy.confirmed === true && !!mkc.safetyCopy.confirmedAt && (await snapshotFiles(page)).includes(copy), JSON.stringify(mkc.safetyCopy));
+      await open(page);
+      await confirmReady(page);
+      check('Q12: the confirmation survives a reload', /^Move confirmed on/.test(await text(page, 'moveConfirmText')) && !(await visible(page, 'moveConfirmBtn')), await text(page, 'moveConfirmText'));
+      await regularSnapshot(page, 5);
+      const snaps5 = await snapshotFiles(page);
+      check('Q12: confirmed, the next snapshot rotates the safety copy out: the newest 3 remain', snaps5.length === 3 && !snaps5.includes(copy) && snaps5.includes('plannr-safety-snapshot-ui-05.json.gz'), JSON.stringify(snaps5));
+
       // Delete the old copy: refused without a backup since the move.
       await page.click('#deleteOldCopyBtn');
       await waitMsg(page, 'moveMsg', /Save an encrypted backup first/);
@@ -215,6 +271,8 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       await fillPass(page, PASS);
       await runMove(page);
       check('moved again: on the file, with everything', (await storageOf(page)).use === 'native' && (await reasons(page)).includes('C: after moving back'));
+      await confirmReady(page);
+      check('Q12: a move back reset the confirmation: the move again asks for it', (await visible(page, 'moveConfirmBtn')) && /^Not confirmed yet\./.test(await text(page, 'moveConfirmText')) && (await marker(page)).safetyCopy.confirmed === false, await text(page, 'moveConfirmText'));
 
       // A backup since the move, then delete the old copy (cancel, then confirm).
       await page.waitForTimeout(1100); // the backup's stamp has whole seconds

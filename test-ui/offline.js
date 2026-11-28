@@ -110,6 +110,19 @@ function startServer() {
     await page.fill('#encExportPass2', 'correct horse battery staple');
     const [encDl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#encExportBtn')]);
     check('the encrypted backup downloads with no connection', /\.enc$/.test(encDl.suggestedFilename()), encDl.suggestedFilename());
+    // F14: a normal backup gets no size note. For a large one the page shows the API's note; here the
+    // page asks about a 20 MB file (the real one is far smaller), and the phone code answers it.
+    const noteShown = (sel) => page.$eval(sel, (el) => el.classList.contains('show'));
+    check('F14: a small backup shows no size note', !(await noteShown('#jsonSizeNote')) && !(await noteShown('#encExportSizeNote')));
+    await page.evaluate(() => {
+      const realFetch = window.fetch;
+      window.fetch = (u, init) => realFetch(typeof u === 'string' && u.startsWith('/api/backup/size-note') ? u.replace(/bytes=\d+/, 'bytes=' + 20 * 1024 * 1024) : u, init);
+    });
+    await page.fill('#encExportPass', 'correct horse battery staple');
+    await page.fill('#encExportPass2', 'correct horse battery staple');
+    await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#encExportBtn')]);
+    const note = await page.$eval('#encExportSizeNote', (el) => (el.classList.contains('show') ? el.textContent : ''));
+    check('F14: a large backup shows how big it is, the restore limit and what to do', /^This backup is getting large: 20 MB of the 24 MB that Plannr can restore from an encrypted backup\..*Recycle Bin/.test(note), note || '(no note shown)');
     noErrors('data-backup.html backups');
 
     // ---- the PDF button answers (the drawing itself is the phone's print plugin) ----

@@ -64,14 +64,14 @@ test('batch routes: 100 KB is accepted (over the normal limit); over 256 KB gets
   assert.match(over.json.error, /save fewer rows at a time \(the batch limit is 500 rows\)/);
 });
 
-test('restoring a backup: 1 MB is accepted, over 20 MB gets the backup message (JSON and encrypted)', async () => {
+test('restoring a backup: 1 MB is accepted, over the limit (32 MB, F14) gets the backup message (JSON and encrypted)', async () => {
   for (const route of ['/api/backup/import', '/api/backup/import-encrypted']) {
     // An encrypted restore sends the whole database file as base64, far over the normal limit.
     const ok = await H.post(route, bodyOfSize(1024 * 1024, { passphrase: 'x'.repeat(12), dataBase64: 'AAAA' }));
     assert.notStrictEqual(ok.status, 413, `${route}: ${JSON.stringify(ok.json)}`);
     const over = await H.post(route, bodyOfSize(BODY_LIMITS.backup + 1, { passphrase: 'x'.repeat(12) }));
     assert.strictEqual(over.status, 413, route);
-    assert.strictEqual(over.json.error, 'That backup file is too large to restore (the limit is 20 MB).', route);
+    assert.strictEqual(over.json.error, 'That backup file is too large to restore: the limit is 24 MB for an encrypted backup and 32 MB for a JSON backup.', route);
   }
 });
 

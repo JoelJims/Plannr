@@ -182,6 +182,8 @@ export async function moveToFile(host, { onStep } = {}) {
       movedAt: at,
       check: { tables: summary.tables, rows: summary.rows, perTable: summary.perTable },
       oldCopy: { kept: true, since: at, bytes: bytes.length, checksum },
+      // Q12: the step-2 snapshot is kept until you confirm the move in the app (confirmMove()).
+      safetyCopy: { snapshot: progress.snapshot || null, confirmed: false },
     };
     await host.marker.write(marker);
     await point(host, 'after-marker');
@@ -208,10 +210,13 @@ export async function moveToFile(host, { onStep } = {}) {
  *   main            the database file (plannrSQLite.db) is there
  *   mainOk          the database file opens and PRAGMA quick_check is ok (only asked when needed)
  *   moveInProgress  the progress record says a move had started
+ *   markerUnreadable the marker file is there but could not be read (Q5): the move may have finished,
+ *                   so the database file may hold the live data and is set aside, never deleted
  * Returns { use: 'localstorage' | 'native' | 'recovery', remove: [...], setAside: [...], prompt? }.
  * remove/setAside name files the caller deletes or renames aside before going on ('candidate' | 'main').
  */
-export async function decideAtStartup({ marker, candidate, main, mainOk, moveInProgress }) {
+export async function decideAtStartup({ marker, candidate, main, mainOk, moveInProgress: started, markerUnreadable = false }) {
+  const moveInProgress = started && !markerUnreadable;
   const kind = marker && marker.storage;
   if (kind === MARKER_NATIVE) {
     const ok = main && (await mainOk());
@@ -347,6 +352,7 @@ export async function moveBack(host, { confirmed = false, onStep } = {}) {
   await say('switch');
   const summary = summarize(fpFile);
   const at = host.now().toISOString();
+  // Q12: no safetyCopy here. A move back resets the confirmation; the next move asks for it again.
   const next = {
     storage: MARKER_LOCAL,
     movedBackAt: at,
@@ -383,6 +389,32 @@ export async function useOldCopy(host, { confirmed = false } = {}) {
   await host.marker.write(next);
   try { await host.markerKey.write({ storage: MARKER_LOCAL, at, emergency: true }); } catch { /* the file is what counts */ }
   return { marker: next, setAside };
+}
+
+/**
+ * Q12: has the move been confirmed in the app? Only while the app is on the file and the marker says
+ * so. A marker from before Q12 (no safetyCopy), the old storage (a move back resets it) or no marker:
+ * not confirmed. Until then safety-snapshots.js never deletes a storage-move snapshot.
+ */
+export function moveConfirmed(marker) {
+  return !!(marker && marker.storage === MARKER_NATIVE && marker.safetyCopy && marker.safetyCopy.confirmed === true);
+}
+
+/**
+ * "Confirm the move" (Q12): you have checked your data on the file. The marker records it; from then
+ * on the move's safety copy goes in the normal rotation of safety snapshots (the newest 3 are kept).
+ * Only after you confirm; confirming again changes nothing.
+ */
+export async function confirmMove(host, { confirmed = false } = {}) {
+  const marker = await readMarker(host);
+  if (!marker || marker.storage !== MARKER_NATIVE) throw new MoveError('state', 'Your data is not in the new storage, so there is no move to confirm.');
+  if (moveConfirmed(marker)) return { marker };
+  if (confirmed !== true) {
+    throw new MoveError('confirm', 'Your data stays in the new storage. The safety copy from before the move is removed in the normal rotation of safety copies: Plannr keeps the newest 3. Confirm only if your entries look right.');
+  }
+  const next = { ...marker, safetyCopy: { snapshot: null, ...(marker.safetyCopy || {}), confirmed: true, confirmedAt: host.now().toISOString() } };
+  await host.marker.write(next);
+  return { marker: next };
 }
 
 /**

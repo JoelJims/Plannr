@@ -289,6 +289,64 @@ test('delete the old copy: stopped after it is recorded, doing it again finishes
   assert.ok(fs.existsSync(path.join(b.dir, 'local.db')));
 });
 
+// ---- Q12: confirming the move ------------------------------------------------------------------------
+// The move's safety copy is kept until the owner confirms the move in the app. The marker file (the
+// move's own record) says whether that happened; a move back resets it.
+
+test('Q12: after a move the marker names the safety copy, unconfirmed; confirming asks first, then records it in the marker', async () => {
+  const { confirmMove, moveConfirmed } = await load('core/storage-move.js');
+  const { dir, host } = await moved({ now: '2026-11-21T09:30:00.000Z' });
+  const before = marker(host);
+  assert.deepStrictEqual(before.safetyCopy, { snapshot: 'plannr-pre-move-1.db', confirmed: false });
+  assert.strictEqual(moveConfirmed(before), false);
+  const ask = await confirmMove(host).catch((e) => e);
+  assert.strictEqual(ask.step, 'confirm');
+  assert.match(ask.message, /safety copy from before the move is removed in the normal rotation/);
+  assert.deepStrictEqual(marker(host), before, 'nothing recorded without the confirmation');
+  const res = await confirmMove(host, { confirmed: true });
+  await host.file.close();
+  const after = marker(host);
+  assert.deepStrictEqual(after.safetyCopy, { snapshot: 'plannr-pre-move-1.db', confirmed: true, confirmedAt: '2026-11-21T09:30:00.000Z' });
+  assert.deepStrictEqual({ ...after, safetyCopy: before.safetyCopy }, before, 'the rest of the marker is unchanged');
+  assert.deepStrictEqual(res.marker, after);
+  assert.strictEqual(moveConfirmed(after), true);
+  // It is in the marker file, so it holds after a restart; confirming again changes nothing.
+  const again = await makeHost(dir, { now: '2026-11-22T09:30:00.000Z' });
+  await again.source.close();
+  assert.strictEqual(moveConfirmed(await again.marker.read()), true);
+  await confirmMove(again, { confirmed: true });
+  assert.strictEqual(marker(again).safetyCopy.confirmedAt, '2026-11-21T09:30:00.000Z');
+  assert.strictEqual((await decide(again)).use, 'native', 'the app still opens the file');
+});
+
+test('Q12: a move back resets the confirmation; the next move asks again; never confirmed off the file', async () => {
+  const { confirmMove, moveConfirmed, moveBack, moveToFile, MARKER_LOCAL } = await load('core/storage-move.js');
+  const { dir, host } = await moved();
+  await confirmMove(host, { confirmed: true });
+  await moveBack(host, { confirmed: true });
+  await host.file.close();
+  const back = marker(host);
+  assert.strictEqual(back.storage, MARKER_LOCAL);
+  assert.strictEqual(moveConfirmed(back), false, 'a move back resets it');
+  assert.ok(!back.safetyCopy || back.safetyCopy.confirmed !== true, JSON.stringify(back.safetyCopy));
+  const e1 = await confirmMove(host, { confirmed: true }).catch((e) => e);
+  assert.strictEqual(e1.step, 'state', 'nothing to confirm on the old storage');
+  assert.deepStrictEqual(marker(host), back);
+  // The move again: a new safety copy, unconfirmed.
+  const again = await makeHost(dir);
+  await moveToFile(again);
+  await again.source.close();
+  const m = marker(again);
+  assert.strictEqual(moveConfirmed(m), false);
+  assert.deepStrictEqual(m.safetyCopy, { snapshot: 'plannr-pre-move-1.db', confirmed: false });
+  // A phone that never moved; and a marker written before Q12 (no safetyCopy) counts as unconfirmed.
+  const plain = await makeHost(newPhone());
+  await plain.source.close();
+  assert.strictEqual((await confirmMove(plain, { confirmed: true }).catch((e) => e)).step, 'state');
+  assert.strictEqual(moveConfirmed({ storage: 'native-v1', movedAt: MOVED_AT }), false);
+  assert.strictEqual(moveConfirmed(null), false);
+});
+
 test('stampTime reads the settings stamp as UTC, and ISO strings and Dates as they are', async () => {
   const { stampTime } = await load('core/storage-move.js');
   assert.strictEqual(stampTime('2026-11-19 10:00:01'), Date.UTC(2026, 10, 19, 10, 0, 1));

@@ -26,7 +26,8 @@ npm run android:sync
 
 Then open the `android/` folder in Android Studio and run it on the emulator or a test device. A
 phone that already holds real data gets updates only as [RELEASE.md](RELEASE.md) and
-[PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) say (never uninstall).
+[PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) say (never uninstall; the one exception is the
+owner's debug to release switch round, [release-plan.md](release-plan.md) §6).
 
 Desktop dev server (development and tests only):
 
@@ -94,8 +95,8 @@ old `localStorage` copy); the encrypted backup you save yourself is the safest c
 | [HANDOFF.md](../HANDOFF.md) | How everything works, in detail |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Changing the database safely (migrations, backups, tests) |
 | [RELEASE.md](RELEASE.md) | Releasing an update to the phone without losing data |
-| [release-plan.md](release-plan.md) | Plan for the first public release APK: the signing key, version numbers, moving from the debug build, release notes, a checklist, open questions |
-| [PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) | Checks on a real phone before a release, and the owner's phone round (backups proven on the emulator first) |
+| [release-plan.md](release-plan.md) | Plan for the first public release APK: the signing key, version numbers, moving from the debug build, release notes, a checklist, and the owner's decisions (the debug to release switch round) |
+| [PHONE-TEST-CHECKLIST.md](PHONE-TEST-CHECKLIST.md) | Checks on a real phone before a release, the owner's phone round (backups proven on the emulator first), and the owner's debug to release switch round |
 | [cross-platform-plan.md](cross-platform-plan.md) | The plan for one shared core, desktop and other users |
 | [step-1.4-storage-plan.md](step-1.4-storage-plan.md) | Moving the phone's data into a database file of its own (done) |
 | [storage-proposal.md](storage-proposal.md) | The first proposal for that move (replaced by the plan above) |

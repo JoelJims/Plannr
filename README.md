@@ -48,6 +48,9 @@ You can save a backup file at any time, and lock it with a passphrase you choose
 
 **Download coming soon.**
 
+When it is out, the [1.0.0 release notes](docs/release-notes-1.0.0.md) say how to install it,
+what the Play Protect warning means, and why to make a backup first.
+
 To build it yourself:
 
 1. Install [Node.js](https://nodejs.org/) 24 and [Android Studio](https://developer.android.com/studio).
@@ -57,7 +60,9 @@ To build it yourself:
 
 If Plannr is already on your phone with your data, don't press **Run**: make a backup first
 (Data Backup) and follow [docs/RELEASE.md](docs/RELEASE.md). Never accept an offer to uninstall
-Plannr: that deletes your data.
+Plannr: that deletes your data. The one exception is the one-time move from a debug build to the
+release build, which uninstalls on purpose, only after the backup is proven to restore
+([docs/release-plan.md](docs/release-plan.md) §3 and §6).
 
 ## Built with
 
