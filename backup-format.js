@@ -124,11 +124,75 @@ export async function buildBackup(adapter, { includeContacts = false } = {}) {
   return { app: 'plannr', kind: 'plannr-backup', schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), tables, sequences };
 }
 
+// Q10 (review 2026-11-21), the owner's decision of 2026-11-28: an imported amount has the same limits
+// as a typed one (core/parsers.js, passed in through validateBackup's ctx so this file keeps no imports
+// and no copy of the numbers). Every amount the app stores, per list, in the order a refusal names
+// them: [column, what it is called on its page ('' when the list has one amount), which limit].
+//   'entry': one cash in, cash out or contractor payment, at most MAX_AMOUNT_PAISE (₹1 crore).
+//   'total': a loan, a contract's reference amount, total and rate, an allowance's cap and rate, and
+//            the budget (a settings row, checked on its own below), at most MAX_TOTAL_PAISE.
+// A contract's rate x area is not computed here: when both are present, the contract routes store the
+// product in price_of_contract_paise on every write (core/routes/contracts.js), so the stored total
+// is what gets checked. A per-square-foot allowance's rate x area is never stored, and stays unchecked
+// (the owner's decision). cash_out.contract_stated_paise is a retired column nothing reads, so it is
+// not an amount here either. Soft-deleted rows are checked too: they come back into the Recycle Bin.
+const AMOUNT_LIMITS = [
+  { table: 'cash_in', list: 'Cash Inflow', date: 'tx_date', amounts: [['amount_paise', '', 'entry']] },
+  { table: 'cash_out', list: 'Cash Outflow', date: 'tx_date', amounts: [['amount_paise', '', 'entry']] },
+  { table: 'contractor_payments', list: 'Contractor Payments', date: 'pay_date', amounts: [['amount_paise', '', 'entry']] },
+  { table: 'loans', list: 'Loan Details', name: 'bank_name', amounts: [['amount_paise', '', 'total']] },
+  { table: 'contract', list: 'Contract Details', name: 'contractor_name', date: 'date_signed', amounts: [
+    ['amount_paise', 'Reference amount', 'total'], ['price_of_contract_paise', 'Total contract value', 'total'], ['rate_per_sqft_paise', 'Rate per sq ft', 'total'],
+  ] },
+  { table: 'contract_allowances', list: 'Allowances', name: 'name', amounts: [['cap_paise', 'Cap', 'total'], ['cap_rate_per_sqft_paise', 'Cap rate per sq ft', 'total']] },
+];
+const MAX_NAMED_ROWS = 10; // a refusal names this many amounts, then says how many more
+
+// The amounts in a structurally valid backup that are over their limit -> null, or the refusal's text:
+// what happened and that nothing changed, then each amount with where to find it (the list and its
+// page, the row's place in the file and its id, its name and date as the app shows them, the amount in
+// rupees) and which limit, then what to do.
+function amountsOverLimits(T, { maxEntryPaise, maxTotalPaise, fmtRs }) {
+  const max = { entry: maxEntryPaise, total: maxTotalPaise };
+  const rupees = (paise) => fmtRs(paise).replace(/\.00$/, ''); // a limit is whole rupees: "₹1,00,00,000"
+  const limit = { entry: `the ${rupees(maxEntryPaise)} limit for one entry`, total: `the ${rupees(maxTotalPaise)} limit for totals` };
+  const dmy = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? '')); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : ''; };
+  const short = (s) => { const t = typeof s === 'string' ? s.trim() : ''; return t.length > 40 ? t.slice(0, 39) + '…' : t; };
+  const over = [];
+  for (const { table, list, date, name, amounts } of AMOUNT_LIMITS) {
+    (T[table] || []).forEach((r, i) => {
+      for (const [col, what, kind] of amounts) {
+        const v = r[col];
+        if (!(Number.isInteger(v) && v > max[kind])) continue;
+        const where = [`${list} (${table} row ${i + 1}, id ${r.id})`, name && short(r[name]), date && dmy(r[date]), r.deleted_at != null && 'in the Recycle Bin'].filter(Boolean).join(', ');
+        over.push(`• ${where}: ${what ? what + ' ' : ''}${fmtRs(v)} is over ${limit[kind]}.`);
+      }
+    });
+  }
+  // The budget is a settings row with its amount as text (core/routes/budget.js reads it as a number).
+  const budget = (T.settings || []).find((r) => r.key === 'budget_paise');
+  const b = budget && typeof budget.value === 'string' && budget.value.trim() !== '' ? Number(budget.value) : NaN;
+  if (Number.isInteger(b) && b > maxTotalPaise) over.push(`• Budget (settings, budget_paise): ${fmtRs(b)} is over ${limit.total}.`);
+  if (!over.length) return null;
+  const n = over.length;
+  return [
+    `This backup was not imported: ${n === 1 ? '1 amount in it is' : `${n} amounts in it are`} over Plannr's limits. Nothing was changed.`,
+    ...over.slice(0, MAX_NAMED_ROWS),
+    ...(n > MAX_NAMED_ROWS ? [`…and ${n - MAX_NAMED_ROWS} more.`] : []),
+    'Correct these amounts in the file, then import it again.',
+  ].join('\n');
+}
+
 // Strict, side-effect-free validation of an uploaded backup. Returns { ok: true } or { error }.
-// ctx: { liveLedgerByCode: Map(code -> { subLedgers: [{ code }] }), customCode, parseIsoDate } — the
-// category list a v1 file is checked against (a v2 file is checked against its OWN categories).
+// ctx: { liveLedgerByCode: Map(code -> { subLedgers: [{ code }] }), customCode, parseIsoDate,
+// maxEntryPaise, maxTotalPaise, fmtRs } — the category list a v1 file is checked against (a v2 file is
+// checked against its OWN categories), and the amount limits and rupee format of core/parsers.js (Q10).
 export function validateBackup(data, ctx) {
-  const { liveLedgerByCode, customCode: CUSTOM_CODE, parseIsoDate } = ctx;
+  const { liveLedgerByCode, customCode: CUSTOM_CODE, parseIsoDate, maxEntryPaise, maxTotalPaise, fmtRs } = ctx;
+  // Without the limits the amount check below would silently pass everything.
+  if (!Number.isSafeInteger(maxEntryPaise) || !Number.isSafeInteger(maxTotalPaise) || typeof fmtRs !== 'function') {
+    throw new TypeError('validateBackup: ctx needs maxEntryPaise, maxTotalPaise and fmtRs (core/parsers.js).');
+  }
   const isInt = (v) => Number.isInteger(v);
   const optInt = (v) => v == null || Number.isInteger(v);
   const optStr = (v) => v == null || typeof v === 'string';
@@ -293,6 +357,9 @@ export function validateBackup(data, ctx) {
     if (!(r.contract_service_id == null || (isInt(r.contract_service_id) && serviceIds.has(r.contract_service_id)))) return { error: `cash_out: contract_service_id ${JSON.stringify(r.contract_service_id)} is not present in the backup's contract_services.` };
     if (!(r.contract_allowance_id == null || (isInt(r.contract_allowance_id) && allowanceIds.has(r.contract_allowance_id)))) return { error: `cash_out: contract_allowance_id ${JSON.stringify(r.contract_allowance_id)} is not present in the backup's contract_allowances.` };
   }
+  // Q10: last, once every row is known to be well formed, so the refusal can name all the amounts.
+  const overLimits = amountsOverLimits(T, { maxEntryPaise, maxTotalPaise, fmtRs });
+  if (overLimits) return { error: overLimits };
   return { ok: true };
 }
 

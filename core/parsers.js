@@ -24,6 +24,8 @@ export function parsePaise(v) {
 //   · Totals limit, MAX_TOTAL_PAISE = ₹10,00,00,00,000.00 (₹1,000 crore), message TOTAL_LIMIT_MESSAGE:
 //     the budget, a loan, the contract's reference amount, total, rate and rate x area, and an
 //     allowance's cap and rate. These are often more than ₹1 crore. Checked by parseTotalToSave.
+// A JSON backup import checks the same two limits on what it brings in (backup-format.js
+// validateBackup, the owner's decision of 2026-11-28), so no amount can get in that could not be typed.
 // Why the totals limit keeps sums exact: amounts are integer paise, and a sum of integers stays an
 // exact integer in a JavaScript number while it is at most Number.MAX_SAFE_INTEGER paise. At the
 // totals limit that is over 9,000 totals; an entry at the entry cap uses a thousandth of that room,

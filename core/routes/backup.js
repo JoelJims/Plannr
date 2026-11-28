@@ -5,7 +5,8 @@
 //   - GET /api/backup/export: the backup as JSON. Contacts (Gmail and WhatsApp numbers) are left out
 //     unless the user opts in on the Data page (?includeContacts=1), so a shared backup carries no
 //     personal data by default.
-//   - POST /api/backup/import: REPLACE, made safe. Check the file fully, then save a safety copy of
+//   - POST /api/backup/import: REPLACE, made safe. Check the file fully (with every amount within the
+//     typed amounts' limits, Q10: one over refuses the whole file and names it), then save a safety copy of
 //     the current data through ctx.host.snapshot.writeJson (core/host.js: a file beside the DB on
 //     the dev server, the app's data folder on the phone), then replace all ledger data in ONE
 //     transaction, keeping ids and foreign keys. Nothing is deleted before the new data is proven
@@ -22,7 +23,7 @@
 //     1.4 D1).
 
 import * as backupFormat from '../../backup-format.js';
-import { parseIsoDate, base64ToBytes } from '../parsers.js';
+import { parseIsoDate, base64ToBytes, MAX_AMOUNT_PAISE, MAX_TOTAL_PAISE, fmtRs } from '../parsers.js';
 import { MIN_PASSPHRASE_LEN, looksLikeSqlite } from '../backup-crypto.js';
 import { hostService } from '../host.js';
 import { RESTORE_FILE_LIMITS, backupSizeNote } from '../../request-rules.js';
@@ -37,7 +38,12 @@ export function register(app, ctx) {
   atStart(() => backupFormat.assertImportOwnershipComplete(adapter));
 
   // ledgerIndex.byCode() is read at call time: ledgerIndex.refresh() replaces it after a restore.
-  const check = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate });
+  // Q10: the amount limits are the typed amounts' own (core/parsers.js), so an import cannot bring in
+  // an amount the app would refuse to save.
+  const check = (data) => backupFormat.validateBackup(data, {
+    liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate,
+    maxEntryPaise: MAX_AMOUNT_PAISE, maxTotalPaise: MAX_TOTAL_PAISE, fmtRs,
+  });
 
   app.get('/api/backup/export', auth, async (req, res) => {
     const includeContacts = req.query.includeContacts === '1';
