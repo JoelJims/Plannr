@@ -19,6 +19,7 @@ after(() => fs.rmSync(DIR, { recursive: true, force: true }));
 const FIXTURE = fs.readdirSync(path.join(ROOT, 'test', 'fixtures', 'schema-history')).filter((f) => f.endsWith('.sql')).sort().pop();
 const sha = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const MOVED_AT = '2026-11-19T10:00:00.000Z';
+const MB = 1024 * 1024;
 
 let n = 0;
 function newPhone() {
@@ -117,11 +118,80 @@ test('move data back is refused when the data is over 90% of the localStorage li
   const err = await moveBack(host, { confirmed: true }).catch((e) => e);
   await host.file.close();
   assert.strictEqual(err.step, 'size');
-  assert.match(err.message, /^Your data \(\d+\.\d MB\) is too big to move back: the old storage holds at most about \d+\.\d MB\. It stays in the new storage\.$/);
   assert.ok(err.details.bytes > err.details.limitBytes);
+  // Here the old copy (kept until the commit, and journaled) already takes the room, so less than
+  // 0.1 MB is left: the message says so, not "at most about 0.0 MB" (as if nothing at all fitted
+  // when that is not known) or "at most about under 0.1 MB".
+  assert.ok(err.details.limitBytes < MB / 10, `room ${err.details.limitBytes} bytes`);
+  assert.match(err.message, /^Your data \(\d+\.\d MB\) is too big to move back: the old storage has room for less than 0\.1 MB\. It stays in the new storage\.$/);
   assert.deepStrictEqual(host.calls, []);
   assert.strictEqual(sha(path.join(dir, 'local.db')), before);
   assert.strictEqual((await decide(host)).use, 'native');
+});
+
+// The move-back refusal says two sizes: your data, written by the shared core/size-text.js mbText()
+// (rounded up, so it never reads smaller than it is), and the room in the old storage, written by
+// capacityText() (rounded down, so the room never reads larger than it is: never overstate what is
+// free). So from 0.1 MB up the data reads larger than the room, and it never reads smaller (below
+// 0.1 MB both read "under / less than 0.1 MB"). With both rounded up, 2.26 MB of data
+// against a 2.25 MB room read "Your data (2.3 MB) ... holds at most about 2.3 MB".
+
+/** A host on the file whose data is `bytes` long and whose old storage has `limitChars` characters,
+ *  with no old copy and no other keys: moveBack stops at the size check, before anything is done. */
+const sizeOnlyHost = (bytes, limitChars) => ({
+  marker: { async read() { return { storage: 'native-v1' }; } },
+  file: { async exportBytes() { return { length: bytes }; } },
+  local: { limitChars, async usedChars() { return { copy: 0, other: 0 }; } },
+  async freeBytes() { return 8e9; },
+});
+
+test('capacityText: a room rounded DOWN to 0.1 MB; below 0.1 MB, "less than 0.1 MB"', async () => {
+  const { capacityText } = await load('core/size-text.js');
+  for (const [bytes, text] of [
+    [0, 'less than 0.1 MB'], [1, 'less than 0.1 MB'], [104857, 'less than 0.1 MB'], // 0.1 MB is 104,857.6 bytes
+    [104858, '0.1 MB'], [0.5 * MB - 1, '0.4 MB'], [0.5 * MB, '0.5 MB'], [MB - 1, '0.9 MB'], [MB, '1.0 MB'],
+    [2359296, '2.2 MB'], // 2.25 MB, the most data 5 M characters of localStorage take under 90%
+    [Math.floor(2.3 * MB), '2.2 MB'], [Math.ceil(2.3 * MB), '2.3 MB'],
+  ]) assert.strictEqual(capacityText(bytes), text, `${bytes} bytes`);
+  assert.strictEqual(capacityText(null), 'less than 0.1 MB', 'no number is no room: nothing above zero is claimed');
+});
+
+test('move data back: 2.26 MB of data against a 2.25 MB room reads 2.3 MB and 2.2 MB, not 2.3 MB twice', async () => {
+  const { moveBack, moveBackLimitBytes } = await load('core/storage-move.js');
+  const LIMIT_CHARS = 5 * 1024 * 1024;
+  const bytes = Math.round(2.26 * MB);
+  const err = await moveBack(sizeOnlyHost(bytes, LIMIT_CHARS), { confirmed: true }).catch((e) => e);
+  assert.strictEqual(err.step, 'size');
+  assert.deepStrictEqual(err.details, { bytes, limitBytes: moveBackLimitBytes(LIMIT_CHARS) });
+  assert.strictEqual(err.message, 'Your data (2.3 MB) is too big to move back: the old storage holds at most about 2.2 MB. It stays in the new storage.');
+});
+
+test('move data back: from 0.1 MB up the refused data reads larger than the room, the room never larger than it is', async () => {
+  const { moveBack, moveBackLimitBytes } = await load('core/storage-move.js');
+  const { mbText, capacityText } = await load('core/size-text.js');
+  const SAID = /^Your data \((under 0\.1 MB|(\d+\.\d) MB)\) is too big to move back: the old storage (?:holds at most about (\d+\.\d) MB|has room for less than 0\.1 MB)\. It stays in the new storage\.$/;
+  let cases = 0;
+  for (let limitChars = 0; limitChars <= 7 * MB; limitChars += 20011) {
+    const room = moveBackLimitBytes(limitChars);
+    for (const over of [1, 997, 52429, 104857, 104858, 314573]) {
+      const bytes = room + over;
+      const err = await moveBack(sizeOnlyHost(bytes, limitChars), { confirmed: true }).catch((e) => e);
+      const said = SAID.exec(err.message);
+      const at = `${bytes} bytes against ${room}: ${err.message}`;
+      assert.ok(err.step === 'size' && said, at);
+      assert.strictEqual(said[1], mbText(bytes), `the data by the shared mbText: ${at}`);
+      assert.ok(err.message.includes(capacityText(room)), `the room by capacityText: ${at}`);
+      const data = said[2] === undefined ? null : Number(said[2]);
+      const shownRoom = said[3] === undefined ? null : Number(said[3]);
+      if (data === null) assert.ok(bytes < MB / 10, `"under 0.1 MB" only below it: ${at}`);
+      else assert.ok(data >= bytes / MB, `the data never reads smaller: ${at}`);
+      if (shownRoom === null) assert.ok(room < MB / 10, `"less than 0.1 MB" only below it: ${at}`);
+      else assert.ok(shownRoom <= room / MB && room / MB - shownRoom < 0.1, `the room never reads larger, nor 0.1 MB smaller: ${at}`);
+      if (data !== null && shownRoom !== null) assert.ok(data > shownRoom, `the data reads larger than the room: ${at}`);
+      cases += 1;
+    }
+  }
+  assert.ok(cases > 2000, `${cases} cases`);
 });
 
 test('without the confirmation, move data back only checks: too big and too little space come before the question (C10)', async () => {
