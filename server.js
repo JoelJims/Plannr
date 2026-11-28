@@ -188,7 +188,7 @@ const coreContext = {
   host,
   auth: requireApiAuth,
   logError: (...args) => { if (!IS_PROD) console.error(...args); },
-  storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
+  // (A full storage answers request-rules.js STORAGE_FULL, the owner's Q11 text, the same as the phone.)
   ledgerIndex,
   exclusive: (fn) => requestQueue.run(fn), // for the one route outside the queue (the PDF): its database part
 };
@@ -489,9 +489,10 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   // Phase 4a (WASM SQLite port prep): a write that hit the kvvfs storage ceiling surfaces as a clean
   // SQLITE_IOERR (confirmed in the storage-ceiling spike — atomic rollback, never corruption). Most
   // write routes have no try/catch of their own (see the comment above this handler), so this is
-  // where their errors land; give a clear message instead of the raw SQLite one.
+  // where their errors land; give a clear message instead of the raw SQLite one (Q11: the owner's
+  // text, request-rules.js STORAGE_FULL, the same answer as the phone's).
   if (status >= 500 && isStorageFullError(err)) {
-    return res.status(500).json({ error: 'Storage is full — this save did not go through. Free up space, then try again.' });
+    return res.status(500).json({ error: requestRules.STORAGE_FULL });
   }
   // The JSON body parsers' own errors get the answers shared with the phone (request-rules.js):
   // a body over its route's limit gets that route's "too large" message, and a body that is not a

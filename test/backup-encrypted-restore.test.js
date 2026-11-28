@@ -19,6 +19,9 @@ const F = require('./fixtures/full-dataset');
 
 const ROOT = path.join(__dirname, '..');
 const PASS = 'restore-test-passphrase';
+// Q11 wording (the owner's exact text, request-rules.js): a restore that failed after the file passed
+// its checks, the data as it was.
+const RESTORE_FAILED = "Couldn't restore this backup. Your data hasn't changed.";
 const SNAPSHOT_DIR = path.join(path.dirname(H.TEST_DB), 'safety-snapshots');
 const preRestoreCopies = () => (fs.existsSync(SNAPSHOT_DIR) ? fs.readdirSync(SNAPSHOT_DIR).filter((f) => /^plannr-pre-restore-.*\.db$/.test(f)).sort() : []);
 
@@ -110,7 +113,7 @@ test('a wrong passphrase, a changed file, a file that is not a database and a da
   plain.fill(0xa5, pageSize + 8, pageSize * 3);
   const damaged = await restore(await encrypt(plain, PASS));
   assert.strictEqual(damaged.status, 500);
-  assert.match(damaged.json.error, /^This backup could not be restored\. Nothing was changed: your data is as it was before\. Reason: /);
+  assert.strictEqual(damaged.json.error, RESTORE_FAILED);
 
   assert.deepStrictEqual(dump(), now);
   assert.deepStrictEqual(fs.readdirSync(path.dirname(H.TEST_DB)).filter((f) => /\.incoming-/.test(f)), []);
@@ -158,7 +161,7 @@ test('a backup that fails its foreign-key check after it is copied in is undone:
   const r = await restore(await encrypt(bad, PASS));
   assert.deepStrictEqual(dump(), now, 'the data from before the restore must be back');
   assert.strictEqual(r.status, 500, JSON.stringify(r.json));
-  assert.match(r.json.error, /^This backup could not be restored\. Nothing was changed: your data is as it was before\. Reason: .*foreign_key_check/);
+  assert.strictEqual(r.json.error, RESTORE_FAILED); // the foreign_key_check cause is logged, not shown
   assert.deepStrictEqual(H.db.prepare('PRAGMA foreign_key_check').all(), []);
   assert.strictEqual(H.db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   if (H.TARGET === 'express') {

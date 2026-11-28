@@ -391,6 +391,10 @@
     await import('/local-bootstrap.js');
     (function () {
       const { paiseToInput, formatDate: fmtDate, makeMsg, confirmModal } = window.PlannrUI;
+      // Q11 (the owner's wording): what an import or a restore says when its answer carries no message
+      // of its own. The same texts as request-rules.js IMPORT_FAILED and RESTORE_FAILED.
+      const IMPORT_FAILED = "Couldn't import this file. Nothing was changed. Please try again.";
+      const RESTORE_FAILED = "Couldn't restore this backup. Your data hasn't changed.";
 
       const jsonMsg = makeMsg(document.getElementById('jsonMsg'));
 
@@ -726,7 +730,7 @@
             if (data.remappedUsers > 0) msg += ' ' + data.remappedUsers + ' entr' + (data.remappedUsers === 1 ? 'y' : 'ies') + ' referenced a person not in this install — kept the label, shown as “Unknown”.';
             importMsg.show(msg, 'success');
           } else {
-            importMsg.show(data.error || 'Import failed. Your current data is unchanged.', 'error');
+            importMsg.show(data.error || IMPORT_FAILED, 'error');
           }
         } catch {
           importMsg.show('Network error. Your current data is unchanged.', 'error');
@@ -805,7 +809,7 @@
             encImportMsg.show(data.snapshot ? `Restored ✓ — your previous data was saved to ${data.snapshot}. Reloading…` : 'Restored ✓ — reloading…', 'success');
             setTimeout(() => location.reload(), 800);
           } else {
-            encImportMsg.show(data.error || 'Restore failed. Your current data may be unchanged.', 'error');
+            encImportMsg.show(data.error || RESTORE_FAILED, 'error');
           }
         } catch {
           encImportMsg.show('Network error. Your current data is unchanged.', 'error');
@@ -1026,7 +1030,7 @@
             ledgerCsvFile.value = '';
             ledgerCsvMsg.show('Ledger List imported ✓. Keep the safety backup\'s passphrase somewhere separate from the file.', 'success');
           } else {
-            ledgerCsvMsg.show(data.error || 'Import failed.', 'error');
+            ledgerCsvMsg.show(data.error || IMPORT_FAILED, 'error');
             showLedgerRowErrors(data.rowErrors);
           }
         } catch {

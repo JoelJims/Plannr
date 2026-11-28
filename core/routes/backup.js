@@ -5,7 +5,8 @@
 //   - GET /api/backup/export: the backup as JSON. Contacts (Gmail and WhatsApp numbers) are left out
 //     unless the user opts in on the Data page (?includeContacts=1), so a shared backup carries no
 //     personal data by default.
-//   - POST /api/backup/import: REPLACE, made safe. Check the file fully, then save a safety copy of
+//   - POST /api/backup/import: REPLACE, made safe. Check the file fully (with every amount within the
+//     typed amounts' limits, Q10: one over refuses the whole file and names it), then save a safety copy of
 //     the current data through ctx.host.snapshot.writeJson (core/host.js: a file beside the DB on
 //     the dev server, the app's data folder on the phone), then replace all ledger data in ONE
 //     transaction, keeping ids and foreign keys. Nothing is deleted before the new data is proven
@@ -22,22 +23,30 @@
 //     1.4 D1).
 
 import * as backupFormat from '../../backup-format.js';
-import { parseIsoDate, base64ToBytes } from '../parsers.js';
+import { parseIsoDate, base64ToBytes, MAX_AMOUNT_PAISE, MAX_TOTAL_PAISE, fmtRs } from '../parsers.js';
 import { MIN_PASSPHRASE_LEN, looksLikeSqlite } from '../backup-crypto.js';
 import { hostService } from '../host.js';
-import { RESTORE_FILE_LIMITS, backupSizeNote } from '../../request-rules.js';
+import { RESTORE_FILE_LIMITS, backupSizeNote, IMPORT_FAILED, RESTORE_FAILED, STORAGE_FULL } from '../../request-rules.js';
 
 export const RESTORE_UNAVAILABLE = 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.';
 
+// Q11 wording (request-rules.js): once a file has passed its checks, a failure answers the owner's
+// text for the import or the restore, or STORAGE_FULL when the storage was full. The cause is logged.
 export function register(app, ctx) {
-  const { auth, adapter, atStart, host, logError, isStorageFullError, storageFull, ledgerIndex, CUSTOM_CODE } = ctx;
+  const { auth, adapter, atStart, host, logError, isStorageFullError, ledgerIndex, CUSTOM_CODE } = ctx;
+  const failed = (e, text) => (isStorageFullError(e) ? STORAGE_FULL : text);
 
   // Fails the start if a table the import replaces is missing from the list it owns (a start job:
   // it reads the schema through the async interface, ahead of any request; step 1.4 B13).
   atStart(() => backupFormat.assertImportOwnershipComplete(adapter));
 
   // ledgerIndex.byCode() is read at call time: ledgerIndex.refresh() replaces it after a restore.
-  const check = (data) => backupFormat.validateBackup(data, { liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate });
+  // Q10: the amount limits are the typed amounts' own (core/parsers.js), so an import cannot bring in
+  // an amount the app would refuse to save.
+  const check = (data) => backupFormat.validateBackup(data, {
+    liveLedgerByCode: ledgerIndex.byCode(), customCode: CUSTOM_CODE, parseIsoDate,
+    maxEntryPaise: MAX_AMOUNT_PAISE, maxTotalPaise: MAX_TOTAL_PAISE, fmtRs,
+  });
 
   app.get('/api/backup/export', auth, async (req, res) => {
     const includeContacts = req.query.includeContacts === '1';
@@ -57,8 +66,8 @@ export function register(app, ctx) {
     try {
       snapshot = await host.snapshot.writeJson(await backupFormat.buildBackup(adapter, { includeContacts: true }));
     } catch (e) {
-      logError('Backup snapshot failed:', e);
-      return res.status(500).json({ error: 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.' });
+      logError('Backup snapshot failed, so the import was not started:', e);
+      return res.status(500).json({ error: failed(e, IMPORT_FAILED) });
     }
 
     // 3. Replace in one transaction. Any error rolls back: the current data is unchanged.
@@ -67,8 +76,7 @@ export function register(app, ctx) {
       result = await backupFormat.applyBackup(adapter, req.body);
     } catch (e) {
       logError('Backup import failed, rolled back:', e);
-      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the import did not go through.'), snapshot });
-      return res.status(500).json({ error: 'The import failed and was rolled back — your current data is unchanged. The file may be internally inconsistent.', snapshot });
+      return res.status(500).json({ error: failed(e, IMPORT_FAILED), snapshot });
     }
     await ledgerIndex.refresh(); // a v2 backup may have brought its own categories
 
@@ -130,18 +138,19 @@ export function register(app, ctx) {
     try {
       snapshot = await host.snapshot.writeDatabase();
     } catch (e) {
-      logError('Pre-restore snapshot failed:', e);
-      return res.status(500).json({ error: 'Could not write the safety snapshot, so the restore was not started — your current data is unchanged.' });
+      logError('Pre-restore snapshot failed, so the restore was not started:', e);
+      return res.status(500).json({ error: failed(e, RESTORE_FAILED) });
     }
 
     // 3. Replace, all or nothing (S3/Q6): checked before anything is replaced (a newer backup is
     //    refused unchanged), and if a check after the replace fails, the data from just before it is
     //    put back (db.js undoFailedRestore). So every failure leaves the data as it was, except the
-    //    one where putting it back failed too: then the safety copy from step 2 is the way back.
+    //    one where putting it back failed too: then the safety copy from step 2 is the way back, and
+    //    the answer says so instead of "Your data hasn't changed" (it may have).
     try {
       await restore(plain);
     } catch (e) {
-      logError('Encrypted import failed:', e);
+      logError('Encrypted import failed:', e); // with db.js's message for a restore that was put back
       if (e && e.code === 'BACKUP_TOO_NEW') return res.status(400).json({ error: e.message });
       if (e && e.code === 'RESTORE_UNDO_FAILED') {
         return res.status(500).json({
@@ -149,9 +158,7 @@ export function register(app, ctx) {
           snapshot,
         });
       }
-      const cause = e && e.code === 'RESTORE_UNDONE' ? e.cause : e;
-      if (isStorageFullError(cause)) return res.status(500).json({ error: storageFull('the restore did not go through, and nothing was changed.'), snapshot });
-      return res.status(500).json({ error: `This backup could not be restored. Nothing was changed: your data is as it was before. Reason: ${cause && cause.message}`, snapshot });
+      return res.status(500).json({ error: failed(e && e.code === 'RESTORE_UNDONE' ? e.cause : e, RESTORE_FAILED), snapshot });
     }
     await ledgerIndex.refresh(); // the restored database has its own categories
     res.json({ ok: true, snapshot });

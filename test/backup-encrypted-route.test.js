@@ -15,6 +15,10 @@ const load = () => import(pathToFileURL(path.join(ROOT, 'core', 'routes', 'backu
 const SQLITE = new Uint8Array([...Buffer.from('SQLite format 3\0'), ...new Array(84).fill(1)]);
 const PASS = 'right-passphrase';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+// Q11 wording (the owner's exact text, request-rules.js): a restore that failed after the file passed
+// its checks, and a full storage.
+const RESTORE_FAILED = "Couldn't restore this backup. Your data hasn't changed.";
+const STORAGE_FULL = "Your phone's storage is full. Free up some space and try again. Nothing was changed.";
 
 function res() {
   return {
@@ -55,15 +59,15 @@ async function harness({ host: hostOver = {}, decrypted = SQLITE } = {}) {
     },
   };
   for (const [k, v] of Object.entries(hostOver)) host[k] = v === undefined ? undefined : { ...host[k], ...v };
+  const logged = [];
   const ctx = {
-    auth: () => {}, adapter: {}, atStart: () => {}, host, logError: () => {}, CUSTOM_CODE: 'custom',
+    auth: () => {}, adapter: {}, atStart: () => {}, host, logError: (...args) => logged.push(args.map(String).join(' ')), CUSTOM_CODE: 'custom',
     isStorageFullError: (e) => /database or disk is full/.test(String(e && e.message)),
-    storageFull: (what) => `Storage is full — ${what} (the platform's text)`,
     ledgerIndex: { refresh: async () => { calls.push(['refresh']); }, byCode: () => new Map() },
   };
   register(app, ctx);
   const call = async (route, body) => { const r = res(); await routes[route]({ body, query: {} }, r); return r; };
-  return { calls, call, host, RESTORE_UNAVAILABLE, names: () => calls.map((c) => c[0]) };
+  return { calls, call, host, logged, RESTORE_UNAVAILABLE, names: () => calls.map((c) => c[0]) };
 }
 
 const restoreBody = (over = {}) => ({ passphrase: PASS, dataBase64: b64(new Uint8Array([1, 2, 3, 4, 5])), ...over });
@@ -127,9 +131,13 @@ test('import-encrypted: refused before anything changes (no safety copy, no rest
 test('import-encrypted: no safety copy, no restore', async () => {
   const h = await harness({ host: { snapshot: { writeDatabase: async () => { throw new Error('no room'); } } } });
   const r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.strictEqual(r.statusCode, 500);
-  assert.match(r.body.error, /Could not write the safety snapshot, so the restore was not started/);
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: RESTORE_FAILED }]);
   assert.deepStrictEqual(h.names(), ['decrypt']);
+  assert.ok(h.logged.some((l) => /Pre-restore snapshot failed.*no room/.test(l)), 'the cause is logged');
+  const full = await harness({ host: { snapshot: { writeDatabase: async () => { throw new Error('database or disk is full'); } } } });
+  const f = await full.call('POST /api/backup/import-encrypted', restoreBody());
+  assert.deepStrictEqual([f.statusCode, f.body], [500, { error: STORAGE_FULL }]);
+  assert.deepStrictEqual(full.names(), ['decrypt']);
 });
 
 test('import-encrypted: each restore failure gets its own answer', async () => {
@@ -141,20 +149,22 @@ test('import-encrypted: each restore failure gets its own answer', async () => {
   const SNAP = 'a file inside the app (plannr-pre-restore.db)';
   h = await fail(new Error('database or disk is full'));
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: "Storage is full — the restore did not go through, and nothing was changed. (the platform's text)", snapshot: SNAP }]);
-  // S3/Q6: every other failure left the data as it was (refused before the replace, or put back after it).
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: STORAGE_FULL, snapshot: SNAP }]);
+  // S3/Q6: every other failure left the data as it was (refused before the replace, or put back after
+  // it): the owner's restore text (Q11), with the cause logged, not shown.
   h = await fail(new Error('not a SQLite database'));
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: 'This backup could not be restored. Nothing was changed: your data is as it was before. Reason: not a SQLite database', snapshot: SNAP }]);
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: RESTORE_FAILED, snapshot: SNAP }]);
+  assert.ok(h.logged.some((l) => /Encrypted import failed:.*not a SQLite database/.test(l)), 'the cause is logged');
   const undone = Object.assign(new Error('put back'), { code: 'RESTORE_UNDONE', cause: new Error('foreign_key_check failed') });
   h = await fail(undone);
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: 'This backup could not be restored. Nothing was changed: your data is as it was before. Reason: foreign_key_check failed', snapshot: SNAP }]);
+  assert.deepStrictEqual([r.statusCode, r.body], [500, { error: RESTORE_FAILED, snapshot: SNAP }]);
   assert.ok(!h.names().includes('refresh'));
   const undoneFull = Object.assign(new Error('put back'), { code: 'RESTORE_UNDONE', cause: new Error('database or disk is full') });
   h = await fail(undoneFull);
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());
-  assert.deepStrictEqual([r.statusCode, r.body.error], [500, "Storage is full — the restore did not go through, and nothing was changed. (the platform's text)"]);
+  assert.deepStrictEqual([r.statusCode, r.body.error], [500, STORAGE_FULL]);
   const undoFailed = Object.assign(new Error('The restore failed (x), and putting the data back failed too (y).'), { code: 'RESTORE_UNDO_FAILED' });
   h = await fail(undoFailed);
   r = await h.call('POST /api/backup/import-encrypted', restoreBody());

@@ -5,6 +5,8 @@
 // catches the QuotaExceededError from localStorage.setItem, logs it through sqlite3.config.error and
 // fails the write with SQLITE_IOERR, so db.js listens on that logger. Any other failed save answers
 // exactly "Couldn't save – try again." (a failed GET still answers "Something went wrong.").
+// The owner's wording of 2026-11-28: a full storage answers STORAGE_FULL below, and a failed Ledger
+// List import (one transaction: nothing changed) answers IMPORT_FAILED (test/ws4a-failure-wording.test.js).
 // The routes run on both test passes (desktop and phone code).
 const H = require('./helpers');
 const { test, before, after, beforeEach } = require('node:test');
@@ -12,6 +14,8 @@ const assert = require('node:assert');
 const { isStorageFullError, watchKvvfsQuota } = require('../db');
 
 const SAVE_FAILED = "Couldn't save – try again."; // a straight apostrophe and an en dash
+const STORAGE_FULL = "Your phone's storage is full. Free up some space and try again. Nothing was changed.";
+const IMPORT_FAILED = "Couldn't import this file. Nothing was changed. Please try again.";
 const quota = () => new DOMException("Failed to execute 'setItem' on 'Storage': exceeded the quota.", 'QuotaExceededError');
 
 let cookie;
@@ -57,24 +61,24 @@ test('Q11: a save that fails for another reason answers "Couldn\'t save – try 
   } finally { console.error = quiet; H.db.exec('DROP TRIGGER q11_refuse_out'); }
 });
 
-test('Q11: a real full storage still answers "Storage is full"', async () => {
+test('Q11: a real full storage still answers the storage-full text', async () => {
   H.db.exec("CREATE TEMP TRIGGER q11_full BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END");
   const quiet = console.error; console.error = () => {};
   try {
     const r = await H.put('/api/budget', { budgetRupees: '1000' }, { cookie });
     assert.strictEqual(r.status, 500);
-    assert.match(r.json.error, /^Storage is full — /);
+    assert.strictEqual(r.json.error, STORAGE_FULL);
   } finally { console.error = quiet; H.db.exec('DROP TRIGGER q11_full'); }
 });
 
-test('Q11: a failed ledger-list import answers "Couldn\'t save – try again.", not the raw error', async () => {
+test('Q11: a failed ledger-list import answers the import text, not the raw error', async () => {
   const csv = await H.get('/api/ledgers/csv', { cookie });
   assert.strictEqual(csv.status, 200);
   H.db.exec("CREATE TEMP TRIGGER q11_refuse_mains BEFORE INSERT ON ledger_mains BEGIN SELECT RAISE(ABORT, 'refused by the test'); END");
   const quiet = console.error; console.error = () => {};
   try {
     const r = await H.post('/api/ledgers/csv', { csv: csv.text }, { cookie });
-    assert.deepStrictEqual([r.status, r.json.error], [500, SAVE_FAILED]);
+    assert.deepStrictEqual([r.status, r.json.error], [500, IMPORT_FAILED]);
   } finally { console.error = quiet; H.db.exec('DROP TRIGGER q11_refuse_mains'); }
 });
 

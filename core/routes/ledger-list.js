@@ -1,10 +1,10 @@
 // Cross-platform plan, step 1.3 — the ledger list (categories), its CSV, and the saved custom ledger
 // names. The only copy: server.js and public/local-api.js both call register(app, ctx); see
 // core/routes/people.js for what `app` and `ctx` are.
-import { SAVE_FAILED } from '../../request-rules.js';
+import { IMPORT_FAILED, STORAGE_FULL } from '../../request-rules.js';
 
 export function register(app, ctx) {
-  const { repo, auth, isStorageFullError, storageFull, istDateStamp, ledgerIndex } = ctx;
+  const { repo, auth, isStorageFullError, istDateStamp, ledgerIndex } = ctx;
 
   // Phase 10b — the ledger taxonomy itself (ledger_mains/ledger_subs), user-editable via CSV on the
   // Data Backup page. GET returns the current list for dropdowns; the CSV pair is export/import.
@@ -27,12 +27,13 @@ export function register(app, ctx) {
     if (!csvText.trim()) return res.status(400).json({ error: 'No CSV content received.' });
     const v = await repo.ledgers.validateImport(csvText);
     if (!v.ok) return res.status(400).json({ error: v.error, rowErrors: v.rowErrors });
+    // Q11 wording: replaceAll is one transaction (repo.js ledgerReplaceAll), so a failure changed
+    // nothing and gets the import text; the cause is logged, not shown.
     try {
       await repo.ledgers.replaceAll(v.mains, v.subs);
     } catch (e) {
-      if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the ledger list was not saved.') });
-      console.error('Ledger list import failed:', e);
-      return res.status(500).json({ error: SAVE_FAILED }); // Q11: not the raw database message
+      console.error('Ledger list import failed, rolled back:', e);
+      return res.status(500).json({ error: isStorageFullError(e) ? STORAGE_FULL : IMPORT_FAILED });
     }
     await ledgerIndex.refresh();
     res.json({ ok: true, ledgers: ledgerIndex.list() });

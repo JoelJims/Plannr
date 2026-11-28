@@ -100,6 +100,37 @@ function sameDb(name, actual, expected) {
     const list = ledgers.json.ledgers || ledgers.json;
     check('restored categories are live without a restart (90 Garden & Landscaping is listed)', Array.isArray(list) && list.some((l) => l.code === '90.0'));
 
+    // ---- Q10: a JSON backup with amounts over the limits is refused on the page, nothing changed ----
+    // The refusal names each bad row on a line of its own: the message box keeps line breaks
+    // (styles.css .msg white-space: pre-line), so every line starts at the left edge, one below another.
+    const limits = await page.evaluate(async () => { const p = await import('/core/parsers.js'); return { entry: p.MAX_AMOUNT_PAISE, total: p.MAX_TOTAL_PAISE }; });
+    const overLimit = JSON.parse(JSON.stringify(exp.json));
+    overLimit.tables.cash_out[0].amount_paise = limits.entry + 1;
+    overLimit.tables.cash_in[0].amount_paise = limits.entry + 1;
+    overLimit.tables.loans[0].amount_paise = limits.total + 1;
+    const beforeOver = await dump();
+    page.once('dialog', (d) => d.accept()); // "This REPLACES all current data…"
+    await page.setInputFiles('#importFile', { name: 'over-limit-backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(overLimit)) });
+    await page.click('#importBtn');
+    await page.waitForSelector('#importMsg.show');
+    const shownOver = await page.evaluate(() => {
+      const el = document.getElementById('importMsg');
+      const node = el.firstChild;
+      const text = node ? node.data : '';
+      const starts = [0];
+      for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+      const at = starts.map((s) => { const r = document.createRange(); r.setStart(node, s); r.setEnd(node, s + 1); const b = r.getBoundingClientRect(); return { left: Math.round(b.left), top: Math.round(b.top) }; });
+      return { text, isError: el.classList.contains('error'), at, whiteSpace: getComputedStyle(el).whiteSpace };
+    });
+    const overLines = shownOver.text.split('\n');
+    check('Q10: an over-limit JSON backup is refused on the page, naming each bad row', shownOver.isError
+      && /^This backup was not imported: 3 amounts in it are over Plannr's limits\. Nothing was changed\.$/.test(overLines[0])
+      && overLines.filter((l) => l.startsWith('• ')).length === 3 && /^• Cash Inflow \(cash_in row 1, id \d+\)/.test(overLines[1]), shownOver.text);
+    check('…each row on a line of its own (line breaks kept, every line starts at the left edge, below the last)',
+      overLines.length >= 5 && shownOver.at.length === overLines.length && shownOver.at.every((p, i) => p.left === shownOver.at[0].left && (i === 0 || p.top > shownOver.at[i - 1].top)),
+      `${shownOver.whiteSpace} ${JSON.stringify(shownOver.at)}`);
+    sameDb('…and nothing changed', await dump(), beforeOver);
+
     // ---- Recycle Bin shows the restored deleted rows (it used to throw for any deleted row and say
     // "Network error loading the Recycle Bin." — found on the emulator, Phase 2 Step 9) ----
     const binTables = ['cash_out', 'cash_in', 'loans', 'contract', 'contractor_payments'];
@@ -186,8 +217,9 @@ function sameDb(name, actual, expected) {
     const beforeFk = await dump();
     const fkRestore = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64: fkBackup });
     sameDb('a backup that fails its foreign-key check after it is copied in is undone: the data is exactly as before', await dump(), beforeFk);
-    check('…and the answer says nothing was changed, and why', fkRestore.status === 500
-      && /^This backup could not be restored\. Nothing was changed: your data is as it was before\. Reason: .*foreign_key_check/.test(fkRestore.json.error || ''),
+    // Q11: the owner's restore text; the foreign_key_check cause is logged, not shown.
+    check('…and the answer says the data has not changed', fkRestore.status === 500
+      && fkRestore.json.error === "Couldn't restore this backup. Your data hasn't changed.",
     `${fkRestore.status} ${JSON.stringify(fkRestore.json).slice(0, 300)}`);
     const afterFk = await page.evaluate(async () => {
       const { db } = await import('/db.js');

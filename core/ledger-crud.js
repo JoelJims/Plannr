@@ -7,14 +7,14 @@
 // comes in through opts, so each table's routes keep their exact paths, JSON shapes, status codes
 // and messages.
 
-import { SAVE_FAILED } from '../request-rules.js'; // Q11: "Couldn't save – try again."
+import { SAVE_FAILED, STORAGE_FULL } from '../request-rules.js'; // Q11: "Couldn't save – try again." and the owner's storage-full text
 
 // Save All's per-request row cap: a clear error instead of the body-size limit's. About 700 rows fit
 // in the 256 KB batch body limit (request-rules.js); 500 is a comfortable ceiling for one ledger.
 export const BATCH_MAX_ROWS = 500;
 
 export function createLedgerCrud(app, ctx) {
-  const { repo, transaction, auth, isStorageFullError, storageFull, logError, parseLedgerFilters } = ctx;
+  const { repo, transaction, auth, isStorageFullError, logError, parseLedgerFilters } = ctx;
   const LEDGER_CRUDS = {}; // table -> its repo.crud runners; the PDF's cash_out rows reuse them
 
   function makeLedgerCrud(opts) {
@@ -119,7 +119,7 @@ export function createLedgerCrud(app, ctx) {
           });
         } catch (e) {
           logError(`${table} batch write failed, rolled back:`, e);
-          if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('this save did not go through.') });
+          if (isStorageFullError(e)) return res.status(500).json({ error: STORAGE_FULL });
           return res.status(500).json({ error: SAVE_FAILED }); // Q11: rolled back, so no row was changed
         }
 
