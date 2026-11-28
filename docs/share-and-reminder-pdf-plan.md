@@ -1,8 +1,46 @@
 # Plan: send the PDF to WhatsApp or email, from Overview and from a reminder
 
-Status: **design only, nothing built.** Written 2026-11-15; plugin versions and the notification
-action support re-checked on 2026-11-22 against the installed packages (section 7). Every step below
-needs the owner's go-ahead before it starts.
+Status: **part 1 built (2026-11-25), with the Overview's Send buttons; the reminder Send PDF is next.
+Nothing is ever sent without your tap.** Written 2026-11-15; plugin
+versions and the notification action support re-checked on 2026-11-22 against the installed packages
+(section 7).
+
+Built on 2026-11-25:
+- Settings: `GET/PUT /api/share-settings`. They live in `core/routes/notification-times.js` (not a new
+  `core/routes/share-settings.js`), because both hosts already register that file. `share_email_to`
+  is in `CONTACT_SETTINGS_KEYS`. Tests: `test/ws2c-share-settings.test.js` (both passes).
+- Home: the "Sending PDFs" settings. Test: `npm run test:share-settings`.
+- `@capawesome/capacitor-mail-composer` pinned to exactly `0.2.2`, in `sync-public-modules.js` and the
+  import maps of `overview.html` and `home.html`. Test: `test/ws2c-mail-composer.test.js`.
+- `ShareToPlugin.java` (WhatsApp, then WhatsApp Business; "not-installed" otherwise), registered in
+  `MainActivity.java`, with `<queries>` in the manifest. Test: `test/ws2c-share-to-plugin.test.js`.
+
+- `public/share-pdf.js`: the Overview's share-sheet path, moved out of `overview.html` unchanged.
+  Test: `test/share-sheet.test.js`.
+- Overview: **Send to WhatsApp** and **Send by email** next to **Download PDF**, in the app only. In a
+  plain browser they are hidden and Download PDF works as before. The target in the "Sending PDFs"
+  settings is the filled (primary) button; "Ask each time" shows both the same.
+  - WhatsApp opens through `ShareTo`, the mail app through `MailComposer` (To and Subject from the
+    settings, `{date}` filled in with the phone's date), with the PDF attached. You tap Send there.
+  - The PDF's file name (`plannr-overview-<part>-<date>.pdf`, from Download PDF and both Send
+    buttons) uses the phone's own date too, so it always matches the subject's `{date}` (owner's
+    decision, 2026-11-28). It used to use the UTC date, so between midnight and 05:30 in India the
+    file was named for the day before. One helper, `core/local-date.js`, gives both dates. Tests:
+    `test/ws2c-pdf-file-name.test.js`, and the India check in `npm run test:share-pdf`.
+  - WhatsApp or a mail app missing, or its plugin failing: the share sheet opens and the page says
+    why (for example "WhatsApp is not installed, so the share sheet opened instead.").
+  - Offline: the PDF is still made and handed over, with a short note that the app will send it
+    when the phone is back online.
+  - Tests: `test/ws2c-share-pdf.test.js`, and `npm run test:share-pdf` (`test-ui/ws2c-share.js`,
+    recording stand-ins for the plugins, on a 320 px phone profile and in a plain browser).
+  - Emulator (debug build, 2026-11-25): no WhatsApp, so `ShareTo` answered "not-installed", the share
+    sheet opened with the PDF, and after BACK the page showed the reason. Gmail is installed (no
+    account), so `canComposeMail` answered true and Gmail opened; after BACK the page said the mail
+    app opened. Nothing was sent. The "no mail app" fallback is covered by the UI suite only.
+  - Still for the owner on the real phone (section 9): WhatsApp and Gmail open with the PDF attached.
+
+Not built yet: the reminder **Send PDF** action (step 7, **next**), the reminder data change
+(step 2), and the new checks in `docs/PHONE-TEST-CHECKLIST.md` (step 8).
 
 **Decided by the owner on 2026-11-22:** the **Send PDF** action goes on the existing daily report
 reminders (ids 101–105). A payment-due reminder is a separate, later feature and is not part of
@@ -84,6 +122,7 @@ Reminder fires ── [Send PDF] ──► Plannr opens (Overview)
 - Tapping the notification body (not the button) keeps today's behaviour: open Overview, build
   nothing.
 - The PDF file stays in the app's cache folder (as today); Android clears it when space is short.
+  Its name carries the phone's own date, the same date as the email subject's `{date}`.
 
 ## 5. Offline
 

@@ -2,7 +2,8 @@
 // public/local-api.js in the phone-code test pass (test/shim-target.js redirects those two imports
 // here). In the app, the plugin hands the PDF page to the Android WebView's print adapter. Here it
 // records the page instead, so tests can check the phone's own PDF HTML, and answers with a tiny
-// stand-in PDF. Nothing else in the phone code sees these.
+// stand-in PDF. Nothing else in the phone code sees these. test-ui/ws2c-share.js also serves this
+// file as the PDF plugin in Chromium, so it uses btoa (Node and browsers), not Buffer.
 export const Capacitor = {
   isNativePlatform: () => true,
   isPluginAvailable: (name) => name === 'PdfGenerator',
@@ -13,6 +14,6 @@ export const pdfRequests = [];
 export const PdfGenerator = {
   async fromData(options) {
     pdfRequests.push(options);
-    return { type: 'base64', base64: Buffer.from('%PDF-1.4 test stand-in').toString('base64') };
+    return { type: 'base64', base64: btoa('%PDF-1.4 test stand-in') };
   },
 };

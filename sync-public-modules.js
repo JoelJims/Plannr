@@ -46,6 +46,9 @@ const VENDOR_PACKAGES = [
   // discovered by reading its ESM entry — see the patch step below).
   path.join('@capgo', 'capacitor-pdf-generator'), path.join('@capacitor', 'share'),
   path.join('@capacitor', 'filesystem'), path.join('@capacitor', 'synapse'),
+  // "Send by email" (docs/share-and-reminder-pdf-plan.md, section 7): opens the mail app with To,
+  // Subject and the PDF attached; it never sends by itself. Pinned to exactly 0.2.2 in package.json.
+  path.join('@capawesome', 'capacitor-mail-composer'),
 ];
 
 // local-server.js reads these two lists to decide which project-root files it may serve. Requiring

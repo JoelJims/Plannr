@@ -13,6 +13,7 @@ dependencies {
     implementation project(':capacitor-filesystem')
     implementation project(':capacitor-local-notifications')
     implementation project(':capacitor-share')
+    implementation project(':capawesome-capacitor-mail-composer')
     implementation project(':capgo-capacitor-pdf-generator')
 
 }

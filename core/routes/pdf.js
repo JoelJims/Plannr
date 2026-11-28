@@ -11,9 +11,10 @@
 // database, runs outside it, so a PDF does not hold up the next request.
 
 import { outsideQueue } from '../request-queue.js';
+import { overviewPdfName } from '../local-date.js';
 
 export function register(app, ctx) {
-  const { auth, host, exclusive, istDateStamp, logError, readPdfQuery, overviewPdfHtml } = ctx;
+  const { auth, host, exclusive, logError, readPdfQuery, overviewPdfHtml } = ctx;
   if (typeof exclusive !== 'function') throw new TypeError('core/routes/pdf.js: ctx.exclusive (the request queue) is missing.');
 
   app.get('/api/overview/pdf', auth, outsideQueue(async (req, res) => {
@@ -25,7 +26,8 @@ export function register(app, ctx) {
       const html = await exclusive(() => overviewPdfHtml({ part, theme, range }));
       const pdf = await host.pdf.render(html, { part });
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="plannr-overview-${part}-${istDateStamp()}.pdf"`); // IST date, not UTC
+      // The device's own date (core/local-date.js), the same name the Overview page gives the file.
+      res.setHeader('Content-Disposition', `attachment; filename="${overviewPdfName(part)}"`);
       res.send(pdf);
     } catch (err) {
       if (!err.status || err.cause) logError('PDF generation failed:', err.cause || err); // a plain refusal ("busy") is not logged

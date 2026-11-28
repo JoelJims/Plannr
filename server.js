@@ -12,7 +12,7 @@ const express = require('express');
 const { init, DB_PATH, isStorageFullError, rollbackQuietly, transaction, dbAdapter, restoreFromBytes, writeRestoreSnapshot } = require('./db');
 const { encrypt, decrypt } = require('./backup-crypto'); // host.crypto: the encrypted backup (core/routes/backup.js)
 
-// The IST date stamp (core/ist-date.js), shared with the phone: the Overview PDF filename and the
+// The IST date stamp (core/ist-date.js), shared with the phone: the ledger-list CSV filename and the
 // upcoming-payment day counts.
 const { istDateStamp } = require('./core/ist-date.js');
 
