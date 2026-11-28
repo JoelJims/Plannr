@@ -17,17 +17,26 @@ const importDesktop = (name) => import(pathToFileURL(path.join(DESKTOP, name)).h
 
 // The fake `electron`: records the calls main.js makes into the file named by T_RECORD.
 // executeJavaScript answers undefined, so a self-test under it fails at its first page step.
+// Like Electron, a new window's contents go to the app's 'web-contents-created' handlers. With
+// T_LINK set, the page "clicks" a link to T_LINK once the first page has loaded: the stand-in calls
+// the will-navigate handlers and records whether the navigation was stopped, and shell.openExternal
+// records what it was asked to open.
 const FAKE_ELECTRON = `
 import fs from 'node:fs';
-const rec = { setPath: [], windows: [], loaded: [], executed: 0, handlers: [], commandLine: [], exitCode: null };
+const rec = { setPath: [], windows: [], loaded: [], executed: 0, handlers: [], commandLine: [], exitCode: null,
+  navigations: [], shellOpened: [] };
 const save = () => fs.writeFileSync(process.env.T_RECORD, JSON.stringify(rec));
 let userData = process.env.T_DEFAULT_USERDATA;
+const appHandlers = {};
 save();
+export const shell = {
+  async openExternal(url) { rec.shellOpened.push(url); save(); },
+};
 export const app = {
   setPath(k, v) { rec.setPath.push([k, v]); if (k === 'userData') userData = v; save(); },
   getPath() { return userData; },
   requestSingleInstanceLock() { return true; },
-  on() {},
+  on(event, fn) { (appHandlers[event] = appHandlers[event] || []).push(fn); },
   whenReady() { return Promise.resolve(); },
   quit() { rec.quit = true; save(); },
   exit(code) { rec.exitCode = code; save(); process.exit(code); },
@@ -45,18 +54,31 @@ export const session = { defaultSession: {
 export class BrowserWindow {
   constructor(options) {
     rec.windows.push(options); save();
+    const contentsHandlers = {};
     this.webContents = {
       executeJavaScript: async () => { rec.executed += 1; save(); return undefined; },
       loadURL: async (u) => { rec.loaded.push(u); save(); },
       getLastWebPreferences: () => options.webPreferences,
-      on() {}, once() {}, setWindowOpenHandler() {},
+      on(event, fn) { (contentsHandlers[event] = contentsHandlers[event] || []).push(fn); },
+      once() {}, setWindowOpenHandler() {},
     };
+    this.contentsHandlers = contentsHandlers;
+    for (const fn of appHandlers['web-contents-created'] || []) fn({}, this.webContents);
   }
   once() {} show() {} isMinimized() { return false; } focus() {} restore() {}
-  async loadURL(u) { rec.loaded.push(u); save(); }
+  async loadURL(u) {
+    rec.loaded.push(u); save();
+    if (process.env.T_LINK && rec.navigations.length === 0) {
+      const url = process.env.T_LINK;
+      const event = { url, defaultPrevented: false, preventDefault() { event.defaultPrevented = true; } };
+      for (const fn of this.contentsHandlers['will-navigate'] || []) fn(event, url);
+      await new Promise((resolve) => setImmediate(resolve));
+      rec.navigations.push({ url, prevented: event.defaultPrevented }); save();
+    }
+  }
   static getAllWindows() { return []; }
 }
-export default { app, protocol, session, BrowserWindow };
+export default { app, protocol, session, BrowserWindow, shell };
 `;
 
 function hookFiles(dir) {
@@ -75,7 +97,8 @@ registerHooks({ resolve(specifier, context, next) {
 }
 
 // One main.js run under the fake electron. `userData` = PLANNR_DESKTOP_USERDATA (undefined = unset).
-function runMain({ args = [], userData } = {}) {
+// `link`: a link the page follows once the first page has loaded (see FAKE_ELECTRON).
+function runMain({ args = [], userData, link } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-desktop-main-'));
   const register = hookFiles(dir);
   const record = path.join(dir, 'record.json');
@@ -83,7 +106,9 @@ function runMain({ args = [], userData } = {}) {
   const env = { ...process.env, T_RECORD: record, T_DEFAULT_USERDATA: defaultUserData, PLANNR_TEST: '1' };
   delete env.PLANNR_DB;
   delete env.PLANNR_DESKTOP_USERDATA;
+  delete env.T_LINK;
   if (userData !== undefined) env.PLANNR_DESKTOP_USERDATA = userData;
+  if (link !== undefined) env.T_LINK = link;
   const r = spawnSync(process.execPath, ['--import', pathToFileURL(register).href, path.join(DESKTOP, 'main.js'), ...args],
     { env, encoding: 'utf8', cwd: ROOT, timeout: 60000 });
   const rec = JSON.parse(fs.readFileSync(record, 'utf8'));
@@ -195,6 +220,24 @@ test('main.js: the self-test opens the same window with the same security option
   } finally {
     fs.rmSync(normal.dir, { recursive: true, force: true });
     fs.rmSync(self.dir, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('main.js: an https link goes to the system browser (shell.openExternal); an own page opens in the app', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-desktop-ud-'));
+  const outside = runMain({ userData: path.join(tmp, 'outside'), link: 'https://example.com/help' });
+  const own = runMain({ userData: path.join(tmp, 'own'), link: 'app://plannr/cash-flow.html' });
+  const blocked = runMain({ userData: path.join(tmp, 'blocked'), link: 'mailto:someone@example.com' });
+  try {
+    assert.deepEqual(outside.rec.navigations, [{ url: 'https://example.com/help', prevented: true }], 'the https link does not load in the window');
+    assert.deepEqual(outside.rec.shellOpened, ['https://example.com/help'], 'shell.openExternal opens it in the system browser');
+    assert.deepEqual(own.rec.navigations, [{ url: 'app://plannr/cash-flow.html', prevented: false }], 'the own page opens in the window');
+    assert.deepEqual(own.rec.shellOpened, []);
+    assert.deepEqual(blocked.rec.navigations, [{ url: 'mailto:someone@example.com', prevented: true }]);
+    assert.deepEqual(blocked.rec.shellOpened, [], 'a mailto: link is blocked, not handed to the system');
+  } finally {
+    for (const r of [outside, own, blocked]) fs.rmSync(r.dir, { recursive: true, force: true });
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

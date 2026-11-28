@@ -3,7 +3,7 @@
 // Pages come from public/ through a privileged app://plannr scheme; /api/* is answered in this
 // process by the shared core (core-api.js) on userData/plannr.db. No HTTP server, no open port, no
 // file:// pages, and every request that is not app://plannr/ is cancelled.
-import { app, BrowserWindow, protocol, session } from 'electron';
+import { app, BrowserWindow, protocol, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolvePublicFile } from './paths.js';
@@ -68,7 +68,10 @@ async function start() {
     return servePage(request);
   });
 
-  app.on('web-contents-created', (_event, contents) => lockDownContents(contents));
+  // The link rules (security.js linkAction): own pages open in this window, http(s) links in the
+  // system browser, everything else is blocked.
+  const openExternal = (url) => shell.openExternal(url);
+  app.on('web-contents-created', (_event, contents) => lockDownContents(contents, { openExternal }));
 
   const win = new BrowserWindow(windowOptions(PRELOAD));
   win.once('ready-to-show', () => win.show());

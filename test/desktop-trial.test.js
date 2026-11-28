@@ -106,18 +106,19 @@ test('window: the security options are set explicitly', async () => {
   );
 });
 
-test('requests and navigation: only app: loads, navigation and new windows are refused, permissions denied', async () => {
+test('requests and navigation: only app: loads, outside navigation and new windows are refused, permissions denied', async () => {
   const { allowRequest, lockDownContents, denyPermissions } = await importDesktop('security.js');
   for (const url of ['app://plannr/home.html', 'app://plannr/api/cash-in']) assert.equal(allowRequest(url), true, url);
   for (const url of ['http://127.0.0.1:3000/', 'https://example.com/', 'file:///C:/x', 'ws://x', 'data:text/html,x', 'devtools://x', 'blob:app://plannr/1', 'appx://plannr/']) {
     assert.equal(allowRequest(url), false, url);
   }
+  // The link rules in full are in test/desktop-links.test.js.
   const handlers = {};
   let openHandler;
-  lockDownContents({ on: (ev, fn) => { handlers[ev] = fn; }, setWindowOpenHandler: (fn) => { openHandler = fn; } });
+  lockDownContents({ on: (ev, fn) => { handlers[ev] = fn; }, setWindowOpenHandler: (fn) => { openHandler = fn; } }, { openExternal: () => {} });
   let prevented = false;
-  handlers['will-navigate']({ preventDefault: () => { prevented = true; } }, 'https://example.com/');
-  assert.ok(prevented, 'will-navigate is blocked');
+  handlers['will-navigate']({ url: 'https://example.com/', preventDefault: () => { prevented = true; } }, 'https://example.com/');
+  assert.ok(prevented, 'will-navigate to an outside address is stopped');
   assert.deepEqual(openHandler({ url: 'https://example.com/' }), { action: 'deny' });
   let permissionAnswer;
   let checkAnswer;
