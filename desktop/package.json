@@ -1,0 +1,14 @@
+{
+  "name": "plannr-desktop-trial",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Trial only: Plannr's shared core in a minimal Electron window. Not packaged, not released.",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "45.3.2"
+  }
+}
