@@ -251,7 +251,7 @@ real-data phone: see the note at the top of section 3.
 ## 6. Decisions: the owner's phone
 
 1. **Decided: the owner's phone moves from the debug build to the release build once, by the
-   switch round below** (owner's decision, recorded 2026-11-26). The phone runs the debug build
+   switch round below** (owner's decision, dated 2026-11-28). The phone runs the debug build
    (debug key) and holds the only live copy of the real data. A release APK cannot be installed
    over a debug-key app: Android answers `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. So the round backs
    the data up, proves the restore on the emulator, and only then uninstalls the debug app,
@@ -320,7 +320,7 @@ real-data phone: see the note at the top of section 3.
    key matters for it.
 
 3. **Decided: keep the strict stop on password lines in `keystore.properties`** (owner's
-   decision, recorded 2026-11-26). If `keystore.properties` still has a `storePassword` or
+   decision, dated 2026-11-28). If `keystore.properties` still has a `storePassword` or
    `keyPassword` line, `npm run release:android` stops before it changes anything and names the
    lines, never their values. The other way named was only to warn and go on. It was not chosen:
    a password line left in the file keeps the password on disk, next to the key's path. Remove
