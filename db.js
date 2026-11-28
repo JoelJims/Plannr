@@ -83,6 +83,7 @@ export function ready() {
   if (!readyPromise) {
     readyPromise = import('./db-engine.js').then(async (engine) => {
       await engine.ready();
+      watchKvvfsQuota(engine.getSqlite3()); // Q11: tell the browser's quota error from other I/O errors
       db = openDb(engine.DatabaseSync);
     });
   }
@@ -1738,8 +1739,7 @@ function* legacyInit() {
 // use SQLite's own result-code numbering, where every IOERR subcode (SQLITE_IOERR_WRITE, _SHORT_READ,
 // etc.) shares base code 10 in its low byte. This is the failure mode confirmed in the kvvfs
 // storage-ceiling spike: exceeding the quota surfaces as a clean, atomically-rolled-back SQLITE_IOERR,
-// never silent corruption — so a write path seeing this can safely tell the user "storage is full"
-// instead of a raw SQLite message.
+// never silent corruption. But an SQLITE_IOERR alone does not prove the quota (Q11, below).
 // Roll back after a failed write, without hiding why it failed. When a write hits the phone's storage
 // limit (SQLITE_IOERR from kvvfs) SQLite has usually rolled the transaction back by itself already, and
 // a second ROLLBACK throws "cannot rollback - no transaction is active" — which would replace the real
@@ -1750,10 +1750,35 @@ export function rollbackQuietly(dbh = db) {
   try { dbh.exec('ROLLBACK'); } catch (e) { if (!/no transaction is active/i.test(String(e && e.message))) throw e; }
 }
 
+// Q11 (review 2026-11-21, the owner's decision): only a real storage-quota error is "Storage is full".
+// That is SQLITE_FULL (13) on any engine (a database file on a full disk: the phone after the move,
+// step 1.4 C11, and the desktop), or, on the localStorage (kvvfs) engine, an I/O error the browser's
+// quota caused. Any other SQLITE_IOERR (a broken or locked file, a failed read) is not "full".
+// kvvfs catches the QuotaExceededError that localStorage.setItem throws, logs it through
+// sqlite3.config.error and fails the write with a bare SQLITE_IOERR(_WRITE): the error the app gets
+// carries no trace of the quota. watchKvvfsQuota() listens on that logger (ready() installs it), and an
+// I/O error within QUOTA_WINDOW_MS of a logged quota error counts as the quota's.
+const QUOTA_WINDOW_MS = 5000;
+let quotaRefusedAt = -Infinity;
+const isQuotaException = (e) => !!e && typeof e === 'object'
+  && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22);
+
+export function watchKvvfsQuota(sqlite3) {
+  const config = sqlite3 && sqlite3.config;
+  if (!config) return;
+  const log = config.error;
+  config.error = (...args) => {
+    if (args.some(isQuotaException)) quotaRefusedAt = Date.now();
+    if (typeof log === 'function') return log.apply(config, args);
+  };
+}
+
 export function isStorageFullError(err) {
-  const code = err && (err.errcode ?? err.resultCode);
-  // 10 = SQLITE_IOERR (kvvfs: localStorage over its limit); 13 = SQLITE_FULL (a database file on a
-  // full disk: the phone after the move, step 1.4 C11, and the desktop).
-  if (typeof code === 'number' && ((code & 0xff) === 10 || (code & 0xff) === 13)) return true;
-  return !!(err && typeof err.message === 'string' && /SQLITE_IOERR|disk I\/O error|SQLITE_FULL|database or disk is full/i.test(err.message));
+  if (!err) return false;
+  const code = err.errcode ?? err.resultCode;
+  const message = typeof err.message === 'string' ? err.message : '';
+  if ((typeof code === 'number' && (code & 0xff) === 13) || /SQLITE_FULL|database or disk is full/i.test(message)) return true;
+  if (isQuotaException(err) || isQuotaException(err.cause)) return true;
+  const ioError = (typeof code === 'number' && (code & 0xff) === 10) || /SQLITE_IOERR|disk I\/O error/i.test(message);
+  return ioError && Date.now() - quotaRefusedAt <= QUOTA_WINDOW_MS;
 }

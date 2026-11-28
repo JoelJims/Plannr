@@ -72,7 +72,19 @@ its own; only its properties file goes into the **project root**, next to `packa
 | File | What it is | Where it goes |
 |---|---|---|
 | `plannr-release.keystore` | The signing key for release builds. | `D:\Keys\plannr\` — outside the project folder and outside git, on the same drive as the project (on a PC with only `C:`, use `C:\Keys\plannr\`) |
-| `keystore.properties` | Where the key is, its alias and its two passwords. Four entries: `storeFile`, the store password line, `keyAlias`, and the key password line. | project root (git-ignored) |
+| `keystore.properties` | Where the key is and its alias. Two entries only: `storeFile` and `keyAlias`. **No passwords** (see below). | project root (git-ignored) |
+
+**The two passwords are never in a file.** `android/app/build.gradle` takes them from two
+environment variables, `PLANNR_STORE_PASSWORD` and `PLANNR_KEY_PASSWORD`. `npm run release:android`
+uses them if they are set; if one is not set and you run it in a terminal, it asks for it and does
+not show what you type. It hands them to Gradle only through Gradle's environment: never on the
+command line, never written to disk, never printed. With no terminal (for example a piped or CI
+run) and no variables, it stops before it changes anything. The simplest way is to let it ask. If
+you set the variables yourself, set them in that one terminal window only and close it afterwards;
+never put them in a script, a profile or a file in the project. If your `keystore.properties` still has
+the two password lines from an older setup, delete those two lines: `npm run release:android`
+stops while they are there (it names the lines, never their values). Keep the passwords in your
+password manager.
 
 **The `storeFile` line must be a path relative to the project root.** For a checkout at
 `D:\Projects\Plannr` it reads `storeFile=../../Keys/plannr/plannr-release.keystore` (two folders
@@ -98,7 +110,8 @@ UTF-16, which Gradle cannot read at all. In Notepad, choose Save as, Encoding "U
 `npm run release:android` checks both files before it changes anything. It reads only the
 `storeFile` line and resolves it against the project root. It stops (naming the path it expected)
 if no key file is there, and it also stops if the line is an absolute path or starts with a drive
-letter, or if the file starts with a BOM or is saved as UTF-16. Its "Signing:" line shows the
+letter, if the file starts with a BOM or is saved as UTF-16, or if it still has a password line.
+It never reads a password line's value. Its "Signing:" line shows the
 key's path only when the release can go ahead; otherwise it says "NOT ready" (or "NOT found" when
 there is no `keystore.properties`) and the reason follows.
 
@@ -143,8 +156,8 @@ lines go or if such a file is ever tracked.
 > its passwords is as lost as no key. Take an encrypted backup from inside the app
 > (`/data-backup`) before any install you are unsure about.
 
-**The debug key matters too, for the owner's phone.** That phone runs a debug build. As long as it does (today, until any move in
-`docs/release-plan.md` §6 is carried out, and for good if it stays on debug builds), it can only
+**The debug key matters too, for the owner's phone, until its switch round.** That phone runs a debug build. As long as it does (today, until the debug to release switch round in
+`docs/release-plan.md` §6 is carried out), it can only
 be updated with debug builds signed by the same Android debug key as the app on it. The last build
 made for it (`9d7fd97`) was signed with the debug key of the owner's current laptop (certificate
 `fd12f081…b95629`; Android's default debug keystore in the user profile, which the Android build
@@ -153,7 +166,8 @@ install. A debug build made on another PC, or on that laptop after its debug key
 will not install over the phone's Plannr (the checklist says stop). On a new machine, check a
 debug APK built there as the checklist's "Check the APK on the laptop" says before any phone
 step: its certificate must be `fd12f081…b95629`. Whether and how to keep a copy of that debug key
-is the owner's call.
+until then is the owner's call. After the switch round, the phone runs the release build and no
+longer depends on the debug key.
 
 Also absent, and not needed to build: `data/`, the desktop database, which holds real
 financial records.
@@ -237,7 +251,9 @@ From `android/`, or via Studio's Run button for debug builds:
 
 ```sh
 ./gradlew assembleDebug      # -> android/app/build/outputs/apk/debug/Plannr-debug.apk
-./gradlew assembleRelease    # -> android/app/build/outputs/apk/release/Plannr.apk  (signed)
+# a signed release: from the project root, npm run release:android (it asks for the key
+# passwords without showing them). ./gradlew assembleRelease alone stops unless
+# PLANNR_STORE_PASSWORD and PLANNR_KEY_PASSWORD are set in that terminal window (only there)
 adb -s emulator-5554 install -r android/app/build/outputs/apk/debug/Plannr-debug.apk   # the emulator
 ```
 
@@ -245,7 +261,9 @@ Always tell adb which device: `-s emulator-5554` for the emulator, `-d` for the 
 straight after `adb`. With both connected, a command without them can reach the wrong device.
 **A phone that holds real data** gets an APK only as `docs/PHONE-TEST-CHECKLIST.md` says: both
 backups proven on the emulator first, then `adb -d install -r`, never uninstall. A release APK
-cannot be installed over a debug build (`docs/RELEASE.md`).
+cannot be installed over a debug build (`docs/RELEASE.md`). The owner's phone moves to the release
+build once, by the debug to release switch round in `docs/release-plan.md` §6: the only uninstall
+on that phone.
 
 App id `com.plannr.app`. For a real release use `npm run release:android`: it runs every test,
 raises `versionCode`/`versionName` in `android/app/build.gradle`, syncs and builds the signed APK.
@@ -279,7 +297,8 @@ Notes:
 - **Do not turn off signing, or switch to debug signing, to make the warning go away.**
   The warning is about how the app was distributed, not about the signature being invalid,
   and unsigned or debug-signed builds break upgrades over an existing release install (see
-  section 2; the owner's phone, which runs a debug build, is the exception described there).
+  section 2; the owner's phone, which runs a debug build until its switch round, is the exception
+  described there).
 - If you are handing the APK to someone else, warn them about this dialog first. Without
   warning, "Unsafe app blocked" reads as a virus alert and most people will cancel.
 
@@ -341,13 +360,16 @@ git clone <repo> && cd Plannr               # e.g. in D:\Projects\ (C:\Projects\
 #   plannr-release.keystore -> D:\Keys\plannr\   (outside the project; create the folder;
 #                              same drive as the project, so C:\Keys\plannr\ on a C:-only PC)
 #   keystore.properties     -> this directory    (storeFile = the key's path relative to here,
-#                              ../../Keys/plannr/plannr-release.keystore for <drive>:\Projects\Plannr)
+#                              ../../Keys/plannr/plannr-release.keystore for <drive>:\Projects\Plannr;
+#                              plus keyAlias; no passwords: the release build asks for them)
 npm ci
 npm test                                  # expect green
 npm start                                 # http://localhost:3000 — check the app runs
 npm run android:sync                      # regenerate public/ copies + the native project
 # open the android/ directory in Android Studio, let it sync
-cd android && ./gradlew assembleRelease     # -> app/build/outputs/apk/release/Plannr.apk
+npm run release:android                   # runs the tests, raises the version, asks for the key
+                                          # passwords (not shown), then builds the signed APK
+cd android                                # -> app/build/outputs/apk/release/Plannr.apk
 # apksigner is in the SDK's build-tools/<version>/ folder; it must print the certificate
 # SHA-256 you noted for this key (section 2)
 apksigner verify --print-certs app/build/outputs/apk/release/Plannr.apk

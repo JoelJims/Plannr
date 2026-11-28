@@ -39,7 +39,11 @@ function wipe() {
   // SINGLE SOURCE OF TRUTH: every real table, straight from the catalogue.
   const TABLES = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
 
-  const count = () => Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n]));
+  // F13: the settings rows named _migrated_* are not data: they record which one-off clean-ups already
+  // ran (db.js LEGACY_MARKERS). They stay, so the next start does not treat those clean-ups as work again.
+  const KEEP = { settings: "key LIKE '!_migrated!_%' ESCAPE '!'" };
+  const dataRows = (t) => (KEEP[t] ? `WHERE NOT (${KEEP[t]})` : '');
+  const count = () => Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT COUNT(*) AS n FROM ${t} ${dataRows(t)}`).get().n]));
   const before = count();
 
   // Disable foreign keys for the wipe so deletion ORDER stops mattering (no parent-
@@ -55,7 +59,7 @@ function wipe() {
   }
 
   db.exec('BEGIN');
-  for (const t of TABLES) db.exec(`DELETE FROM ${t}`); // any order — FKs are off
+  for (const t of TABLES) db.exec(`DELETE FROM ${t} ${dataRows(t)}`); // any order — FKs are off
   // Reset AUTOINCREMENT counters (only AUTOINCREMENT tables appear here) → ids restart at 1.
   try { db.exec('DELETE FROM sqlite_sequence'); } catch { /* table absent if no autoincrement rows ever existed */ }
   db.exec('COMMIT');
@@ -78,7 +82,7 @@ function wipe() {
   console.log('\n  foreign_keys during wipe: OFF (verified) — post-wipe foreign_key_check: ' +
     (fkViolations.length === 0 ? 'clean' : `${fkViolations.length} violation(s) — ${JSON.stringify(fkViolations)}`));
   console.log('  ' + (clean
-    ? '✓ all tables empty; schema intact; AUTOINCREMENT ids reset to start at 1.'
+    ? '✓ all tables empty; schema intact; AUTOINCREMENT ids reset to start at 1. The _migrated_* markers in settings are kept.'
     : (remaining > 0 ? '✗ ' + remaining + ' rows remain (unexpected).' : '✗ foreign key check failed after wipe.')));
 
   try { db.close(); } catch { /* ignore */ }

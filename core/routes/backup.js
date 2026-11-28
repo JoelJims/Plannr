@@ -25,6 +25,7 @@ import * as backupFormat from '../../backup-format.js';
 import { parseIsoDate, base64ToBytes } from '../parsers.js';
 import { MIN_PASSPHRASE_LEN, looksLikeSqlite } from '../backup-crypto.js';
 import { hostService } from '../host.js';
+import { RESTORE_FILE_LIMITS, backupSizeNote } from '../../request-rules.js';
 
 export const RESTORE_UNAVAILABLE = 'Restoring from an encrypted backup isn’t available when Plannr is running as a hosted server. Use the Android app to restore an encrypted backup, or restore this server from the plain JSON backup instead.';
 
@@ -72,6 +73,15 @@ export function register(app, ctx) {
     await ledgerIndex.refresh(); // a v2 backup may have brought its own categories
 
     res.json({ ok: true, imported: result.imported, remappedUsers: result.remappedUsers, snapshot });
+  });
+
+  // F14: after an export, the Data Backup page asks whether a file of this size is getting near what
+  // a restore takes (request-rules.js backupSizeNote). -> { note: string|null }.
+  app.get('/api/backup/size-note', auth, (req, res) => {
+    const kind = String(req.query.kind || '');
+    const bytes = /^\d+$/.test(String(req.query.bytes || '')) ? Number(req.query.bytes) : NaN;
+    if (!Object.hasOwn(RESTORE_FILE_LIMITS, kind) || !Number.isSafeInteger(bytes)) return res.status(400).json({ error: 'Invalid request.' });
+    res.json({ note: backupSizeNote(kind, bytes) });
   });
 
   app.post('/api/backup/export-encrypted', auth, async (req, res) => {

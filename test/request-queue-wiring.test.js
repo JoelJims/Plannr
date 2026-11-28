@@ -7,7 +7,8 @@
 // 2. A request waits while the queue is held and is answered once it is released (on the dev server,
 //    a page is still answered meanwhile: the known positive that the test can see a request go
 //    through).
-// 3. An error inside a queued route still gets the same answer as before ("Something went wrong.").
+// 3. An error inside a queued route still gets the error handler's answer (a failed save: "Couldn't
+//    save – try again.", Q11).
 const H = require('./helpers');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -60,7 +61,7 @@ test('a request waits while the request queue is held, and is answered once it i
   assert.ok(r.json && 'budgetPaise' in r.json);
 });
 
-test('an error inside a queued route gets the same answer as before ("Something went wrong.")', { timeout: 10000 }, async () => {
+test('an error inside a queued route gets the error handler\'s answer ("Couldn\'t save – try again.")', { timeout: 10000 }, async () => {
   // A refused write on the shared connection: setting the budget then throws inside its handler.
   H.db.exec("CREATE TEMP TRIGGER b5_refuse_settings BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'refused by the test'); END");
   const quiet = console.error;
@@ -68,7 +69,7 @@ test('an error inside a queued route gets the same answer as before ("Something 
   try {
     const r = await H.put('/api/budget', { budgetRupees: '1000' });
     assert.strictEqual(r.status, 500);
-    assert.strictEqual(r.json && r.json.error, 'Something went wrong.'); // (the dev server adds a detail)
+    assert.strictEqual(r.json && r.json.error, "Couldn't save – try again."); // Q11: a failed save (the dev server adds a detail)
   } finally {
     console.error = quiet;
     H.db.exec('DROP TRIGGER b5_refuse_settings');

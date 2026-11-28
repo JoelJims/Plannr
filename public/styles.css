@@ -29,9 +29,10 @@
 
   --text: #f4f4f5;           /* near-white */
   --text-dim: #a1a1aa;       /* gray */
-  --text-faint: #8b8b93;     /* fainter gray — raised from #6b6b73 to meet WCAG AA (>=4.5:1) on --bg and --panel-2 */
+  --text-faint: #8d8d95;     /* fainter gray — raised from #6b6b73, then #8b8b93, to meet WCAG AA (>=4.5:1) on --bg, --panel-2 and --accent-soft (test/ws2b-contrast.test.js) */
   --line: rgba(255, 255, 255, 0.10);
   --line-strong: rgba(255, 255, 255, 0.16);
+  --field-border: rgba(255, 255, 255, 0.38); /* resting border of text fields, selects and the ledger picker: >= 3:1 against the field and every surface it sits on (WCAG 1.4.11, test/ws2b-contrast.test.js); --line-strong is too faint for that (1.5:1) */
 
   --clip: 11px;              /* diagonal corner cut size for angular elements */
   /* the angular (cut-corner) clip shared by .mark and .btn */
@@ -245,7 +246,7 @@ textarea {
   padding: 12px 14px;
   color: var(--text);
   background: var(--panel-2);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--field-border);
   border-radius: 0;            /* angular */
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -557,7 +558,7 @@ input:-webkit-autofill {
 .tx-btn:hover { color: #ffb020; }
 .tx-btn.del { color: var(--text-dim); border-color: var(--line-strong); }
 .tx-btn.del:hover { color: #f8dca6; border-color: var(--accent-line); background: var(--accent-soft); }
-.tx-in, .tx-sel { width: 100%; min-width: 0; font-family: var(--font-body); font-size: 13px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0; padding: 7px 8px; outline: none; box-sizing: border-box; }
+.tx-in, .tx-sel { width: 100%; min-width: 0; font-family: var(--font-body); font-size: 13px; color: var(--text); background: var(--panel-2); border: 1px solid var(--field-border); border-radius: 0; padding: 7px 8px; outline: none; box-sizing: border-box; }
 .tx-in:focus, .tx-sel:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .tx-sel { -webkit-appearance: none; appearance: none; cursor: pointer; }
 .tx-sel option { background: #15161a; color: var(--text); }
@@ -622,7 +623,7 @@ input:-webkit-autofill {
 .plf-lbl { font-family: var(--font-head); font-weight: 600; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
 .plf-in, .plf-sel {
   font-family: var(--font-body); font-size: 14px; color: var(--text);
-  background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 0;
+  background: var(--panel-2); border: 1px solid var(--field-border); border-radius: 0;
   padding: 9px 11px; min-height: 40px; outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -703,7 +704,7 @@ input:-webkit-autofill {
 .lb-trigger {
   width: 100%; min-height: 52px; display: flex; align-items: center; gap: 10px;
   font-family: var(--font-body); font-size: 16px; text-align: left;
-  color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong);
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--field-border);
   border-radius: 0; padding: 12px 13px; cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
@@ -724,7 +725,7 @@ input:-webkit-autofill {
 .lb-search {
   flex: 1 1 auto; min-height: 46px; font-family: var(--font-body); font-size: 16px;
   padding: 10px 13px; color: var(--text); background: var(--panel-2);
-  border: 1px solid var(--line-strong); border-radius: 0; outline: none;
+  border: 1px solid var(--field-border); border-radius: 0; outline: none;
 }
 .lb-search:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .lb-close { flex: none; width: 46px; background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--text-dim); font-size: 15px; cursor: pointer; }

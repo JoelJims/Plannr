@@ -16,6 +16,38 @@ export function parsePaise(v) {
   return Number.isSafeInteger(paise) && paise > 0 ? paise : null;
 }
 
+// Q10 (review 2026-11-21), the owner's decisions: a cap of ₹1 crore on single entries only
+// (2026-11-27), and safe sums with no precision loss. So there are two limits, both in integer paise:
+//   · Entry cap, MAX_AMOUNT_PAISE = ₹1,00,00,000.00 (₹1 crore), message AMOUNT_CAP_MESSAGE: one cash
+//     in, one cash out (add, edit, Save All rows) and one contractor payment. Checked by
+//     parseAmountToSave.
+//   · Totals limit, MAX_TOTAL_PAISE = ₹10,00,00,00,000.00 (₹1,000 crore), message TOTAL_LIMIT_MESSAGE:
+//     the budget, a loan, the contract's reference amount, total, rate and rate x area, and an
+//     allowance's cap and rate. These are often more than ₹1 crore. Checked by parseTotalToSave.
+// Why the totals limit keeps sums exact: amounts are integer paise, and a sum of integers stays an
+// exact integer in a JavaScript number while it is at most Number.MAX_SAFE_INTEGER paise. At the
+// totals limit that is over 9,000 totals; an entry at the entry cap uses a thousandth of that room,
+// so over nine million entries.
+export const MAX_AMOUNT_PAISE = 1000000000;
+export const AMOUNT_CAP_MESSAGE = 'An amount can be at most ₹1,00,00,000 (₹1 crore).';
+export const MAX_TOTAL_PAISE = 1000000000000;
+export const TOTAL_LIMIT_MESSAGE = 'A total can be at most ₹10,00,00,00,000 (₹1,000 crore).';
+
+// A typed amount that is about to be saved -> { paise } or { error }. The error is capMessage for an
+// amount over max (also one too large to hold exactly), otherwise invalidMessage (not an amount
+// greater than 0 with up to 2 decimals). max and capMessage default to the entry cap.
+export function parseAmountToSave(v, invalidMessage, { max = MAX_AMOUNT_PAISE, capMessage = AMOUNT_CAP_MESSAGE } = {}) {
+  const paise = parsePaise(v);
+  if (paise !== null) return paise > max ? { error: capMessage } : { paise };
+  const s = String(v == null ? '' : v).trim().replace(/,/g, '');
+  return { error: /^\d+(\.\d{1,2})?$/.test(s) && Number(s) > 0 ? capMessage : invalidMessage };
+}
+
+// The same for a total (see above): at most MAX_TOTAL_PAISE, else TOTAL_LIMIT_MESSAGE.
+export function parseTotalToSave(v, invalidMessage) {
+  return parseAmountToSave(v, invalidMessage, { max: MAX_TOTAL_PAISE, capMessage: TOTAL_LIMIT_MESSAGE });
+}
+
 // Optional ISO 'YYYY-MM-DD' date. Empty -> null. Rejects malformed or impossible dates (e.g.
 // 2026-13-40). -> { date: string|null } or { error }.
 export function parseIsoDate(v) {

@@ -340,8 +340,8 @@ going over an allowance is a normal thing to happen, not an error.
   `safety-snapshots/plannr-upgrade-pending.json`. They are gzip-compressed (`.json.gz`, `.db.gz`; open with `gunzip`). There is
   no screen to restore one: they are for recovery with `adb` on a debug build. They are not in
   Android's Auto Backup; they stay on the phone. The storage move's own snapshots
-  (`plannr-pre-move-*`, `plannr-old-copy-*`, `plannr-pre-move-back-*`) are outside the rotation
-  of 3 and are never deleted (finding Q12 in `docs/security-quality-review-2026-11-21.md`).
+  (`plannr-pre-move-*`, `plannr-old-copy-*`, `plannr-pre-move-back-*`) are never deleted and do not
+  count until the move is confirmed on the Data Backup page; after that, from the next snapshot written, the newest 3 snapshots in total remain. The one just written is never deleted, and a move back makes the move unconfirmed again (finding Q12 in `docs/security-quality-review-2026-11-21.md`).
 - **Android Auto Backup** is on, limited to the database file (`plannrSQLite.db` and its
   journal), the marker that says which storage is in use (`plannr-storage.json`), and the
   WebView's localStorage (the data before the move, or the old copy while it is kept)
@@ -493,12 +493,15 @@ There is deliberately **no reset button inside the app**.
   Data Backup → **Move to the new storage**. It has not been run on the owner's real data yet.
 - **The owner still has to make the second offline backup copy of the release key**
   (`docs/release-plan.md` §1.3).
-- **How the owner's phone moves from the debug build to the release build is not decided.**
-  A release APK cannot be installed over a debug build, and that phone holds the real data on a
-  debug build. Until the owner decides, it gets debug builds only, as in
-  `docs/PHONE-TEST-CHECKLIST.md`. The question is in `docs/release-plan.md` §6. While it runs a
-  debug build, only builds signed by the current laptop's debug key install over it; whether to
-  keep a copy of that key is also the owner's call (`SETUP.md` §2).
+- **The owner's phone moves from the debug build to the release build once, by the switch round
+  (decided; not done yet).** A release APK cannot be installed over a debug build, and that phone
+  holds the real data on a debug build. The owner does the round by hand: back up, prove the
+  restore on the emulator, uninstall the debug app, install the release APK, restore, verify
+  (`docs/release-plan.md` §6; check boxes in `docs/PHONE-TEST-CHECKLIST.md`). It is the only
+  uninstall and the only restore on that phone. Until it is done, the phone gets debug builds
+  only, and only builds signed by the current laptop's debug key install over it; whether to keep
+  a copy of that key until then is the owner's call (`SETUP.md` §2). After the round, the phone no
+  longer needs the debug key.
 - **A database made before 2026-08-23 (user_version 1) whose upgrade fails in its last steps
   needs two starts.** The next start shows an error once ("no such column:
   contract_allowance_id"); the start after that finishes the upgrade. Nothing is lost, and the

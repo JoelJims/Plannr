@@ -1,6 +1,7 @@
 // Cross-platform plan, step 1.3 — the ledger list (categories), its CSV, and the saved custom ledger
 // names. The only copy: server.js and public/local-api.js both call register(app, ctx); see
 // core/routes/people.js for what `app` and `ctx` are.
+import { SAVE_FAILED } from '../../request-rules.js';
 
 export function register(app, ctx) {
   const { repo, auth, isStorageFullError, storageFull, istDateStamp, ledgerIndex } = ctx;
@@ -30,7 +31,8 @@ export function register(app, ctx) {
       await repo.ledgers.replaceAll(v.mains, v.subs);
     } catch (e) {
       if (isStorageFullError(e)) return res.status(500).json({ error: storageFull('the ledger list was not saved.') });
-      return res.status(500).json({ error: 'Could not save the ledger list: ' + e.message });
+      console.error('Ledger list import failed:', e);
+      return res.status(500).json({ error: SAVE_FAILED }); // Q11: not the raw database message
     }
     await ledgerIndex.refresh();
     res.json({ ok: true, ledgers: ledgerIndex.list() });

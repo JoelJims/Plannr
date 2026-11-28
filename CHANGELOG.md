@@ -3,6 +3,36 @@
 Notable changes to Plannr. The phone app is the product; the desktop server (`server.js`) is a
 development and test tool.
 
+## 1.0.0 — first public release (in preparation, not released)
+
+The first public release will be versionName `1.0.0`. `npm run release:android` sets it, with the
+next versionCode, when the owner builds the release. User notes: `docs/release-notes-1.0.0.md`.
+
+### Changed
+- **Release signing passwords.** `keystore.properties` now holds only `storeFile` and `keyAlias`.
+  The store and key passwords come from `PLANNR_STORE_PASSWORD` and `PLANNR_KEY_PASSWORD`, or
+  `npm run release:android` asks for them without echo; they reach Gradle only through its
+  environment. A `keystore.properties` that still has password lines stops the release
+  (`SETUP.md` §2).
+
+## In review — release docs and key backups (branch `ws3-c-release`)
+
+### Changed
+- **`.gitignore`: key backups and copies.** Names such as `plannr-release.keystore.bak`,
+  `key-backup.zip` and `keystore.properties.bak` are now ignored, like the key itself: a zipped or
+  renamed key still signs updates. Ordinary `.zip` and `.bak` files are not ignored.
+  `test/release-guards.test.js` checks each name, and that no tracked file is a key.
+
+### Docs
+- **The owner's debug to release switch round** (owner's decision): `docs/release-plan.md` §6
+  gives the steps (back up twice, prove the restore on the emulator with the release APK, then
+  uninstall the debug app, install the release APK, restore, verify), with check boxes and stop
+  rules in `docs/PHONE-TEST-CHECKLIST.md`. It is the one exception to "never uninstall" and "no
+  restore on the owner's phone"; `README.md`, `docs/RELEASE.md`, `SETUP.md`, `HANDOFF.md` and
+  `docs/DEVELOPERS.md` say so. After the round the phone no longer needs the laptop's debug key.
+- **The strict stop on password lines in `keystore.properties` stays** (owner's decision),
+  recorded in `docs/release-plan.md` §6.
+
 ## In review — Phase 3 (branch `plannr-phase3`, pull request #3 into `main`, open)
 
 Fixes from the security and quality review of 2026-11-21
@@ -43,9 +73,11 @@ still open. Not released.
 - **Move data back (Q4).** The room check also counts the old copy, its rollback journal and the
   other `localStorage` keys. Before, a move back that "fit" could still run out of room (it was
   then rolled back, so nothing was lost).
-- **Safety snapshots (Q12, partly).** A snapshot taken by the storage move no longer cuts the
-  regular rotation from three snapshots to two. Move snapshots themselves are still never pruned,
-  so they add up; whether to prune them is open.
+- **Safety snapshots (Q12).** A snapshot taken by the storage move no longer cuts the
+  regular rotation from three snapshots to two. Move snapshots are kept until the move is confirmed
+  on the Data Backup page (owner's decision, branch `ws3-b-q12`); after that, from the next
+  snapshot written, the newest three snapshots in total remain. The one just written is never
+  deleted, and a move back makes the move unconfirmed again.
 
 ### Safety
 - **A warning about the old storage (Q2).** While the data is still in the WebView's

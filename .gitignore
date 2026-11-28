@@ -67,6 +67,19 @@ keystore.properties
 *.pem
 .env.*
 !.env.example
+# BACKUPS and copies of a key or its properties file (a zipped or renamed key still signs updates).
+# Kept specific: ordinary .zip and .bak files are not ignored.
+*.pfx
+*.keystore.*
+*.jks.*
+*.p12.*
+*.pem.*
+*key-backup*
+*keystore-backup*
+*keystore*.zip
+*keystore*.7z
+keystore*.properties
+keystore.properties.*
 # what the app exports or a phone pull brings back: plain JSON backups, CSV and PDF exports,
 # compressed databases, the import's automatic snapshot (they hold ledger data)
 plannr-backup-*.json

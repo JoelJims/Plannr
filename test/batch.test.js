@@ -51,7 +51,7 @@ test('a write that fails on its last row rolls the whole save back: no row chang
   try {
     const r = await H.post('/api/cash-out/batch', { rows: ids.map((id) => editBody(id, '500.00')) }, { cookie });
     assert.strictEqual(r.status, 500);
-    assert.strictEqual(r.json.error, 'The save failed and was rolled back — no rows were changed.');
+    assert.strictEqual(r.json.error, "Couldn't save – try again."); // Q11: the owner's wording for any failed save
   } finally {
     H.db.exec('DROP TRIGGER IF EXISTS test_batch_fail');
   }
