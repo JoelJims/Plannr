@@ -506,21 +506,25 @@ Not tried yet: restoring a file chosen this way (no restore was run in that chec
 size of a real backup (the made-up files were 54 bytes and 2 KB). If a file is not listed, or a
 restore fails in any other way, stop and ask.
 
-##### If a restore answers "Storage is full — …"
+##### If a restore says the storage is full
 
-The restore did not go through, and nothing was changed. The rest of the message says which storage
-is full:
+The restore did not go through, and nothing was changed. A build with the owner's Q11 wording
+answers "Your phone's storage is full. Free up some space and try again. Nothing was changed." for
+either storage; an older build answered "Storage is full — …" and its ending named the storage. To
+tell which storage is full, look at **Where your data is kept** on Data Backup:
 
-- "… permanently delete items you no longer need from the Recycle Bin to make room." means the
-  emulator's old storage (the WebView's, full at about 2.8 MB of data) is full. Do not use the
-  Recycle Bin clean-up the message suggests. Use **Move to the new storage** on the emulator, as in
+- If it still says Plannr keeps your data inside the app's web storage (older builds: the message
+  ends "… permanently delete items you no longer need from the Recycle Bin to make room."), the
+  emulator's old storage (the WebView's, full at about 2.8 MB of data) is full, not the emulator
+  itself. Do not use the Recycle Bin clean-up. Use **Move to the new storage** on the emulator, as in
   check 9 step 2: in **Where your data is kept**, type a passphrase twice, tap **Move to the new
   storage**, save the backup it makes, and tap **I have the backup — continue**. The move needs
   that backup saved through the share sheet, and on this emulator the share sheet has only Quick
   Share, Drive and Gmail: if nothing there can save the file, stop and ask. After the move, do that
   restore again straight away, without `pm clear` (it would undo the move). The emulator was empty
   before the move (step 3 or 7), so the move's backup holds none of your data.
-- "… This phone is out of space…" means the emulator itself has no space left: stop and ask.
+- If the data is already in the new storage (older builds: "… This phone is out of space…"), the
+  emulator itself has no space left: stop and ask.
 
 #### A4. Go, or stop
 
@@ -632,8 +636,9 @@ Write each result in the table "The owner's phone: the APK under test" at the en
 7. **Restore rollback (S3/Q6). Test backups only**, on the emulator after D, or on another device
    without your real data (a restore replaces the live data, even one that then fails). A good test
    encrypted backup still restores and writes a safety snapshot (check 3). A backup that fails a
-   check after it is copied in must answer "This backup could not be restored. Nothing was changed:
-   your data is as it was before. Reason: …", and the data must be as before. Such a file is hard to
+   check after it is copied in must answer "Couldn't restore this backup. Your data hasn't changed."
+   (older builds: "This backup could not be restored. Nothing was changed: your data is as it was
+   before. Reason: …"), and the data must be as before. Such a file is hard to
    make by hand; the automated tests cover it (`test/backup-encrypted-restore.test.js`,
    `test-ui/backup-roundtrip.js`).
 8. **Strict import (F1). Test backups only**, as in C7. Copy a test JSON backup. In a text editor,
@@ -904,8 +909,10 @@ adb -s emulator-5554 shell run-as com.plannr.app cat files/plannr-storage.json
 - [ ] `limitChars` is about 5,242,880 (what `public/local-api.js` assumes). If not, change
       `LOCALSTORAGE_LIMIT_CHARS` and tell the maintainer.
 - [ ] After the probe, the app still opens and the meter is back to where it was.
-- [ ] Optional: keep adding entries until the app says **"Storage is full"**; the last entry is not
-      saved, everything before it is still there, and the meter shows the strong warning.
+- [ ] Optional: keep adding entries until the app says **"Your phone's storage is full. …"** (older
+      builds: **"Storage is full"**; before the move it is Plannr's own space in the app that is full,
+      not the phone); the last entry is not saved, everything before it is still there, and the meter
+      shows the strong warning.
 
 ## 3. Backups and restores, with categories present
 

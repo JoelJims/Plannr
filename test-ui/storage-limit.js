@@ -6,8 +6,9 @@
 //   1) MEASURES Chromium's localStorage limit and checks the meter's constant matches it;
 //   2) prints what the database costs in localStorage (fresh install, fixture, per entry);
 //   3) checks the storage meter on the Data Backup page: the numbers, the 70% warning, the 90% one;
-//   4) fills storage to the limit and checks a single add / edit / delete answers "Storage is full"
-//      (not "Something went wrong"), with the data intact and saving working again once there is room;
+//   4) fills storage to the limit and checks a single add / edit / delete answers the storage-full text
+//      (Q11, the owner's wording; not "Something went wrong"), with the data intact and saving working
+//      again once there is room;
 //   5) fills the database with real entries until it is full and checks Android Auto Backup's
 //      budget: the ledger plus three gzipped safety snapshots stay well under the 25 MB limit.
 // Android's System WebView is Chromium, so the phone is expected to behave the same; that part is an
@@ -145,8 +146,9 @@ const MB = (chars) => (chars * 2 / 1048576).toFixed(2) + ' MB';
     let saved = 0, add;
     for (let i = 0; i < 400; i++) { add = await api('POST', '/api/cash-in', body); if (add.status !== 201) break; saved++; }
     console.log(`  · measured: ${saved} more entries fitted into the database's existing pages before a save failed`);
-    const FULL = /^Storage is full — this change was not saved\. Your saved data is safe\./;
-    check('a single add that hits the real limit says "Storage is full" (not "Something went wrong")', add.status === 500 && FULL.test(add.json.error || ''), `${add.status} ${JSON.stringify(add.json)}`);
+    // Q11 wording (the owner's exact text, request-rules.js STORAGE_FULL), before the move too.
+    const FULL = "Your phone's storage is full. Free up some space and try again. Nothing was changed.";
+    check('a single add that hits the real limit says the storage is full (not "Something went wrong")', add.status === 500 && add.json.error === FULL, `${add.status} ${JSON.stringify(add.json)}`);
 
     // Edit and delete: make every storage write fail the way the browser does when there is no room
     // left at all (QuotaExceededError from localStorage.setItem, which kvvfs turns into SQLITE_IOERR).
@@ -162,12 +164,12 @@ const MB = (chars) => (chars * 2 / 1048576).toFixed(2) + ' MB';
     const add2 = await api('POST', '/api/cash-in', body);
     // A JSON restore onto a full phone. SQLite has already rolled back by the time the import's own
     // ROLLBACK runs; before db.js's rollbackQuietly() that second ROLLBACK threw "no transaction is
-    // active" and the user got a generic failure instead of "Storage is full".
+    // active" and the user got a generic failure instead of the storage-full text.
     const restore = await api('POST', '/api/backup/import', exported.json);
     await page.evaluate(() => { Storage.prototype.setItem = window.__realSetItem; });
-    check('a JSON restore onto a full phone says "Storage is full", data unchanged', restore.status === 500 && /^Storage is full — the import did not go through\./.test(restore.json.error || ''), `${restore.status} ${JSON.stringify(restore.json).slice(0, 300)}`);
+    check('a JSON restore onto a full phone says the storage is full, data unchanged', restore.status === 500 && restore.json.error === FULL, `${restore.status} ${JSON.stringify(restore.json).slice(0, 300)}`);
     for (const [name, r] of [['edit', edit], ['delete', del], ['add', add2]]) {
-      check(`a single ${name} with no room at all says "Storage is full"`, r.status === 500 && FULL.test(r.json.error || ''), `${r.status} ${JSON.stringify(r.json)}`);
+      check(`a single ${name} with no room at all says the storage is full`, r.status === 500 && r.json.error === FULL, `${r.status} ${JSON.stringify(r.json)}`);
     }
     try { assert.deepStrictEqual(await dump(), before); check('nothing was half-saved: the data is exactly as before', true); } catch (e) { check('nothing was half-saved: the data is exactly as before', false, e.message.split('\n').slice(0, 8).join('\n')); }
     await removeFiller();

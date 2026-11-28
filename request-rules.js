@@ -57,9 +57,21 @@ const TOO_LARGE = {
 };
 export const tooLarge = (kind) => ({ error: TOO_LARGE[kind] || TOO_LARGE.normal });
 export const invalidRequest = () => ({ error: 'Invalid request.' });
-// Q11 (the owner's decision): a save that failed for any reason except a full storage (that answer is
-// each platform's own "Storage is full — ..." text). A failed read keeps "Something went wrong.".
+// Q11 (the owner's decision): a save that failed for any reason except a full storage (STORAGE_FULL,
+// below). A failed read keeps "Something went wrong.".
 export const SAVE_FAILED = "Couldn't save – try again.";
+// Q11 wording (the owner's exact text, 2026-11-28), the same on both hosts. The technical cause is
+// logged (ctx.logError or console.error), never shown. A file refused by its checks (HTTP 400: wrong
+// passphrase, not a backup, a newer schema, too big, amounts over the limits) keeps its own message.
+//   IMPORT_FAILED: a JSON import (POST /api/backup/import) or a Ledger List CSV import that failed
+//     after the file passed its checks. Both replace in one transaction, so nothing was changed.
+//   RESTORE_FAILED: an encrypted restore (POST /api/backup/import-encrypted) that failed after the
+//     file passed its checks: no safety copy (not started), or the restore failed and the data from
+//     just before it was put back. Not when putting it back failed too: that answer says so.
+//   STORAGE_FULL: every save, import or restore that hit a full storage (db.js isStorageFullError).
+export const IMPORT_FAILED = "Couldn't import this file. Nothing was changed. Please try again.";
+export const RESTORE_FAILED = "Couldn't restore this backup. Your data hasn't changed.";
+export const STORAGE_FULL = "Your phone's storage is full. Free up some space and try again. Nothing was changed.";
 export const serverError = (method) => ({ error: method === 'GET' || method === 'HEAD' ? 'Something went wrong.' : SAVE_FAILED });
 export const notFound = (method, path) => ({ error: `Not found: ${method} ${path}` });
 

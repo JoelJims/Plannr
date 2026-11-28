@@ -49,8 +49,7 @@ async function coreApp({ writeJson }) {
   core.register(app, {
     auth, adapter: dbAdapter(), atStart: (fn) => starts.push(fn()), host: { snapshot: { writeJson }, now: () => new Date() },
     logError: (...args) => logged.push(args.map(String).join(' ')),
-    isStorageFullError, storageFull: (what) => `Storage is full — ${what} Free up space, then try again.`,
-    ledgerIndex, CUSTOM_CODE: 'CUSTOM',
+    isStorageFullError, ledgerIndex, CUSTOM_CODE: 'CUSTOM',
   });
   assert.strictEqual(starts.length, 1, 'the module asks for one start job: the ownership check');
   await Promise.all(starts);
@@ -90,9 +89,17 @@ test('core: if the safety copy cannot be written, the import stops and the data 
   assert.ok(before > 0);
   const r = await call('POST /api/backup/import', { body: good });
   assert.strictEqual(r.code, 500);
-  assert.strictEqual(r.body.error, 'Could not write the safety snapshot, so the import was aborted — your current data is unchanged.');
+  assert.strictEqual(r.body.error, "Couldn't import this file. Nothing was changed. Please try again."); // Q11: the owner's text
   assert.strictEqual(cashOutCount(), before, 'nothing replaced');
-  assert.ok(logged.some((l) => /Backup snapshot failed:.*disk gone/.test(l)), 'the cause is logged');
+  assert.ok(logged.some((l) => /Backup snapshot failed.*disk gone/.test(l)), 'the cause is logged');
+});
+
+test('core: a safety copy that fails because the storage is full answers the storage-full text', async () => {
+  const full = Object.assign(new Error('database or disk is full'), { errcode: 13 });
+  const { call } = await coreApp({ writeJson: async () => { throw full; } });
+  const good = (await call('GET /api/backup/export', { query: { includeContacts: '1' } })).body;
+  const r = await call('POST /api/backup/import', { body: good });
+  assert.deepStrictEqual([r.code, r.body], [500, { error: "Your phone's storage is full. Free up some space and try again. Nothing was changed." }]);
 });
 
 test('core: the safety copy holds the data as it was (contacts included), then the import replaces it', async () => {

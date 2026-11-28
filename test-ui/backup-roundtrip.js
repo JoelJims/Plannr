@@ -217,8 +217,9 @@ function sameDb(name, actual, expected) {
     const beforeFk = await dump();
     const fkRestore = await api('POST', '/api/backup/import-encrypted', { passphrase: pass, dataBase64: fkBackup });
     sameDb('a backup that fails its foreign-key check after it is copied in is undone: the data is exactly as before', await dump(), beforeFk);
-    check('…and the answer says nothing was changed, and why', fkRestore.status === 500
-      && /^This backup could not be restored\. Nothing was changed: your data is as it was before\. Reason: .*foreign_key_check/.test(fkRestore.json.error || ''),
+    // Q11: the owner's restore text; the foreign_key_check cause is logged, not shown.
+    check('…and the answer says the data has not changed', fkRestore.status === 500
+      && fkRestore.json.error === "Couldn't restore this backup. Your data hasn't changed.",
     `${fkRestore.status} ${JSON.stringify(fkRestore.json).slice(0, 300)}`);
     const afterFk = await page.evaluate(async () => {
       const { db } = await import('/db.js');

@@ -86,12 +86,9 @@ export async function phoneStorageInfo() {
   return { kind: 'file', databaseBytes: file.sizeBytes, freeBytes: file.freeBytes, oldCopyBytes: measureStorage().databaseBytes };
 }
 
-// "Storage is full" on the phone. Before the move it means Plannr's own space inside the app is used
-// up, not the phone's storage, so "free up space on your phone" would not help: say what does. After
-// the move (the data in its own file) it means the phone itself is full.
-const storageFull = (what) => (usingOwnHandle()
-  ? `Storage is full — ${what} Your saved data is safe. On the Data Backup page, export a backup, then permanently delete items you no longer need from the Recycle Bin to make room.`
-  : `Storage is full — ${what} Your saved data is safe. This phone is out of space: free up space on the phone (photos, videos, apps you no longer use), then try again.`);
+// A full storage answers request-rules.js STORAGE_FULL (Q11, the owner's text, 2026-11-28), the same
+// before and after the move. Before the move "full" is Plannr's own space inside the app (the
+// localStorage limit above), not the phone's; the text that said so was replaced by the owner's.
 
 export function installFetchShim(repo) {
   const originalFetch = window.fetch.bind(window);
@@ -157,7 +154,7 @@ export function installFetchShim(repo) {
   });
   // The core reaches the database only through `adapter` and `repo` (step 1.4 B16): no synchronous handle.
   const coreContext = {
-    adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, istDateStamp, storageFull, parseLedgerFilters,
+    adapter: dbAdapter(), atStart, repo, transaction, getOwner, userExists, isStorageFullError, istDateStamp, parseLedgerFilters,
     host,
     auth: requireApiAuth, // never called here: localApp runs only the last handler
     logError: (...args) => console.error(...args),
@@ -329,7 +326,7 @@ export function installFetchShim(repo) {
           // Phase 2 (Step 3): a single add / edit / delete has no try/catch of its own, so a write that
           // hits the storage limit lands here. Say so, instead of the generic message.
           // Q11: any other failed save says "Couldn't save – try again."; a failed read "Something went wrong.".
-          res.status(status).json(isStorageFullError(e) ? { error: storageFull('this change was not saved.') } : requestRules.serverError(method));
+          res.status(status).json(isStorageFullError(e) ? { error: requestRules.STORAGE_FULL } : requestRules.serverError(method));
         }
       }
       return toResponse(res);

@@ -1,5 +1,6 @@
 // Phase 2, Step 3 (M8) — storage limit helpers that the node side can check. The phone's real limit,
-// the meter and the "Storage is full" messages run in a browser: test-ui/storage-limit.js.
+// the meter and the storage-full message run in a browser: test-ui/storage-limit.js (the message on
+// both hosts: test/ws4a-failure-wording.test.js).
 const H = require('./helpers');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');

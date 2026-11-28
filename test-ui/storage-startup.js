@@ -137,7 +137,7 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       const refused = await page.evaluate(async () => { try { (await import('/db.js')).useAdapter({}); return 'accepted'; } catch (e) { return e.message; } });
       check('useAdapter() after ready() is refused', /before ready\(\)/.test(refused), refused);
 
-      // Step 1.4 C11: /api/storage on the file, the meter's texts, and "Storage is full" on the file.
+      // Step 1.4 C11: /api/storage on the file, the meter's texts, and the storage-full text on the file.
       const st = await api(page, 'GET', '/api/storage');
       const sizes = await page.evaluate((m) => ({ file: window.__plannrFakeFs.getFile(m).length, old: Object.keys(localStorage).filter((k) => k.startsWith('kvvfs-local')).reduce((n, k) => n + k.length + localStorage.getItem(k).length, 0) * 2 }), MAIN);
       check('/api/storage on the file: its size, the old copy counted, the free space, against 25 MB', st.status === 200 && st.json.kind === 'file' && st.json.databaseBytes === sizes.file && sizes.old > 0 && st.json.backupBytes === sizes.file + sizes.old && st.json.backupLimitBytes === 25 * 1048576 && st.json.freeBytes === 8e9 && st.json.level === 'ok' && st.json.freeLow === false, JSON.stringify({ ...st.json, sizes }));
@@ -153,7 +153,8 @@ const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${nam
       await page.evaluate(() => sessionStorage.setItem('fakefs-full', '1'));
       const full = await addCashIn(page, 'D: the phone is full');
       await page.evaluate(() => sessionStorage.removeItem('fakefs-full'));
-      check('"Storage is full" on the file says the phone is out of space', full.status === 500 && /^Storage is full — this change was not saved\. Your saved data is safe\. This phone is out of space: free up space on the phone/.test((full.json && full.json.error) || ''), JSON.stringify(full.json));
+      // Q11 wording (the owner's exact text, request-rules.js STORAGE_FULL).
+      check('a full phone on the file says the phone\'s storage is full', full.status === 500 && (full.json && full.json.error) === "Your phone's storage is full. Free up some space and try again. Nothing was changed.", JSON.stringify(full.json));
       check('…and nothing was saved', !(await reasons(page)).includes('D: the phone is full') && !(await fileReasons(page)).includes('D: the phone is full'));
       enc = await exportEncrypted(page);
       check('an encrypted backup can be made from the file', Array.isArray(enc) && enc.length > 100);
