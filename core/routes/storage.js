@@ -4,7 +4,7 @@
 // Each platform says what it knows through ctx.host.storage.info() (core/host.js); this file turns it
 // into one answer shape, with the level and the numbers the page shows:
 //   { mode, kind, databaseBytes, usedBytes, limitBytes, backupBytes, backupLimitBytes, freeBytes,
-//     fraction, level, freeLow }
+//     oldCopyBytes, fraction, level, freeLow }
 // The three kinds of storage:
 //   - 'localstorage': the phone before the move, and the browser preview. The data lives in
 //     localStorage, which is full at a fixed size: the meter is localStorage used / its limit
@@ -13,7 +13,9 @@
 //     that matters is Android's Google backup, which skips an app whose data is over 25 MB: the
 //     meter is the backup estimate (the file, plus the old localStorage copy while it is kept)
 //     against 25 MB, warning from 20 MB and strongly from 23 MB (decision D5). Free space under
-//     100 MB is said too, since new entries fail when the phone is full.
+//     100 MB is said too, since new entries fail when the phone is full. oldCopyBytes is what the old
+//     copy holds in localStorage now (0 once it is deleted): the one count of its size, which the
+//     page's storage meter and its storage-move section both show (owner's decision 2026-11-28).
 //   - 'desktop': the dev server; a database file with no limit here.
 
 export const MB = 1024 * 1024;
@@ -36,7 +38,7 @@ export function storageAnswer(info) {
     return {
       mode: 'phone', kind,
       databaseBytes: num(info.databaseBytes), usedBytes: used, limitBytes: limit,
-      backupBytes: null, backupLimitBytes: null, freeBytes: null,
+      backupBytes: null, backupLimitBytes: null, freeBytes: null, oldCopyBytes: null,
       fraction,
       level: fraction >= LOCAL_STRONG_AT ? 'critical' : fraction >= LOCAL_WARN_AT ? 'warning' : 'ok',
       freeLow: false,
@@ -44,12 +46,13 @@ export function storageAnswer(info) {
   }
   if (kind === 'file') {
     const database = num(info.databaseBytes) ?? 0;
-    const backup = database + (num(info.oldCopyBytes) ?? 0);
+    const oldCopy = num(info.oldCopyBytes) ?? 0;
+    const backup = database + oldCopy;
     const free = num(info.freeBytes);
     return {
       mode: 'phone', kind,
       databaseBytes: database, usedBytes: null, limitBytes: null,
-      backupBytes: backup, backupLimitBytes: BACKUP_LIMIT_BYTES, freeBytes: free,
+      backupBytes: backup, backupLimitBytes: BACKUP_LIMIT_BYTES, freeBytes: free, oldCopyBytes: oldCopy,
       fraction: backup / BACKUP_LIMIT_BYTES,
       level: backup >= BACKUP_STRONG_BYTES ? 'critical' : backup >= BACKUP_WARN_BYTES ? 'warning' : 'ok',
       freeLow: free !== null && free < FREE_LOW_BYTES,
@@ -58,7 +61,7 @@ export function storageAnswer(info) {
   return {
     mode: 'desktop', kind: 'desktop',
     databaseBytes: num(info && info.databaseBytes), usedBytes: null, limitBytes: null,
-    backupBytes: null, backupLimitBytes: null, freeBytes: null,
+    backupBytes: null, backupLimitBytes: null, freeBytes: null, oldCopyBytes: null,
     fraction: null, level: 'ok', freeLow: false,
   };
 }

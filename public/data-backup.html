@@ -399,8 +399,12 @@
       // a backup before new entries start failing to save.
       const mb = (bytes) => (bytes < 0.1 * 1048576 ? 'under 0.1' : (bytes / 1048576).toFixed(1).replace(/\.0$/, ''));
       async function refreshStorage() {
-        let s;
+        let s, mbText;
         try {
+          // The one way a size of your data is written (rounded up to 0.1 MB), shared with the
+          // storage-move section below (storage-move-ui.js), so the old copy's size reads the same in
+          // both. Loaded here, like the answer: if either cannot be had, only the meter stays hidden.
+          ({ mbText } = await import('/core/size-text.js'));
           const r = await fetch('/api/storage');
           if (!r.ok) return;
           s = await r.json();
@@ -414,12 +418,15 @@
         // Step 1.4 C11: after the move the data is in its own file, which grows with the phone's free
         // space. What can run out is Android's Google backup, which skips Plannr over 25 MB: the meter
         // shows its estimate (the file, plus the old copy while it is kept), and low free space.
+        // The three sizes are written with mbText (rounded up): the old copy's size is the answer's
+        // oldCopyBytes, the same count and the same rounding as in the storage-move section, and none
+        // of the three reads smaller than it is next to the 25 MB limit.
         if (s.kind === 'file') {
           const pct = Math.min(100, Math.round(s.fraction * 100));
-          const oldCopy = Math.max(0, s.backupBytes - s.databaseBytes);
+          const oldCopy = Number(s.oldCopyBytes) || 0;
           const limit = mb(s.backupLimitBytes);
-          text.textContent = `Your data file is ${mb(s.databaseBytes)} MB. `
-            + (oldCopy > 0 ? `With the old copy (${mb(oldCopy)} MB), Android's Google backup of Plannr is about ${mb(s.backupBytes)} MB` : `Android's Google backup of Plannr is about ${mb(s.backupBytes)} MB`)
+          text.textContent = `Your data file is ${mbText(s.databaseBytes)}. `
+            + (oldCopy > 0 ? `With the old copy (${mbText(oldCopy)}), Android's Google backup of Plannr is about ${mbText(s.backupBytes)}` : `Android's Google backup of Plannr is about ${mbText(s.backupBytes)}`)
             + ` of the ${limit} MB it allows (${pct}%).`;
           bar.hidden = false;
           bar.setAttribute('aria-label', 'Google backup size');
@@ -639,9 +646,10 @@
 
       // Step 1.4 C10: the move to the new storage (storage-move-ui.js). Its step-1 backup is saved by
       // this page's own saveFile(), the same as "Download encrypted backup". Only in a build with the
-      // storage plugins; anywhere else the section stays hidden.
+      // storage plugins; anywhere else the section stays hidden. refreshStorage redraws the meter
+      // above once the old copy is deleted, so it stops counting it.
       import('/storage-move-ui.js')
-        .then((m) => m.initMovePanel({ makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText }))
+        .then((m) => m.initMovePanel({ makeMsg, confirmModal, saveFile, newPassphraseProblem, today, errText, refreshStorage }))
         .catch((err) => console.error('[data-backup] the storage move panel could not start:', err));
 
       // F14: a backup at 75% or more of what a restore takes gets a note under its export button: how
