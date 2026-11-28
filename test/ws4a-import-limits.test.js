@@ -107,7 +107,7 @@ test('Q10: over-limit amounts in several lists are named, and nothing changes', 
     `• Loan Details (loans row 1, id ${id('loans')}), Example Co-op Bank: ₹10,00,00,00,000.01 is over the ₹10,00,00,00,000 limit for totals.`,
     `• Contract Details (contract row 1, id ${c.id}), ACME Builders, 01/07/26: Total contract value ₹10,00,00,00,000.01 is over the ₹10,00,00,00,000 limit for totals.`,
     `• Allowances (contract_allowances row ${rowOf('contract_allowances', tiles)}, id ${tiles.id}), Tiles: Cap ₹10,00,00,00,000.01 is over the ₹10,00,00,00,000 limit for totals.`,
-    '• Budget (settings, budget_paise): ₹10,00,00,00,000.01 is over the ₹10,00,00,00,000 limit for totals.',
+    `• Budget (settings row ${rowOf('settings', budgetRow(bad))}, budget_paise): ₹10,00,00,00,000.01 is over the ₹10,00,00,00,000 limit for totals.`,
     'Correct these amounts in the file, then import it again.',
   ].join('\n'));
 });
@@ -132,6 +132,24 @@ test('Q10: one paisa over the limit is refused, for each checked amount on its o
     assert.ok(msg.includes(P.fmtRs(limit() + 1)), `${label}: the amount, in rupees: ${msg}`);
     assert.ok(msg.includes(`₹${(limit() / 100).toLocaleString('en-IN')} limit for ${limit === E ? 'one entry' : 'totals'}.`), `${label}: which limit: ${msg}`);
   }
+});
+
+// The import upserts the settings rows in file order, so with two budget_paise rows the LAST one is
+// the one stored: every budget row is checked, not just the first.
+test('Q10: a second budget row over the limit is refused, and nothing changes', async () => {
+  const bad = clone(good);
+  assert.ok(Number(budgetRow(bad).value) <= T(), 'the first budget row is within the limit');
+  bad.tables.settings.push({ key: 'budget_paise', value: String(T() + 1) });
+  assert.strictEqual(await refused(bad), [
+    "This backup was not imported: 1 amount in it is over Plannr's limits. Nothing was changed.",
+    `• Budget (settings row ${bad.tables.settings.length}, budget_paise): ₹10,00,00,00,000.01 is over the ₹10,00,00,00,000 limit for totals.`,
+    'Correct these amounts in the file, then import it again.',
+  ].join('\n'));
+  // The other way round too: an over-limit first row followed by one within the limit.
+  const first = clone(good);
+  budgetRow(first).value = String(T() + 1);
+  first.tables.settings.push({ key: 'budget_paise', value: '100000' });
+  assert.match(await refused(first), /^This backup was not imported: 1 amount in it is over Plannr's limits\. Nothing was changed\.\n• Budget \(settings row \d+, budget_paise\): ₹10,00,00,00,000\.01 is over/);
 });
 
 test('Q10: at most 10 rows are named, then how many more', async () => {

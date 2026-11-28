@@ -170,9 +170,13 @@ function amountsOverLimits(T, { maxEntryPaise, maxTotalPaise, fmtRs }) {
     });
   }
   // The budget is a settings row with its amount as text (core/routes/budget.js reads it as a number).
-  const budget = (T.settings || []).find((r) => r.key === 'budget_paise');
-  const b = budget && typeof budget.value === 'string' && budget.value.trim() !== '' ? Number(budget.value) : NaN;
-  if (Number.isInteger(b) && b > maxTotalPaise) over.push(`• Budget (settings, budget_paise): ${fmtRs(b)} is over ${limit.total}.`);
+  // EVERY budget_paise row is checked, not just the first: applyBackup upserts the settings rows in
+  // file order, so with two of them the last one is the one stored.
+  (T.settings || []).forEach((r, i) => {
+    if (r.key !== 'budget_paise') return;
+    const b = typeof r.value === 'string' && r.value.trim() !== '' ? Number(r.value) : NaN;
+    if (Number.isInteger(b) && b > maxTotalPaise) over.push(`• Budget (settings row ${i + 1}, budget_paise): ${fmtRs(b)} is over ${limit.total}.`);
+  });
   if (!over.length) return null;
   const n = over.length;
   return [
