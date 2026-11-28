@@ -358,7 +358,7 @@ one migration on every adapter.
 | `/api/...` | Handled by the same protocol handler, which calls `core.handle` in the main process |
 | Content Security Policy | Sent by the protocol handler, e.g. `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:` (adjusted to what the pages need) |
 | Network | `session.webRequest.onBeforeRequest` cancels every request that is not `app:`. `spellcheck: false` (otherwise Electron downloads dictionaries). No auto-updater. The main process makes no `http`/`fetch` calls; a test checks the source |
-| Navigation | `will-navigate` is blocked, `setWindowOpenHandler` denies, and the permission handler denies everything except notifications |
+| Navigation | The link rules in `desktop/security.js` (`linkAction`, the owner's decision of 2026-11-28), on `will-navigate` and `will-redirect`: Plannr's own pages (`app://plannr/...`) open in the app window; `http://` and `https://` links open in the system browser, never inside the app; everything else is blocked (`file:`, `mailto:`, `javascript:`, `data:`, any other scheme, another `app:` host). A link with a user name or password in it is blocked, even an http(s) one. `setWindowOpenHandler` never makes a second window: `window.open` for an own page loads that page in the same window, an http(s) address goes to the system browser, and anything else does nothing. The permission handler denies everything except notifications |
 | Packaging hardening | `@electron/fuses`: `runAsNode` off, `nodeCliInspect` off |
 
 ### 5.2 A minimal preload API
