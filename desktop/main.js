@@ -9,7 +9,7 @@ import path from 'node:path';
 import { resolvePublicFile } from './paths.js';
 import { windowOptions, allowRequest, lockDownContents, denyPermissions } from './security.js';
 import { createDesktopApi } from './core-api.js';
-import { parseSelfTest, selfTestRefusal, runSelfTest, selfTestLine } from './self-test.js';
+import { parseSelfTest, selfTestRefusal, runSelfTest, selfTestLine, linkRecorder } from './self-test.js';
 
 const PUBLIC_DIR = path.join(import.meta.dirname, '..', 'public');
 const PRELOAD = path.join(import.meta.dirname, 'preload.cjs');
@@ -69,8 +69,10 @@ async function start() {
   });
 
   // The link rules (security.js linkAction): own pages open in this window, http(s) links in the
-  // system browser, everything else is blocked.
-  const openExternal = (url) => shell.openExternal(url);
+  // system browser, everything else is blocked. In self-test mode no real browser may ever open:
+  // outside links go to a recorder instead, and the self-test checks what it holds.
+  const outsideLinks = selfTest ? linkRecorder() : null;
+  const openExternal = outsideLinks ? outsideLinks.open : (url) => shell.openExternal(url);
   app.on('web-contents-created', (_event, contents) => lockDownContents(contents, { openExternal }));
 
   const win = new BrowserWindow(windowOptions(PRELOAD));
@@ -78,7 +80,7 @@ async function start() {
   await win.loadURL('app://plannr/home.html');
 
   if (selfTest) {
-    const result = await runSelfTest({ mode: selfTest, win, userData: app.getPath('userData') });
+    const result = await runSelfTest({ mode: selfTest, win, userData: app.getPath('userData'), outsideLinks });
     process.stdout.write(selfTestLine(result));
     api.close();
     app.exit(result.ok ? 0 : 1);

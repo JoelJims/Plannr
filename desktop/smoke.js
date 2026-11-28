@@ -3,9 +3,12 @@
 //
 //   node desktop/smoke.js [parent-folder]
 //
-// Run 1, --self-test=write: the security settings as the page sees them, a request to an outside
-// address is cancelled, a Cash Inflow entry is added and edited through the form, the edit shows.
-// Run 2, --self-test=verify (a restart on the same folder): the edited entry is still there.
+// Run 1, --self-test=write: the window is shown at a real size with Home loaded, the security
+// settings as the page sees them, the link rules in the window (outside links reach a recorder, never
+// a browser), a Cash Inflow entry is added and edited through the form, the edit shows, and the
+// window sent to an outside address is cancelled.
+// Run 2, --self-test=verify (a restart on the same folder): the same checks, and the edited entry is
+// still there.
 // Both runs use one new, empty folder made inside parent-folder (default: the system temp folder)
 // as PLANNR_DESKTOP_USERDATA. The folder is kept and its path printed. Exit code 0 = PASS.
 import fs from 'node:fs';

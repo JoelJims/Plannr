@@ -242,6 +242,28 @@ test('main.js: an https link goes to the system browser (shell.openExternal); an
   }
 });
 
+test('main.js: in self-test mode an outside link goes to a recorder, never to shell.openExternal', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plannr-desktop-ud-'));
+  const self = runMain({ args: ['--self-test=write'], userData: path.join(tmp, 'self'), link: 'https://example.com/help' });
+  try {
+    assert.equal(self.lines.length, 1, `the self-test ran: ${self.stdout} ${self.stderr}`);
+    assert.deepEqual(self.rec.navigations, [{ url: 'https://example.com/help', prevented: true }], 'the link does not load in the window');
+    assert.deepEqual(self.rec.shellOpened, [], 'no real browser opens during a self-test');
+  } finally {
+    fs.rmSync(self.dir, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  // The recorder itself: it keeps the URL and answers like shell.openExternal (a promise).
+  const { linkRecorder } = await importDesktop('self-test.js');
+  assert.equal(typeof linkRecorder, 'function', 'self-test.js exports linkRecorder');
+  const recorder = linkRecorder();
+  assert.deepEqual(recorder.opened, []);
+  const answer = recorder.open('https://plannr-selftest.invalid/?link');
+  assert.equal(typeof answer.then, 'function');
+  await answer;
+  assert.deepEqual(recorder.opened, ['https://plannr-selftest.invalid/?link']);
+});
+
 test('main process: no remote debugging, no inspector, no open port, no network module (source check)', () => {
   const mainProcess = fs.readdirSync(DESKTOP)
     .filter((f) => /\.(c|m)?js$/.test(f) && f !== 'smoke.js' && f !== 'self-test-page.js');

@@ -4,7 +4,9 @@
 //
 // It uses the page the way a person does: it fills the Cash Inflow form and presses its buttons.
 // Its only requests are the page's own /api and OUTSIDE, an address that can never resolve (.invalid,
-// RFC 6761) and must be blocked. Every step answers { ok, detail }.
+// RFC 6761) and must be blocked. For the link checks it clicks links (and calls window.open) with
+// the addresses self-test.js hands it, and the pages' own button and <a href> links; the link rules
+// decide where they go. Every step answers { ok, detail }.
 async function selfTestPage(op, arg) {
   const OUTSIDE = 'https://plannr-selftest.invalid/';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,6 +34,61 @@ async function selfTestPage(op, arg) {
     case 'ready': {
       await waitFor(() => window.__plannrMode !== undefined);
       return { ok: window.__plannrMode === 'server', detail: { url: location.href, mode: window.__plannrMode } };
+    }
+    case 'loaded': {
+      // The page has loaded: the document is complete, the page's own script has run, it has a
+      // viewport, and an element of this page (arg.selector, with arg.text if given) is visible.
+      await waitFor(() => document.readyState === 'complete' && window.__plannrMode !== undefined);
+      const el = arg && arg.selector ? document.querySelector(arg.selector) : null;
+      const seen = {
+        url: location.href, readyState: document.readyState, mode: window.__plannrMode, title: document.title,
+        viewport: [window.innerWidth, window.innerHeight], visibility: document.visibilityState,
+        element: el ? el.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) : null,
+      };
+      const ok = seen.readyState === 'complete' && seen.mode === 'server' && window.innerWidth > 0 && window.innerHeight > 0
+        && visible(el) && (!arg.text || seen.element === arg.text);
+      return { ok, detail: seen };
+    }
+    case 'click-link': {
+      // A link as a person would click it. The mark shows later whether this is still the same page.
+      window.__plannrSelfTestMark = arg.mark;
+      const a = document.createElement('a');
+      a.href = arg.url;
+      a.textContent = 'Plannr self-test link';
+      document.body.appendChild(a);
+      // Clicked after this answer has gone back, so a navigation cannot cut the answer off.
+      setTimeout(() => { a.click(); a.remove(); }, 0);
+      return { ok: true, detail: { href: a.href } };
+    }
+    case 'window-open': {
+      window.__plannrSelfTestMark = arg.mark;
+      const w = window.open(arg.url);
+      // The window-open handler always denies, and then window.open answers null.
+      return { ok: w === null, detail: { returned: w === null ? null : typeof w } };
+    }
+    case 'click-button': {
+      const button = document.querySelector(arg.selector);
+      if (!visible(button)) return { ok: false, detail: `no visible ${arg.selector}` };
+      setTimeout(() => button.click(), 0);
+      return { ok: true, detail: { text: button.textContent.trim() } };
+    }
+    case 'click-anchor': {
+      // One of the page's own <a href> links, clicked as a person would: the address comes from the
+      // page's own markup, not from this code. It must be a plain link (no target), so the browser
+      // itself starts the navigation.
+      const a = document.querySelector(arg.selector);
+      if (!a) return { ok: false, detail: `no ${arg.selector}` };
+      const seen = {
+        tag: a.tagName, href: a.getAttribute('href'), resolved: a.href, target: a.getAttribute('target'),
+        text: a.textContent.replace(/\s+/g, ' ').trim(),
+      };
+      if (!(a instanceof HTMLAnchorElement) || seen.href !== arg.href || seen.target !== null || !visible(a)) return { ok: false, detail: seen };
+      setTimeout(() => a.click(), 0);
+      return { ok: true, detail: seen };
+    }
+    case 'same-page': {
+      const seen = { url: location.href, sameDocument: window.__plannrSelfTestMark === arg.mark, readyState: document.readyState };
+      return { ok: seen.sameDocument && seen.url === arg.url && seen.readyState === 'complete', detail: seen };
     }
     case 'no-node': {
       const seen = { require: typeof require, process: typeof process, module: typeof module, Buffer: typeof Buffer };
