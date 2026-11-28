@@ -34,6 +34,10 @@ export const Capacitor = { isNativePlatform: () => true, getPlatform: () => 'and
 `;
 const CACHE = 'file:///data/user/0/com.plannr.app/cache/';
 const ACCENT = 'rgb(245, 158, 11)';
+// How long a tap may take to build the PDF and hand it over. With every UI suite running at once
+// (the combined run of 2026-11-28) the India taps ran past the old 15 s and read "0 writes", as if
+// the file name were wrong; run alone they passed. A timeout is now reported as one.
+const HANDOVER_WAIT_MS = 60000;
 
 let failures = 0;
 const check = (name, ok, detail) => { console.log(`  ${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
@@ -164,7 +168,7 @@ const waitForServer = () => new Promise((resolve, reject) => {
       await page.click('[data-ch="0"]');
       await page.waitForFunction((u) => (u === 'sheet'
         ? window.__native.calls.some((c) => c.plugin === 'Share')
-        : document.getElementById('ovMsg').classList.contains('show')), until, { timeout: 15000 }).catch(() => {});
+        : document.getElementById('ovMsg').classList.contains('show')), until, { timeout: HANDOVER_WAIT_MS }).catch(() => {});
       return { calls: await calls(), msg: await msgText(), visible: await page.isVisible('#ovMsg') };
     };
     // Can a finger reach the control? Hit-test its centre and four inset corners (ui-test-assertions rule 9).
@@ -302,10 +306,16 @@ const waitForServer = () => new Promise((resolve, reject) => {
         await p.evaluate(() => { window.__native.calls.length = 0; });
         await p.click(sel);
         await p.click('[data-ch="0"]');
-        await p.waitForFunction(([pl, me]) => window.__native.calls.some((c) => c.plugin === pl && c.method === me), [plugin, method], { timeout: 15000 }).catch(() => {});
-        return p.evaluate(() => window.__native.calls);
+        const handedOver = await p.waitForFunction(([pl, me]) => window.__native.calls.some((c) => c.plugin === pl && c.method === me), [plugin, method], { timeout: HANDOVER_WAIT_MS }).then(() => true, () => false);
+        const list = await p.evaluate(() => window.__native.calls);
+        if (!handedOver) list.timedOut = true;
+        return list;
       };
-      const nameOf = (list) => { const w = named(list, 'Filesystem', 'writeFile'); return w.length === 1 ? w[0].args[0].path : `${w.length} writes`; };
+      const nameOf = (list) => {
+        const w = named(list, 'Filesystem', 'writeFile');
+        if (w.length === 1) return w[0].args[0].path;
+        return `${w.length} writes${list.timedOut ? ` (timed out: no hand-over within ${HANDOVER_WAIT_MS / 1000} s)` : ''}`;
+      };
       const NAME = 'plannr-overview-full-2026-11-26.pdf';
       let c = await tap('#ovSendMailBtn', 'MailComposer', 'composeMail');
       const mail = named(c, 'MailComposer', 'composeMail');
