@@ -11,6 +11,8 @@
 // recipients and the subject ({date} filled in); each fallback (WhatsApp missing, the ShareTo plugin
 // failing, no mail app, the mail plugin failing) opens the share sheet and says why on screen; the
 // offline note shows; no plugin method that sends is ever called and no request leaves the app.
+// Last, a phone in India at 01:30 on 26 November (20:00 UTC on the 25th): the PDF's file name, from
+// all three buttons, carries the phone's date (2026-11-26), the same date as the email subject.
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -117,13 +119,19 @@ const waitForServer = () => new Promise((resolve, reject) => {
     }
 
     // ---- 2. the app (native stand-ins), as a small Android phone: 320 px wide, touch, pixel ratio 2 ----
-    const context = await browser.newContext({
-      viewport: { width: 320, height: 700 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
-      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36',
-    });
-    await context.addInitScript(nativeStandIns);
-    await context.route((url) => url.pathname === CORE && !url.search, (route) => route.fulfill({ contentType: 'text/javascript', body: CORE_STANDIN }));
-    await context.route((url) => url.pathname === PDFGEN, (route) => route.fulfill({ contentType: 'text/javascript', body: PDF_STANDIN }));
+    // `options` adds context options (section 3 sets a time zone).
+    const appContext = async (options = {}) => {
+      const ctx = await browser.newContext({
+        viewport: { width: 320, height: 700 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36',
+        ...options,
+      });
+      await ctx.addInitScript(nativeStandIns);
+      await ctx.route((url) => url.pathname === CORE && !url.search, (route) => route.fulfill({ contentType: 'text/javascript', body: CORE_STANDIN }));
+      await ctx.route((url) => url.pathname === PDFGEN, (route) => route.fulfill({ contentType: 'text/javascript', body: PDF_STANDIN }));
+      return ctx;
+    };
+    const context = await appContext();
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
@@ -274,6 +282,43 @@ const waitForServer = () => new Promise((resolve, reject) => {
     check('no plugin object was ever awaited (no "<Plugin>.then" call)', !all.some((m) => /\.then$/.test(m)), all.filter((m) => /\.then$/.test(m)).join(', '));
     check('app: no page errors', errors.length === 0, errors.join(' | '));
     check('no request went anywhere outside the app', outside.length === 0, outside.join(' | '));
+
+    // ---- 3. a phone in India at 01:30 on 26 November (20:00 UTC on the 25th) ----
+    // The file name used to take the UTC date (2026-11-25) while the subject took the phone's date.
+    // Fresh settings: target "ask" and the default subject "Plannr report – {date}".
+    {
+      const ist = await appContext({ timezoneId: 'Asia/Kolkata' });
+      await ist.clock.setFixedTime(new Date('2026-11-25T20:00:00Z'));
+      const p = await ist.newPage();
+      const errs = [];
+      p.on('pageerror', (e) => errs.push(e.message));
+      p.on('request', (r) => { if (!r.url().startsWith(BASE + '/') && !r.url().startsWith('data:') && !r.url().startsWith('blob:')) outside.push(r.url()); });
+      await p.goto(`${BASE}/overview.html`, { waitUntil: 'load' });
+      await p.waitForSelector('#ovSendRow[data-state="native"]', { state: 'attached', timeout: 20000 });
+      check('India: the page\'s clock says 01:30 on 26 November (20:00 UTC on the 25th)',
+        await p.evaluate(() => { const d = new Date(); return d.getDate() === 26 && d.getHours() === 1 && d.toISOString().startsWith('2026-11-25'); }));
+      // Tap, pick "Light", wait for the plugin call that hands the PDF over.
+      const tap = async (sel, plugin, method) => {
+        await p.evaluate(() => { window.__native.calls.length = 0; });
+        await p.click(sel);
+        await p.click('[data-ch="0"]');
+        await p.waitForFunction(([pl, me]) => window.__native.calls.some((c) => c.plugin === pl && c.method === me), [plugin, method], { timeout: 15000 }).catch(() => {});
+        return p.evaluate(() => window.__native.calls);
+      };
+      const nameOf = (list) => { const w = named(list, 'Filesystem', 'writeFile'); return w.length === 1 ? w[0].args[0].path : `${w.length} writes`; };
+      const NAME = 'plannr-overview-full-2026-11-26.pdf';
+      let c = await tap('#ovSendMailBtn', 'MailComposer', 'composeMail');
+      const mail = named(c, 'MailComposer', 'composeMail');
+      check('India, Send by email: the PDF is named for 26 November', nameOf(c) === NAME, nameOf(c));
+      check('India, Send by email: the subject says 26 November too', mail.length === 1 && mail[0].args[0].subject === 'Plannr report – 2026-11-26', JSON.stringify(mail.map((m) => m.args[0].subject)));
+      c = await tap('#ovSendWaBtn', 'ShareTo', 'whatsapp');
+      check('India, Send to WhatsApp: the same name', nameOf(c) === NAME, nameOf(c));
+      c = await tap('#ovPdfBtn', 'Share', 'share');
+      check('India, Download PDF: the same name', nameOf(c) === NAME, nameOf(c));
+      check('India: no page errors', errs.length === 0, errs.join(' | '));
+      check('India: no request went anywhere outside the app', outside.length === 0, outside.join(' | '));
+      await ist.close();
+    }
   } catch (e) {
     check('suite ran to the end', false, e.message);
   } finally {

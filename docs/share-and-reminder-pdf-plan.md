@@ -22,6 +22,11 @@ Built on 2026-11-25:
   settings is the filled (primary) button; "Ask each time" shows both the same.
   - WhatsApp opens through `ShareTo`, the mail app through `MailComposer` (To and Subject from the
     settings, `{date}` filled in with the phone's date), with the PDF attached. You tap Send there.
+  - The PDF's file name (`plannr-overview-<part>-<date>.pdf`, from Download PDF and both Send
+    buttons) uses the phone's own date too, so it always matches the subject's `{date}` (owner's
+    decision, 2026-11-28). It used to use the UTC date, so between midnight and 05:30 in India the
+    file was named for the day before. One helper, `core/local-date.js`, gives both dates. Tests:
+    `test/ws2c-pdf-file-name.test.js`, and the India check in `npm run test:share-pdf`.
   - WhatsApp or a mail app missing, or its plugin failing: the share sheet opens and the page says
     why (for example "WhatsApp is not installed, so the share sheet opened instead.").
   - Offline: the PDF is still made and handed over, with a short note that the app will send it
@@ -117,6 +122,7 @@ Reminder fires ── [Send PDF] ──► Plannr opens (Overview)
 - Tapping the notification body (not the button) keeps today's behaviour: open Overview, build
   nothing.
 - The PDF file stays in the app's cache folder (as today); Android clears it when space is short.
+  Its name carries the phone's own date, the same date as the email subject's `{date}`.
 
 ## 5. Offline
 

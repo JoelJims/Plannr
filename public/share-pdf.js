@@ -7,6 +7,8 @@
 // <a download> click is a dead end there, so Capacitor's own Filesystem+Share is the ONLY real
 // delivery path natively. A failure here is reported directly through `msg`.
 
+import { localDateStamp } from './core/local-date.js';
+
 export const errText = (err) => (err && err.message) ? err.message : String(err);
 
 // withTimeout turns a stuck native call (no throw, no resolve — indistinguishable from success
@@ -61,11 +63,9 @@ export async function sharePdfSheet({ blob, fname, msg, uri = null, note = '' })
   }
 }
 
-// Today's date on this phone, YYYY-MM-DD: what {date} in the email subject becomes.
-export function localDate(d = new Date()) {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+// Today's date on this phone, YYYY-MM-DD: what {date} in the email subject becomes. The same helper
+// dates the PDF's file name (overviewPdfName), so the subject and the file always agree.
+export const localDate = localDateStamp;
 
 // The subject from the "Sending PDFs" settings, with every {date} filled in.
 export function fillSubject(subject, date) {
@@ -123,9 +123,10 @@ export const DEFAULT_SUBJECT = 'Plannr report – {date}';
 
 // Send by email: the mail app opens with To and Subject from the "Sending PDFs" settings and the
 // PDF attached; the user checks it and taps Send there. `settings` is GET /api/share-settings, or
-// null when it could not be read (then To stays empty, and the page says so). No mail app, or the
-// plugin fails: the share sheet, saying why.
-export async function sendPdfByEmail({ blob, fname, msg, settings, online = isOnline(), date = localDate() }) {
+// null when it could not be read (then To stays empty, and the page says so). `now` is the moment the
+// page named the PDF (fname), so the subject's {date} is the file name's date even if midnight passes
+// in between. No mail app, or the plugin fails: the share sheet, saying why.
+export async function sendPdfByEmail({ blob, fname, msg, settings, online = isOnline(), now = new Date() }) {
   let uri;
   try { uri = await writePdfToCache({ blob, fname }); }
   catch (err) { msg.show('Generated the PDF but could not save it for email: ' + errText(err), 'error'); return; }
@@ -138,7 +139,7 @@ export async function sendPdfByEmail({ blob, fname, msg, settings, online = isOn
       // No timeout: on Android composeMail() resolves only when the user leaves the mail app.
       await MailComposer.composeMail({
         to: Array.isArray(s.emailTo) ? s.emailTo : [],
-        subject: fillSubject(s.emailSubject || DEFAULT_SUBJECT, date),
+        subject: fillSubject(s.emailSubject || DEFAULT_SUBJECT, localDate(now)),
         attachments: [{ path: uri }],
       });
       msg.show(sentence('Your mail app opened with the PDF attached. It is sent only when you tap Send there.',

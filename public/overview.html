@@ -894,7 +894,15 @@
         if (!res.ok) { const d = await res.json().catch(() => ({})); ovMsg.show(d.error || `Could not generate the PDF (HTTP ${res.status}).`, 'error'); return; }
         const blob = await res.blob();
         if (!blob || blob.size === 0) { ovMsg.show('The PDF came back empty — nothing to share.', 'error'); return; }
-        const fname = `plannr-overview-${part}-${new Date().toISOString().slice(0, 10)}.pdf`;
+        // The phone's own date, not the UTC date (a day behind between 00:00 and 05:30 in India): the
+        // one helper in core/local-date.js, which also gives the email subject's {date} (share-pdf.js).
+        // The clock is read once per send: the file name and the subject both use `now`, so a send
+        // started just before midnight cannot give them two dates.
+        let overviewPdfName;
+        try { ({ overviewPdfName } = await import('/core/local-date.js')); }
+        catch (err) { ovMsg.show('Could not load the PDF naming code: ' + errText(err), 'error'); return; }
+        const now = new Date();
+        const fname = overviewPdfName(part, now);
 
         // Phase 6a — native Android: the WebView doesn't support the Web Share API's `files` member
         // the way a full Chrome tab does, so canShare({files}) below would just be false there anyway
@@ -911,7 +919,7 @@
           try { sharePdf = await import('/share-pdf.js'); }
           catch (err) { ovMsg.show('Could not load the PDF sharing code: ' + errText(err), 'error'); return; }
           if (target === 'whatsapp') await sharePdf.sendPdfToWhatsApp({ blob, fname, msg: ovMsg });
-          else if (target === 'email') await sharePdf.sendPdfByEmail({ blob, fname, msg: ovMsg, settings: await readShareSettings() });
+          else if (target === 'email') await sharePdf.sendPdfByEmail({ blob, fname, msg: ovMsg, settings: await readShareSettings(), now });
           else await sharePdf.sharePdfSheet({ blob, fname, msg: ovMsg });
           return;
         }
