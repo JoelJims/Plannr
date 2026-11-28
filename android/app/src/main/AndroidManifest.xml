@@ -52,6 +52,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- #13: the WebView keeps navigator.onLine up to date only with this permission; without it
+         the "You're offline" note on Send to WhatsApp / Send by email never shows (emulator check,
+         2026-11-28). A normal permission: granted at install, no prompt; it only tells the app
+         whether the phone is online (test/android-permissions.test.js). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- S7 (review 2026-11-21): the storage plugin's androidx.biometric dependency adds these two.
          Plannr never asks for a fingerprint or a face, so they are removed from the merged manifest
          (test/android-permissions.test.js). -->
