@@ -44,7 +44,8 @@ function readFields(selector) {
         if (/^rgb\(/.test(bg)) break;
       }
       return {
-        name: e.id ? `#${e.id}` : `${e.tagName.toLowerCase()}${[...e.classList].map((c) => '.' + c).join('')}`,
+        name: e.id ? `#${e.id}` : e.classList.length ? `${e.tagName.toLowerCase()}${[...e.classList].map((c) => '.' + c).join('')}`
+          : `${e.tagName.toLowerCase()}[aria-label="${e.getAttribute('aria-label') || ''}"]`,
         tag: e.tagName.toLowerCase(),
         type: e.type || '',
         appearance: cs.getPropertyValue('appearance'),
